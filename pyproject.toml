@@ -1,0 +1,62 @@
+# -*- coding: utf-8 -*-
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jaxnest"
+authors = [
+    { name = "Nico Unglert", email = "nico.unglert@tuwien.ac.at" }
+]
+description = "JAX implementation of pymatnest for usage on GPU."
+requires-python = ">=3.9,<3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Natural Language :: English"
+]
+dependencies = [
+    "ase>=3.22.1",
+    "jax",
+    #"optax", # ==0.1.7",
+    "matplotlib>=3.7.2",
+    "numpy<2.0",
+    "scipy==1.11.1",
+    "pymatgen>=2023.7.20",
+    "pandas>=2.0.3",
+    "neuralil",
+    "natsort",
+    "numba",
+    "average-minimum-distance",
+    "jraph", # long-term?   
+    #"jax_md", # long-term?  
+
+]
+readme = "README.md"
+dynamic = ["version"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==7.4.0", 
+    "pytest-lazy-fixture"
+]
+doc = ["sphinx", "sphinx-autodoc-typehints", "sphinx-rtd-theme"]
+plot = [
+    "PyPDF2",
+    "pyscal3",
+]
+
+[project.urls]
+"Homepage" = "https://gitlab.tuwien.ac.at/e165-03-1_theoretische_materialchemie/jaxns"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+
+# [tool.setuptools.dynamic]
+# version = { attr = "jaxnest.__version__" }

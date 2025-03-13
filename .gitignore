@@ -1,0 +1,10 @@
+*.pyc
+experiments
+*.egg-info
+.vscode*
+test.log
+docs/_build/
+test/data/temp
+pyrightconfig.json
+examples/calculations
+__pycache__
