@@ -1,0 +1,9 @@
+{
+    "remote_machine": "datalab",
+    "partition": "GPU-a40",
+    "savepath": null,
+    "conda_env": "newjax",
+    "n_processors": 1,
+    "slurm_header_add": "",
+    "jobfile_name": "run_slurm.sh"
+}

@@ -5,9 +5,30 @@ import numpy as np
 from importlib import resources
 import importlib.resources as pkg_resources
 from pathlib import Path
+from abc import ABC, abstractmethod
 
 
 TEMPLATE_DIR = Path(pkg_resources.files("remote_handler").joinpath("templates"))
+
+def submit_job(script_path, output_path, ssh_command=None):
+    # Submit job via SSH and capture job ID
+    slurm_command = f"sbatch -e {output_path}/slurm.err -o {output_path}/slurm.out {script_path}"
+
+    if ssh_command is not None:
+        submit_cmd = f"{ssh_command} '{slurm_command}'"
+    else:
+        submit_cmd = slurm_command
+
+    result = subprocess.run(
+        submit_cmd, shell=True, capture_output=True, text=True
+    )
+    print(result)
+    match = re.search("(\d+)", result.stdout)
+    if match is not None:
+        return match.groups()[0]
+    else:
+        raise Exception(result.stderr)
+    
 
 def submit_job_array(
     script_path,
@@ -65,7 +86,7 @@ def check_array_status(job_id, ssh_command="ssh lugus"):
         return True
     
 
-def get_slurm_str(
+def get_array_slurm_str(
     calcdir,
     python_script_path,
     num_array_tasks=1,
@@ -81,7 +102,6 @@ def get_slurm_str(
     if map_indices is None:
         map_indices = np.arange(num_array_tasks)
 
-
     env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
     template = env.get_template(template_file)
 
@@ -95,7 +115,34 @@ def get_slurm_str(
         n_cores=n_cores,
         conda_env=conda_env,
         map_indices=map_indices,
-        slurm_header_add=slurm_header_add
+        slurm_header_add=slurm_header_add,
+        job_type_template="body_array.sh.j2"
+    )
+
+    return slurm_str
+
+def get_slurm_str(
+    input_file,
+    python_script_path,
+    jobname="job",
+    partition="normal",
+    n_cores=8,
+    conda_env="jaxnest",
+    template_file="lugus.sh.j2",
+    slurm_header_add=""
+):
+    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
+    template = env.get_template(template_file)
+
+    slurm_str = template.render(
+        input_file=input_file,
+        python_script_path=python_script_path,
+        jobname=jobname,
+        partition=partition,
+        n_cores=n_cores,
+        conda_env=conda_env,
+        slurm_header_add=slurm_header_add,
+        job_type_template="body_single.sh.j2"
     )
 
     return slurm_str

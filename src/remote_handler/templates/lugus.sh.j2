@@ -12,4 +12,4 @@ pwd; hostname; date
 source /opt/ohpc/pub/anaconda3/etc/profile.d/conda.sh
 conda activate {{ conda_env }}
 
-{% include 'array_body.sh.j2' %}
+{% include job_type_template %}

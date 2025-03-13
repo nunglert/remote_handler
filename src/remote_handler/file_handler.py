@@ -21,6 +21,8 @@ from datetime import datetime
 
 from abc import ABC, abstractmethod
 
+# from remote_handler import slurm_utils, cluster_handler
+
 logger = logging.getLogger(__name__)
 
 def tag_path(part0, part1, is_directory=False):
@@ -35,67 +37,6 @@ def tag_path(part0, part1, is_directory=False):
 
     save_file = Path(part0) / new_filename
     return save_file
-
-
-def get_slurm_str(
-    calcdir,
-    python_script_path,
-    num_array_tasks=1,
-    num_parallel=10,
-    jobname="",
-    partition="normal",
-    n_cores=8,
-    conda_env="jaxnest",
-    map_indices=None
-):
-    if map_indices is None:
-        map_indices = np.arange(num_array_tasks)
-    
-    map_str = "" 
-    for i in map_indices:
-        map_str += f"{i} "
-        
-    slurm_str = f"""#!/bin/sh
-#SBATCH --job-name={jobname}   # Job name
-#SBATCH --ntasks={n_cores}          # Run a single task
-# SBATCH --mem=0                      # Memory per processor
-# SBATCH --time=3:0:0
-#SBATCH --partition={partition}
-# SBATCH --array=1-{num_array_tasks}%{num_parallel}          # Array range
-ulimit -u 40000
-ulimit -s unlimited
-
-pwd; hostname; date
-
-source /opt/ohpc/pub/anaconda3/etc/profile.d/conda.sh
-conda activate {conda_env}
-
-# Print the task and run range
-echo This is task $SLURM_ARRAY_TASK_ID
-
-MAP=({map_str})
-
-# Get the mapped index for this SLURM array task
-MAPPED_INDEX=${{MAP[$SLURM_ARRAY_TASK_ID]}}
-
-PER_TASK=1
-
-# Calculate the starting and ending values for this task based
-# on the SLURM task and the number of runs per task.
-START_NUM=$(( ($SLURM_ARRAY_TASK_ID - 1) * $PER_TASK + 1 ))
-END_NUM=$(( $SLURM_ARRAY_TASK_ID * $PER_TASK))
-
-# Print the task and run range
-echo This is task $SLURM_ARRAY_TASK_ID, which will do runs $START_NUM to $END_NUM
-
-# Run the loop of runs for this task.
-for (( run=$START_NUM; run<=END_NUM; run++ )); do
-  echo This is SLURM task $SLURM_ARRAY_TASK_ID, run number $run
-  run_id=$((run - 1))
-  python {python_script_path} {calcdir}/$run_id
-done
-"""
-    return slurm_str
 
 
 class FileSystemHandlerBase(ABC):
@@ -212,7 +153,6 @@ class FileSystemHandlerBase(ABC):
         """
         pass
 
-
     def tag_path(self, savepath):
         random_string = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
         working_dir, filename = os.path.split(savepath)
@@ -230,6 +170,14 @@ class FileSystemHandlerBase(ABC):
             )
         
         return path
+    
+    # def setup_slurm(self):
+        # self.calculator.write_jobfile(
+            # savepath, script_file_remote
+        # )
+    # 
+    # def submit(self):
+        # self.calculator.submit()
 
 class LocalFileSystem(FileSystemHandlerBase):
 
