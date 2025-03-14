@@ -165,13 +165,18 @@ export REMOTE_HANDLER_SLURM_TEMPLATES=/path/to/your/templates
 
 
 
-# Testing
-
-In order to use the test suite, be sure you have installed the dev version.
+# Development
+In order to use the development features, be sure you have installed the dev version.
 
 ```bash
 `pip install -e .[dev]`
 ```
+
+If you want to contribute to this repository, please adhere to the following rules. 
+
+## Testing
+Write proper tests for everything you implement. 
+
 Run all tests via
 ```bash
 pytest
@@ -181,3 +186,12 @@ Run a specific test with additional logging and stdout
 ```bash
 pytest -k test_SingleScriptTask -s --log-cli-level info
 ```
+
+## pre-commit hooks
+Only push commits with pre-commit hooks enabled, to keep formatting as clean as possible. In the root directory use:
+
+```bash
+pre-commit install
+```
+
+which should install the hooks for you.
