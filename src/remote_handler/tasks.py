@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 import os, random, string
 from typing import Union, Any, Optional
+import time
 
 from remote_handler import slurm_utils
 from remote_handler.file_handler import (
@@ -138,14 +139,20 @@ class SingleScriptTask(RemoteTask):
 
     def __init__(
         self, 
-        logfile: str,
-        script_file: str,
-        input_file: str,
+        logfile: os.PathLike,
+        script_file: os.PathLike,
+        input_file: os.PathLike,
         remote_fs: FileSystemHandlerBase,
-        remote_savepath: Optional[str] = None,
+        remote_savepath: Optional[os.PathLike] = None,
         collect_only: bool = False,
-        jobname: str = "job"
+        loop_time: float = 30.,
+        jobname: str = "job",
     ):
+        assert remote_fs.slurm_config is not None, "remote_fs needs slurm_config!"
+
+        if remote_savepath is None:
+            remote_savepath = remote_fs.slurm_config["savepath"]
+
         super().__init__(
             logfile=logfile, 
             savepath=remote_savepath,
@@ -156,6 +163,7 @@ class SingleScriptTask(RemoteTask):
 
         self.script_file = script_file
         self.input_file = input_file
+        self.loop_time = loop_time
 
         self.slurm_path = None
         self.slurm_handler = cluster_handler.SlurmJobHandler(
@@ -189,8 +197,15 @@ class SingleScriptTask(RemoteTask):
     def submit(self):
         self.slurm_handler.submit()
 
+    def wait_until_finished(self):
+        while True:
+            time.sleep(self.loop_time)
+            status = self.slurm_handler.check_status()
+            if status:
+                break
+
     def collect_results(self):
-        pass
+        self.remote_fs.get(self.calcdir, )
 
 
 class ArrayScriptTask(RemoteTask):

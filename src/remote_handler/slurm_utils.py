@@ -2,13 +2,8 @@ import re
 import subprocess
 from jinja2 import Environment, FileSystemLoader
 import numpy as np
-from importlib import resources
-import importlib.resources as pkg_resources
-from pathlib import Path
-from abc import ABC, abstractmethod
 
-
-TEMPLATE_DIR = Path(pkg_resources.files("remote_handler").joinpath("templates"))
+from remote_handler import TEMPLATE_DIR
 
 def submit_job(script_path, output_path, ssh_command=None):
     # Submit job via SSH and capture job ID

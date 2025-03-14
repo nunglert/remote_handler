@@ -1,4 +1,5 @@
 import logging
+from mimetypes import init
 import os
 import shutil
 import math
@@ -12,6 +13,9 @@ import json
 import paramiko
 import random
 import string
+import functools
+import posixpath
+from stat import S_ISDIR
 
 from ase import Atoms
 import ase.db
@@ -43,11 +47,42 @@ class FileSystemHandlerBase(ABC):
     """Interface for handling file operations and directory management on a 
     file system.
     """
+
+    def __init__(self, slurm_config_file=None):
+        self.slurm_config = None
+        
+        if slurm_config_file is not None:
+            with open(slurm_config_file, "r") as f:
+                self.slurm_config = json.load(f)
+        
+        super().__init__()
+    
+    # @abstractmethod
+    # def copy(self, source, destination):
+    #     """
+    #     Copy a file or directory from the source path to the destination path.
+
+    #     Parameters:
+    #         source (str): The path of the file or directory to copy.
+    #         destination (str): The path where the file or directory should be copied to.
+    #     """
+    #     pass
     
     @abstractmethod
-    def copy(self, source, destination):
+    def get(self, remote, local):
         """
-        Copy a file or directory from the source path to the destination path.
+        Copy a file from a remote machine to the local machine.
+
+        Parameters:
+            source (str): The path of the file or directory to copy.
+            destination (str): The path where the file or directory should be copied to.
+        """
+        pass
+
+    @abstractmethod
+    def put(self, local, remote):
+        """
+        Copy a file or directory from the local machine to a remote machine.
 
         Parameters:
             source (str): The path of the file or directory to copy.
@@ -171,24 +206,35 @@ class FileSystemHandlerBase(ABC):
         
         return path
     
-    # def setup_slurm(self):
-        # self.calculator.write_jobfile(
-            # savepath, script_file_remote
-        # )
-    # 
-    # def submit(self):
-        # self.calculator.submit()
 
 class LocalFileSystem(FileSystemHandlerBase):
+
+    def __init__(self, slurm_config_file=None):
+        super().__init__(slurm_config_file)
 
     def copy(self, source, destination):
         shutil.copy(source, destination)
 
+    def put(self, source, destination):
+        self.copy(source, destination)
+
+    def get(self, destination, source):
+        self.copy(destination, source)
+    
     def makedirs(self, path, exist_ok=False):
         os.makedirs(path, exist_ok=exist_ok)
 
     def mkdir(self, path):
         os.mkdir(path)
+
+    def rmtree(self, path, ignore_errors=True):
+        shutil.rmtree(path, ignore_errors)
+
+    def put_dir(self, src_dir, dst_dir):
+        shutil.copytree(src_dir, dst_dir)
+
+    def get_dir(self, src_dir, dst_dir):
+        shutil.copytree(src_dir, dst_dir)
 
     def write_str_to_file(self, string, filepath):
         with open(filepath, "w") as f:
@@ -220,6 +266,23 @@ class LocalFileSystem(FileSystemHandlerBase):
         """
         os.remove(path)
 
+
+
+
+def reconnect_on_failure(func):
+    """Decorator to reconnect if SSH/SFTP operation fails."""
+
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return func(self, *args, **kwargs)
+        except (paramiko.SSHException, EOFError, OSError):
+            print("SFTP connection lost. Reconnecting...")
+            self._reconnect()
+            return func(self, *args, **kwargs)
+    
+    return wrapper
+
 class RemoteFileSystem(FileSystemHandlerBase):
     """
     RemoteFileSystem is a concrete implementation of FileSystemHandlerBase for
@@ -232,11 +295,21 @@ class RemoteFileSystem(FileSystemHandlerBase):
     """
     def __init__(
         self, 
-        remote_alias: str, 
+        remote_alias: Optional[str] = None, 
         remote_temp_path: Optional[str] = None,
-        local_temp_path: Optional[str] = None
+        local_temp_path: Optional[str] = None,
+        slurm_config_file: Optional[str] = None
     ):
-        self.remote_alias = remote_alias
+        super().__init__(slurm_config_file)
+        
+        if slurm_config_file is None:
+            if remote_alias is None:
+                raise Exception("Need either slurm_config_file or remote_alias!")
+            self.remote_alias = remote_alias
+
+        else:
+            self.remote_alias = self.slurm_config["remote_machine"]
+
         self.ssh_client = None
         self.sftp_client = None
 
@@ -295,11 +368,21 @@ class RemoteFileSystem(FileSystemHandlerBase):
         if self.ssh_client:
             self.ssh_client.close()
 
-    def copy(self, source, destination):
-        source = str(source)
-        destination = str(destination)
-        self.sftp_client.put(source, destination)
+    def _reconnect(self):
+        self._disconnect()
+        self._connect()
 
+    @reconnect_on_failure
+    def put(self, local, remote):
+        local, remote = str(local), str(remote)
+        self.sftp_client.put(local, remote)
+
+    @reconnect_on_failure
+    def get(self, remote, local):
+        remote, local = str(remote), str(local)
+        self.sftp_client.get(remote, local)
+
+    @reconnect_on_failure
     def makedirs(self, path, exist_ok=False):
         path = str(path)
         try:
@@ -307,21 +390,95 @@ class RemoteFileSystem(FileSystemHandlerBase):
         except IOError:
             if not exist_ok:
                 raise
-
+    
+    @reconnect_on_failure
     def mkdir(self, path):
         path = str(path)
         self.sftp_client.mkdir(path)
 
+    @reconnect_on_failure
+    def rmtree(self, remotepath, level=0):
+        for f in self.sftp_client.listdir_attr(remotepath):
+            rpath = posixpath.join(remotepath, f.filename)
+            if S_ISDIR(f.st_mode):
+                self.rmtree(self.sftp_client, rpath, level=(level + 1))
+            else:
+                rpath = posixpath.join(remotepath, f.filename)
+                print('removing %s%s' % ('    ' * level, rpath))
+                self.sftp_client.remove(rpath)
+        print('removing %s%s' % ('    ' * level, remotepath))
+        self.sftp_client.rmdir(remotepath)
+
+    @reconnect_on_failure
+    def put_dir(self, local_dir, remote_dir):
+        """
+        Recursively copy local directory to remote host via SFTP.
+
+        Args:
+            local_dir: Local directory path
+            remote_dir: Remote target path
+        """
+        local_dir = Path(local_dir)
+        remote_dir = str(remote_dir).rstrip('/') + '/'
+
+        if not local_dir.is_dir():
+            raise ValueError(f"Local path '{local_dir}' is not a directory.")
+
+        if not self.exists(remote_dir):
+            self.sftp_client.mkdir(remote_dir)
+
+        for item in local_dir.iterdir():
+            remote_item = remote_dir + item.name
+            if item.is_dir():
+                # Create remote subdirectory if doesn't exist
+                if not self.exists(remote_item):
+                    self.sftp_client.mkdir(remote_item)
+                # Recursively upload directory
+                self.put_dir(item, remote_item)
+            else:
+                # Upload file
+                self.sftp_client.put(str(item), remote_item)
+                
+    @reconnect_on_failure
+    def get_dir(self, remote_dir, local_dir):
+        """
+        Recursively copy remote directory to local host via SFTP.
+
+        Args:
+            remote_dir (str): Remote directory path
+            local_dir (str or Path): Local target path
+        """
+        remote_dir = str(remote_dir).rstrip('/') + '/'
+        local_dir = Path(local_dir)
+
+        if not self.exists(remote_dir):
+            return
+
+        local_dir.mkdir(parents=True, exist_ok=True)
+
+        for filename in self.sftp_client.listdir(remote_dir):
+            remote_path = remote_dir + filename
+            local_path = local_dir / filename
+
+            if S_ISDIR(self.sftp_client.stat(remote_path).st_mode):
+                self.get_dir(remote_path + '/', local_path)
+            else:
+                if not local_path.is_file():
+                    self.sftp_client.get(remote_path, str(local_path))
+
+    @reconnect_on_failure
     def write_str_to_file(self, string, filepath):
         filepath = str(filepath)
         with self.sftp_client.file(filepath, "w") as f:
             f.write(string)
 
+    @reconnect_on_failure
     def write_dict_to_json(self, filepath, param_dict):
         filepath = str(filepath)
         with self.sftp_client.file(filepath, "w") as f:
             f.write(json.dumps(param_dict))
 
+    @reconnect_on_failure
     def read_ase(self, filepath, **kwargs):
         filepath = str(filepath)
         local_temp = self.local_tempdir / "temp_ase_file.extxyz"
@@ -330,6 +487,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
         os.remove(local_temp)
         return atoms
 
+    @reconnect_on_failure
     def write_ase(self, filepath, atoms_list, **kwargs):
         # print(f"Writing to {filepath}")
         filepath = str(filepath)
@@ -338,6 +496,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
         self.sftp_client.put(local_temp, filepath)
         os.remove(local_temp)
 
+    @reconnect_on_failure
     def exists(self, path):
         path = str(path)
         try:
@@ -345,13 +504,15 @@ class RemoteFileSystem(FileSystemHandlerBase):
             return True
         except FileNotFoundError:
             return False
-        
-    def create_tempdir(self, dirname="dir"):
+    
+    @reconnect_on_failure
+    def create_tempdir(self):
         """Create a temporary directory on the remote filesystem and return its path."""
-        tempdir = self.tag_path(self.remote_tempdir / dirname)
+        tempdir = self.tag_path(self.remote_tempdir / "dir")
         self.makedirs(tempdir, exist_ok=False)
         return tempdir
     
+    @reconnect_on_failure
     def remove(self, path):
         """
         Remove a file at the specified path on the remote system.

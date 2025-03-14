@@ -32,16 +32,26 @@ def write_json(A, B, filename):
         json.dump(content, f)
 
 
+# @pytest.fixture()
+# def remote_fs():
+#     slurm_config_file = "/home/nico.unglert/code/jaxnest_dev/experiments/remote_handler/src/remote_handler/templates/datalab.json"
+#     return file_handler.LocalFileSystem(
+#         slurm_config_file=slurm_config_file
+#     )
+
 @pytest.fixture()
-def remote_fs():
-    return file_handler.LocalFileSystem()
+def remote_fs(config_dir):
+    slurm_config_file = config_dir / "lugus.json"
+    return file_handler.RemoteFileSystem(
+        slurm_config_file=slurm_config_file
+    )
 
 def test_SingleScriptTask_simple(python_script, data_dir, remote_fs):
     os.environ["REMOTE_HANDLER_LOCAL"] = "datalab"
     relative_path = Path("SingleScriptTask") / "simple"
     assetpath = data_dir / "assets" / relative_path
-    savepath = data_dir / "temp" / relative_path
-    os.makedirs(savepath, exist_ok=True)
+    # savepath = data_dir / "temp" / relative_path
+    # os.makedirs(savepath, exist_ok=True)
 
     input_file = assetpath / "input.json"
     write_json(1, 2, input_file)
@@ -51,11 +61,17 @@ def test_SingleScriptTask_simple(python_script, data_dir, remote_fs):
         python_script,
         input_file,
         remote_fs,
-        remote_savepath=savepath
+        remote_savepath=None
     )
 
     task.allocate_data()
     task.setup_slurm()
     task.submit()
+
+    task.wait_until_finished()
+
+    task.collect_results()
+
+
 
 
