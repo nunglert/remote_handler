@@ -7,9 +7,9 @@ from remote_handler import file_handler
 
 @pytest.fixture()
 def remote_fs(config_dir):
-    slurm_config_file = config_dir / "lugus.json"
+    slurm_config_file = config_dir / "remote.json"
     fs = file_handler.RemoteFileSystem(slurm_config_file=slurm_config_file)
-    target_dir = fs.slurm_config["savepath"]
+    target_dir = fs.slurm_config.get("savepath")
     if target_dir is None:
         target_dir = fs.create_tempdir()
 

@@ -1,23 +1,41 @@
-import re
+import logging
+import re, os
 import subprocess
 from jinja2 import Environment, FileSystemLoader
 import numpy as np
 
-from remote_handler import TEMPLATE_DIR
+from remote_handler import DEFAULT_TEMPLATE_DIR
 
-def submit_job(script_path, output_path, ssh_command=None):
+logger = logging.getLogger(__name__)
+
+CUSTOM_TEMPLATE_DIRS = os.environ.get("REMOTE_HANDLER_SLURM_TEMPLATES")
+TEMPLATE_DIRS = [
+    DEFAULT_TEMPLATE_DIR
+]
+if CUSTOM_TEMPLATE_DIRS is not None:
+    for template_path in CUSTOM_TEMPLATE_DIRS: 
+        TEMPLATE_DIRS.append(template_path)
+
+def submit_job(script_path, output_path, ssh_command=None, cwd=None):
     # Submit job via SSH and capture job ID
-    slurm_command = f"sbatch -e {output_path}/slurm.err -o {output_path}/slurm.out {script_path}"
+    command = ""
+    if cwd is not None:
+        command += f"cd {cwd}; "
+
+    command += f"sbatch -e {output_path}/slurm.err -o {output_path}/slurm.out {script_path}"
+
 
     if ssh_command is not None:
-        submit_cmd = f"{ssh_command} '{slurm_command}'"
+        submit_cmd = f"{ssh_command} '{command}'"
     else:
-        submit_cmd = slurm_command
+        submit_cmd = command
 
     result = subprocess.run(
-        submit_cmd, shell=True, capture_output=True, text=True
+        submit_cmd, 
+        shell=True, 
+        capture_output=True, 
+        text=True
     )
-    print(result)
     match = re.search("(\d+)", result.stdout)
     if match is not None:
         return match.groups()[0]
@@ -44,12 +62,20 @@ def submit_job_array(
     result = subprocess.run(
         submit_cmd, shell=True, capture_output=True, text=True
     )
+    logger.debug(result["stderr"])
+
     pid = re.search(r"(\d+)", result.stdout).groups()[0]
     return pid
 
 
-def check_job_status(job_ids, ssh_command="ssh lugus"):
-    # Check job status via SSH
+def check_job_status_sacct(job_ids, ssh_command="ssh lugus"):
+    """Tries to retrieve information on the job using the slurm `sacct` 
+    functionality. I designed this for arrays. Somehow sacct does not work
+    on all clusters, so you might want to use `check_job_status_squeue`.
+
+    In principle this function would allow for more control, as it can also
+    indicate whether a run failed or succesfully finished.
+    """
     if len(job_ids) > 0:
         pid_str = ""
         for a in job_ids[:-1]:
@@ -60,15 +86,20 @@ def check_job_status(job_ids, ssh_command="ssh lugus"):
         result = subprocess.run(
             status_cmd, shell=True, capture_output=True, text=True
         )
+        logger.debug(result["stderr"])
         status = [s.split()[-1] for s in result.stdout.split("\n")[2:-1]]
-        # return status   # Adjust based on actual output when job completes
         return [
             True if i in ["COMPLETED", "FAILED"] else False for i in status
         ]
     else:
         return []
 
-def check_array_status(job_id, ssh_command="ssh lugus"):
+def check_job_status_squeue(job_id, ssh_command="ssh lugus"):
+    """Tries to retrieve information on the job using the slurm `squeue` 
+    command. This is a quite naive method that just checks whether `squeue` 
+    returns and output for the given job id. If not, it considers the job as 
+    being finished.
+    """
     pid_str = str(job_id)
     status_cmd = f"{ssh_command} 'squeue -j {pid_str}'"
     result = subprocess.run(
@@ -79,7 +110,8 @@ def check_array_status(job_id, ssh_command="ssh lugus"):
         return False
     else:
         return True
-    
+
+
 
 def get_array_slurm_str(
     calcdir,
@@ -97,7 +129,7 @@ def get_array_slurm_str(
     if map_indices is None:
         map_indices = np.arange(num_array_tasks)
 
-    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
+    env = Environment(loader=FileSystemLoader(TEMPLATE_DIRS))
     template = env.get_template(template_file)
 
     slurm_str = template.render(
@@ -126,7 +158,7 @@ def get_slurm_str(
     template_file="lugus.sh.j2",
     slurm_header_add=""
 ):
-    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
+    env = Environment(loader=FileSystemLoader(TEMPLATE_DIRS))
     template = env.get_template(template_file)
 
     slurm_str = template.render(

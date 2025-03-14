@@ -1,3 +1,4 @@
+import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 import os, random, string
@@ -14,6 +15,7 @@ from remote_handler.file_handler import (
 
 from remote_handler import cluster_handler
 
+logger = logging.getLogger(__name__)
 
 class SimpleLogger:
 
@@ -23,6 +25,7 @@ class SimpleLogger:
     def print(self, *args):
         # Join all arguments into a single string with spaces, like `print`
         message = " ".join(map(str, args))
+        logger.info(message)
 
         if self.log_file is not None:
             # Write the message to the specified file
@@ -58,6 +61,10 @@ class RemoteTask(ABC):
             
             if self.remote_fs.exists(savepath):
                 if not collect_only:
+                    logger.warning(
+                        "savepath is already existing. A new directory with "
+                        "a tag will be created to prevent overwriting!"
+                    )
                     random_string = ''.join(
                         random.choices(
                             string.ascii_letters + string.digits, k=10
@@ -83,9 +90,14 @@ class RemoteTask(ABC):
                         "Can't collect if savepath does not exist on remote "
                         "machine"
                     )
+                logger.info("Creating the savepath at requested location")
                 self.remote_fs.makedirs(self.savepath, exist_ok=True)
         else:
+            logger.info(
+                "No savepath provided, a temporary director will be created"
+            )
             self.savepath = self.remote_fs.create_tempdir()
+            logger.info(f"{self.savepath=}")
 
         super().__init__()
 
@@ -129,12 +141,50 @@ class RemoteTask(ABC):
         """Function controlling how the computed results are collected. Should
         files be copied/moved from the remote machine to the host or should the 
         results only be parsed and returned?
+
+        Example:
+            Your task is a DFT run. It was succesfully run, but you now have a
+            directory with all VASP related files (POSCAR, KPOINTS, POTCAR, ..)
+            in the computatin path on the remote machine. This`function 
+            (`collect_results`) should provide the logic for the retrieval of 
+            the data that is required. Do you want the full directory? Is the 
+            vasprun.xml or OUTCAR enough?
         """
         pass
+
+    def finish_check(self):
+        """Optionally, the logic for an additional check can be implemented
+        for a given task. Using only slurm to detect whether a job has finished
+        can be error prone. Slurm does not know anything about our job itself,
+        so this is a good complementary way of checking whether a job has 
+        really finished.
+
+        Example:
+            Your task consists of running a python script. You could write
+            a small (empty) file `is_finished.info` at the end of your script. 
+            This function (`finish_check`) could then look for this file when
+            called to confirm that the job is really finished.
+            If your task is a VASP run, one could check whether the OUTCAR ends
+            with the characteristic lines, etc.
+        """
+        raise NotImplementedError(
+            f"finish_check() is not implemented for this task!"
+        )
 
 
 class SingleScriptTask(RemoteTask):
     """This is a task that consists of running a script with some input file.
+
+    Args:
+        logfile
+        script_file
+        input_file
+        local_savepath
+        remote_fs
+        remote_savepath
+        collect_only
+        loop_time
+        jobname
     """
 
     def __init__(
@@ -142,17 +192,21 @@ class SingleScriptTask(RemoteTask):
         logfile: os.PathLike,
         script_file: os.PathLike,
         input_file: os.PathLike,
+        local_savepath: os.PathLike,
         remote_fs: FileSystemHandlerBase,
         remote_savepath: Optional[os.PathLike] = None,
         collect_only: bool = False,
         loop_time: float = 30.,
         jobname: str = "job",
+        n_processors: int = 2,
+        jobfile_name="run_slurm.sh"
     ):
         assert remote_fs.slurm_config is not None, "remote_fs needs slurm_config!"
 
         if remote_savepath is None:
             remote_savepath = remote_fs.slurm_config["savepath"]
 
+        # Need to init base classs first, since it handles savepath
         super().__init__(
             logfile=logfile, 
             savepath=remote_savepath,
@@ -164,28 +218,30 @@ class SingleScriptTask(RemoteTask):
         self.script_file = script_file
         self.input_file = input_file
         self.loop_time = loop_time
+        self.local_savepath = local_savepath
 
-        self.slurm_path = None
+        # self.slurm_path = None
         self.slurm_handler = cluster_handler.SlurmJobHandler(
             jobname=jobname,
-            partition="GPU-a40",
+            partition=remote_fs.slurm_config["partition"],
             savepath=self.calcdir,
-            conda_env="newjax",
-            n_processors=2,
+            conda_env=remote_fs.slurm_config["conda_env"],
+            n_processors=n_processors,
             slurm_header_add="",
             remote_fs=remote_fs,
-            jobfile_name="job",
+            jobfile_name=jobfile_name,
         )
+
+        self.logger.print(f"SingleScriptTask")
+        self.logger.print(f"{self.calcdir=}")
 
 
     def copy_file(self, local_path):
         moved_path = self.calcdir / os.path.split(local_path)[-1]
-        self.remote_fs.copy(local_path, moved_path)
+        self.remote_fs.put(local_path, moved_path)
         return moved_path
 
     def allocate_data(self):
-        """
-        """
         self.script_file_remote = self.copy_file(self.script_file)
         self.input_file_remote = self.copy_file(self.input_file)
 
@@ -205,7 +261,10 @@ class SingleScriptTask(RemoteTask):
                 break
 
     def collect_results(self):
-        self.remote_fs.get(self.calcdir, )
+        self.remote_fs.get_dir(self.calcdir, self.local_savepath)
+
+    def finish_check(self):
+        return self.remote_fs.exists(self.calcdir / "is_finished.info")
 
 
 class ArrayScriptTask(RemoteTask):

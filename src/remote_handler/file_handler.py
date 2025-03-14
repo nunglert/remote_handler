@@ -57,17 +57,6 @@ class FileSystemHandlerBase(ABC):
         
         super().__init__()
     
-    # @abstractmethod
-    # def copy(self, source, destination):
-    #     """
-    #     Copy a file or directory from the source path to the destination path.
-
-    #     Parameters:
-    #         source (str): The path of the file or directory to copy.
-    #         destination (str): The path where the file or directory should be copied to.
-    #     """
-    #     pass
-    
     @abstractmethod
     def get(self, remote, local):
         """

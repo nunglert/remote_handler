@@ -8,3 +8,4 @@ test/data/temp
 pyrightconfig.json
 examples/calculations
 __pycache__
+.qodo

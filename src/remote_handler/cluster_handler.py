@@ -1,3 +1,4 @@
+import logging
 import re, os
 import subprocess
 from jinja2 import Environment, FileSystemLoader
@@ -10,6 +11,7 @@ from abc import ABC, abstractmethod
 from remote_handler import slurm_utils, file_handler
 from remote_handler.file_handler import FileSystemHandlerBase
 
+logger = logging.getLogger(__name__)
 
 class SlurmHandlerBase(ABC):
     """Class to handle file transfers and computations via slurm on a remote
@@ -41,20 +43,30 @@ class SlurmHandlerBase(ABC):
         self.slurm_header_add = slurm_header_add
         self.remote_fs = remote_fs
 
-        if isinstance(remote_fs, file_handler.RemoteFileSystem):
-            remote_machine = remote_fs.remote_alias
-            self.ssh_command = f"ssh {remote_machine}"
-        else:
-            remote_machine = os.environ.get("REMOTE_HANDLER_LOCAL")
-            if remote_machine is None:
-                raise Exception(
-                    "Set REMOTE_HANDLER_LOCAL environment variable to the "
-                    "current system you are working on, such that SlurmHandler "
-                    "can find the appropriate jinja template."
-                )
-            self.ssh_command = None
-        self.template_file = f"{remote_machine}.sh.j2"
+        # if isinstance(remote_fs, file_handler.RemoteFileSystem):
+        #     logger.info("Reading remote_machine from RemoteFileSystem obj")
+        #     remote_machine = remote_fs.remote_alias
+        #     self.ssh_command = f"ssh {remote_machine}"
+        # else:
+        #     logger.info(
+        #         "Reading remote_machine from REMOTE_HANDLER_LOCAL environment "
+        #         "variable"
+        #     )
+        #     remote_machine = os.environ.get("REMOTE_HANDLER_LOCAL")
+        #     if remote_machine is None:
+        #         raise Exception(
+        #             "Set REMOTE_HANDLER_LOCAL environment variable to the "
+        #             "current system you are working on, such that SlurmHandler "
+        #             "can find the appropriate jinja template."
+        #         )
+        #     self.ssh_command = None
 
+        assert remote_fs.slurm_config is not None, "Need slurm_config set in remote_fs!"
+        remote_machine = remote_fs.slurm_config["remote_machine"]
+        self.ssh_command = f"ssh {remote_machine}"
+        # self.ssh_command = 
+        # self.template_file = f"{remote_machine}.sh.j2"
+        self.template_file = remote_fs.slurm_config["template"]
 
         super().__init__()
 
@@ -112,15 +124,6 @@ class SlurmJobHandler(SlurmHandlerBase):
         )
 
 
-    def submit(self):
-        assert self.is_written, "Can not submit job if batch file is not written yet!"
-        self.pid = slurm_utils.submit_job(
-            script_path=self.slurm_script_path, 
-            output_path=self.calcdir, 
-            ssh_command=self.ssh_command
-        )
-        self.is_submitted = True
-    
     def write_jobfile(self, input_file, python_script_path):
         self.slurm_str = slurm_utils.get_slurm_str(
             input_file,
@@ -136,11 +139,27 @@ class SlurmJobHandler(SlurmHandlerBase):
         self.remote_fs.write_str_to_file(
             self.slurm_str, self.slurm_script_path
         )
+        logger.info("Succesfully wrote slurm file!")
         self.is_written = True
+
+    def submit(self):
+        assert self.is_written, "Can not submit job if batch file is not written yet!"
+        self.pid = slurm_utils.submit_job(
+            script_path=self.slurm_script_path, 
+            output_path=self.calcdir, 
+            ssh_command=self.ssh_command,
+            cwd=self.calcdir
+        )
+        logger.info(f"Submitted slurm job with pid {self.pid}")
+        self.is_submitted = True
 
     def check_status(self):
         assert self.is_submitted, "Can not check status of unsubmitted job!"
-        return slurm_utils.check_job_status([self.pid])
+        logger.debug("Checking slurm job status...")
+        return slurm_utils.check_job_status_squeue(
+            self.pid,
+            ssh_command=self.ssh_command
+        )
 
 
 # class SlurmArrayHandler(SlurmHandlerBase):

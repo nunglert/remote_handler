@@ -4,8 +4,8 @@ from remote_handler import slurm_utils
 @pytest.fixture(
     params=[
         # pytest.param("local", marks=[pytest.mark.local]), 
-        pytest.param("datalab", marks=[pytest.mark.datalab]), 
-        pytest.param("lugus", marks=[pytest.mark.lugus])
+        pytest.param("datalab"), 
+        pytest.param("lugus")
     ]
 )
 def remote_machine(request):
