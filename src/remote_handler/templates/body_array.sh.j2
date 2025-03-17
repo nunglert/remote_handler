@@ -6,7 +6,7 @@ MAP=({{ map_indices | join(' ') }})
 # Get the mapped index for this SLURM array task
 MAPPED_INDEX=${MAP[$SLURM_ARRAY_TASK_ID]}
 
-PER_TASK=1
+PER_TASK={{per_task}}
 
 # Calculate the starting and ending values for this task
 START_NUM=$(( ($SLURM_ARRAY_TASK_ID - 1) * $PER_TASK + 1 ))
