@@ -260,6 +260,11 @@ class LocalFileSystem(FileSystemHandlerBase):
         """
         os.remove(path)
 
+    def write_dict_to_json(self, filepath: os.PathLike, param_dict) -> None:
+        filepath = str(filepath)
+        with open(filepath, "w") as f:
+            f.write(json.dumps(param_dict))
+
 
 def reconnect_on_failure(func):
     """Decorator to reconnect if SSH/SFTP operation fails."""

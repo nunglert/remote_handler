@@ -1,9 +1,12 @@
-import os, shutil
-import pytest
-from pytest_lazyfixture import lazy_fixture
+import os
+import shutil
 from pathlib import Path
 
+import pytest
+from pytest_lazyfixture import lazy_fixture
+
 from remote_handler import file_handler
+
 
 @pytest.fixture()
 def remote_fs(config_dir):
@@ -15,39 +18,42 @@ def remote_fs(config_dir):
 
     return fs, Path(target_dir)
 
+
 @pytest.fixture()
 def local_fs(data_dir):
     fs = file_handler.LocalFileSystem()
     target_dir = data_dir / "temp" / "TestFileSystem" / "temp"
-    
+
     if fs.exists(target_dir):
         fs.rmtree(target_dir, ignore_errors=True)
     os.makedirs(target_dir, exist_ok=True)
 
     return fs, target_dir
 
+
 @pytest.fixture()
 def local_dir(data_dir):
-    return data_dir / "assets" / "TestFileSystem" 
+    return data_dir / "assets" / "TestFileSystem"
+
 
 @pytest.fixture(
     scope="module",
     params=[
         pytest.param(
             lazy_fixture("remote_fs"),
-            # marks=[pytest.mark.remote],
+            marks=[pytest.mark.remote],
         ),
         pytest.param(
             lazy_fixture("local_fs"),
-            # marks=[pytest.mark.local],
+            marks=[pytest.mark.local],
         ),
     ],
 )
 def instance(request):
     return request.param
 
-class TestFileSystem:
 
+class TestFileSystem:
     def test_put(self, instance, local_dir):
         fs, target_dir = instance
         filename = "single_file.txt"
@@ -67,11 +73,11 @@ class TestFileSystem:
 
         assert os.path.exists(local_dir / filename2)
         # os.remove(local_dir / filename2)
-    
+
     def test_put_dir(self, instance, local_dir):
         fs, target_dir = instance
         dirname = "directory_with_contents"
-        
+
         fs.put_dir(local_dir / dirname, target_dir / dirname)
 
         assert fs.exists(target_dir / dirname)
@@ -83,7 +89,7 @@ class TestFileSystem:
 
         if os.path.exists(local_dir / dirname2):
             shutil.rmtree(local_dir / dirname2)
-        
+
         fs.put_dir(local_dir / dirname, target_dir / dirname2)
         fs.get_dir(target_dir / dirname2, local_dir / dirname2)
 
@@ -96,6 +102,7 @@ class TestFileSystem:
         print(temppath)
         assert fs.exists(temppath)
 
+
 def test_reconnect(remote_fs, local_dir):
     fs, target_dir = remote_fs
     filename = "single_file.txt"
@@ -106,5 +113,3 @@ def test_reconnect(remote_fs, local_dir):
 
     fs.put(local_dir / filename, target_dir / filename)
     assert fs.exists(target_dir / filename)
-
-

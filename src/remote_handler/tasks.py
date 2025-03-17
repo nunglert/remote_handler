@@ -4,8 +4,10 @@ import random
 import string
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Union
+from xml.etree.ElementPath import prepare_star
 
 from remote_handler import cluster_handler, file_handler, slurm_utils
 from remote_handler.file_handler import (
@@ -135,20 +137,6 @@ class RemoteTask(ABC):
         """
         pass
 
-    # @abstractmethod
-    # def setup_slurm(self):
-    #     """Function setting up the slurm logic. This function creates the
-    #     necessary batch file(s) for slurm to execute the task(s).
-
-    #     Example:
-    #         You want to compute DFT for N configs. In `allocate_data` you
-    #         prepared N directories with the required input files on the remote
-    #         machine. `setup_slurm` is supposed to create e.g. either a separate
-    #         slurm batch file for each config, running them as N individual
-    #         slurm jobs or a single slurm batch file that runs them as an array.
-    #     """
-    #     pass
-
     @abstractmethod
     def submit(self):
         """Function submitting the slurm job(s). This should depend on how
@@ -271,7 +259,7 @@ class SingleScriptTask(RemoteTask):
         )
 
         self.logger.print(f"SingleScriptTask")
-        self.logger.print(f"calcdir={str(self.calcdir)}")
+        self.logger.print(f"calcdir: {str(self.calcdir)}")
 
     def copy_file(self, local_path):
         moved_path = self.calcdir / os.path.split(local_path)[-1]
@@ -294,6 +282,41 @@ class SingleScriptTask(RemoteTask):
 
     def finish_check(self):
         return self.remote_fs.exists(self.calcdir / "is_finished.info")
+
+
+@dataclass
+class Writeable(ABC):
+    """This base class serves as an interface for one unit of data supplied to
+    a slurm job.
+
+    Example:
+        You run DFT with an ArrayScriptTask. You have 1000 configs in total,
+        you distribute them to 10 individual jobs in an array. Then each job of
+        the array will require 100 configurations, which you will have to
+        prepare in the directory of the job.
+    """
+
+    content: Any
+    filename: str
+    remote_fs: file_handler.FileSystemHandlerBase
+
+    @abstractmethod
+    def write(self, calcpath):
+        """Specify the logic to write content to disk"""
+        pass
+
+
+class DictJSON(Writeable):
+    def write(self, calcpath):
+        self.remote_fs.write_dict_to_json(
+            Path(calcpath) / self.filename, self.content
+        )
+
+
+class Reader(ABC):
+    @abstractmethod
+    def read(self, calcpath):
+        pass
 
 
 class ArrayScriptTask(RemoteTask):
@@ -334,9 +357,10 @@ class ArrayScriptTask(RemoteTask):
 
     def __init__(
         self,
-        script_file: os.PathLike,
+        python_script_file: os.PathLike,
         local_savepath: os.PathLike,
         remote_fs: FileSystemHandlerBase,
+        *prepared_data: list[list[Writeable]],
         logfile: os.PathLike = "task.log",
         remote_savepath: Optional[os.PathLike] = None,
         collect_only: bool = False,
@@ -345,9 +369,16 @@ class ArrayScriptTask(RemoteTask):
         n_processors: int = 2,
         jobfile_name: str = "run_slurm.sh",
     ):
-        assert (
-            remote_fs.slurm_config is not None
-        ), "remote_fs needs slurm_config!"
+        if remote_fs.slurm_config is None:
+            raise Exception("remote_fs needs slurm_config!")
+
+        assert len(prepared_data) > 0, "Specify some inputs for you script!"
+        for content in prepared_data:
+            assert len(content) == len(
+                prepared_data[0]
+            ), "args need to have same length!"
+        self.prepared_data = prepared_data[0]
+        self.num_array_tasks = len(self.prepared_data[0])
 
         if remote_savepath is None:
             remote_savepath = remote_fs.slurm_config["savepath"]
@@ -359,9 +390,9 @@ class ArrayScriptTask(RemoteTask):
             collect_only=collect_only,
             remote_fs=remote_fs,
         )
-        self.calcdir = Path(self.savepath)
+        self.calchome = Path(self.savepath)
 
-        self.script_file = script_file
+        self.python_script_file = python_script_file
         # self.input_file = input_file
         self.loop_time = loop_time
         self.local_savepath = local_savepath
@@ -369,75 +400,51 @@ class ArrayScriptTask(RemoteTask):
         self.slurm_handler = cluster_handler.SlurmArrayHandler(
             jobname=jobname,
             partition=remote_fs.slurm_config["partition"],
-            savepath=self.calcdir,
+            savepath=self.calchome,
             conda_env=remote_fs.slurm_config["conda_env"],
             n_processors=n_processors,
+            map_indices=None,
             slurm_header_add="",
             remote_fs=remote_fs,
             jobfile_name=jobfile_name,
             loop_time=loop_time,
-            job_type_template="body_single.sh.j2",
+            job_type_template="body_array.sh.j2",
         )
 
-        self.logger.print(f"SingleScriptTask")
-        self.logger.print(f"calcdir={str(self.calcdir)}")
+        self.logger.print(f"ArrayScriptTask")
+        self.logger.print(f"calchome: {str(self.calchome)}")
 
     def copy_file(self, local_path):
-        moved_path = self.calcdir / os.path.split(local_path)[-1]
+        moved_path = self.calchome / os.path.split(local_path)[-1]
         self.remote_fs.put(local_path, moved_path)
         return moved_path
 
     def allocate_data(self):
-        self.script_file_remote = self.copy_file(self.script_file)
-        self.input_file_remote = self.copy_file(self.input_file)
+        self.script_file_remote = self.copy_file(self.python_script_file)
         self.slurm_handler.write_jobfile(
-            self.input_file_remote, self.script_file_remote
+            self.script_file_remote, self.num_array_tasks
         )
+
+        self.all_calcpaths = []
+        for idx, data_at_idx in enumerate(zip(*self.prepared_data)):
+            calcpath = self.calchome / f"{idx}"
+            self.remote_fs.makedirs(calcpath)
+            for data in data_at_idx:
+                data.write(calcpath)
+            self.all_calcpaths.append(calcpath)
 
     def submit(self):
         self.slurm_handler.submit()
         self.slurm_handler.wait_until_finished()
 
     def collect_results(self):
-        self.remote_fs.get_dir(self.calcdir, self.local_savepath)
+        self.remote_fs.get_dir(self.calchome, self.local_savepath)
 
     def finish_check(self):
-        return self.remote_fs.exists(self.calcdir / "is_finished.info")
+        assert self.all_calcpaths, "There are no calcpaths to check!"
 
+        for calcpath in self.all_calcpaths:
+            if not self.remote_fs.exists(Path(calcpath) / "is_finished.info"):
+                return False
 
-# class ArrayScriptTask(RemoteTask):
-#     """This is a task that consists of running a script with some input file.
-#     """
-
-#     def __init__(
-#         self,
-#         logfile: str,
-#         script_file: str,
-#         input_file: str,
-#         remote_fs: FileSystemHandlerBase,
-#         remote_savepath: Optional[str] = None,
-#         collect_only: bool = False
-#     ):
-#         self.script_file = script_file
-#         self.input_file = input_file
-#         # self.size = len(inputs)
-#         super().__init__(
-#             logfile=logfile,
-#             savepath=remote_savepath,
-#             collect_only=collect_only,
-#             remote_fs=remote_fs
-#         )
-
-#     def allocate_data(self):
-#         """
-#         """
-
-
-#     def setup_slurm(self):
-#         pass
-
-#     def submit(self):
-#         pass
-
-#     def collect_results(self):
-#         pass
+        return True

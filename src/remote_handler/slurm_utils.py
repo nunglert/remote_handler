@@ -46,20 +46,24 @@ def submit_job_array(
     num_array_tasks,
     num_parallel=10,
     ssh_command=None,
+    cwd=None,
 ):
-    # Submit job via SSH and capture job ID
-    slurm_command = f"sbatch --output={output_path}/slurm_%A_%a.out --error={output_path}/slurm_%A_%a.err --array=1-{num_array_tasks}%{num_parallel} {script_path}"
+    command = ""
+    if cwd is not None:
+        command += f"cd {cwd}; "
+
+    command += f"sbatch --output={output_path}/slurm_%A_%a.out --error={output_path}/slurm_%A_%a.err --array=1-{num_array_tasks}%{num_parallel} {script_path}"
     # slurm_command = f"sbatch -e {output_path}/slurm.err -o {output_path}/slurm.out {script_path}"
 
     if ssh_command is not None:
-        submit_cmd = f"{ssh_command} '{slurm_command}'"
+        submit_cmd = f"{ssh_command} '{command}'"
     else:
-        submit_cmd = slurm_command
+        submit_cmd = command
 
     result = subprocess.run(
         submit_cmd, shell=True, capture_output=True, text=True
     )
-    logger.debug(result["stderr"])
+    # logger.debug(result["stderr"])
 
     pid = re.search(r"(\d+)", result.stdout).groups()[0]
     return pid
@@ -117,7 +121,7 @@ def get_array_slurm_str(
     num_parallel=10,
     jobname="job",
     partition="normal",
-    n_cores=8,
+    n_processors=8,
     conda_env="jaxnest",
     map_indices=None,
     header_template="lugus.sh.j2",
@@ -138,7 +142,7 @@ def get_array_slurm_str(
         num_parallel=num_parallel,
         jobname=jobname,
         partition=partition,
-        n_cores=n_cores,
+        n_cores=n_processors,
         conda_env=conda_env,
         map_indices=map_indices,
         slurm_header_add=slurm_header_add,

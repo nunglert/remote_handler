@@ -63,31 +63,11 @@ class SlurmHandlerBase(ABC):
         self.remote_fs = remote_fs
         self.loop_time = loop_time
 
-        # if isinstance(remote_fs, file_handler.RemoteFileSystem):
-        #     logger.info("Reading remote_machine from RemoteFileSystem obj")
-        #     remote_machine = remote_fs.remote_alias
-        #     self.ssh_command = f"ssh {remote_machine}"
-        # else:
-        #     logger.info(
-        #         "Reading remote_machine from REMOTE_HANDLER_LOCAL environment "
-        #         "variable"
-        #     )
-        #     remote_machine = os.environ.get("REMOTE_HANDLER_LOCAL")
-        #     if remote_machine is None:
-        #         raise Exception(
-        #             "Set REMOTE_HANDLER_LOCAL environment variable to the "
-        #             "current system you are working on, such that SlurmHandler "
-        #             "can find the appropriate jinja template."
-        #         )
-        #     self.ssh_command = None
-
         assert (
             remote_fs.slurm_config is not None
         ), "Need slurm_config set in remote_fs!"
         remote_machine = remote_fs.slurm_config["remote_machine"]
         self.ssh_command = f"ssh {remote_machine}"
-        # self.ssh_command =
-        # self.template_file = f"{remote_machine}.sh.j2"
         self.template_file = remote_fs.slurm_config["template"]
 
         self.is_written = False
@@ -240,17 +220,18 @@ class SlurmArrayHandler(SlurmHandlerBase):
     def write_jobfile(self, python_script_path, num_array_tasks):
         self.num_array_tasks = num_array_tasks
         self.slurm_str = slurm_utils.get_array_slurm_str(
-            self.calcdir,
-            python_script_path,
-            num_array_tasks,
-            self.num_parallel,
-            self.jobname,
-            self.partition,
-            self.n_processors,
-            self.conda_env,
-            self.map_indices,
-            self.template_file,
-            self.slurm_header_add,
+            calcdir=self.calcdir,
+            python_script_path=python_script_path,
+            num_array_tasks=num_array_tasks,
+            num_parallel=self.num_parallel,
+            jobname=self.jobname,
+            partition=self.partition,
+            n_processors=self.n_processors,
+            conda_env=self.conda_env,
+            map_indices=self.map_indices,
+            header_template=self.template_file,
+            job_type_template=self.job_type_template,
+            slurm_header_add=self.slurm_header_add,
         )
         self.remote_fs.write_str_to_file(
             self.slurm_str, self.slurm_script_path
@@ -273,3 +254,10 @@ class SlurmArrayHandler(SlurmHandlerBase):
         )
         logger.info(f"Submitted slurm job with pid {self.pid}")
         self.is_submitted = True
+
+    def check_status(self):
+        assert self.is_submitted, "Can not check status of unsubmitted job!"
+        logger.debug("Checking slurm job status...")
+        return slurm_utils.check_job_status_squeue(
+            self.pid, ssh_command=self.ssh_command
+        )
