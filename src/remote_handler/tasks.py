@@ -73,6 +73,7 @@ class RemoteTask(ABC):
         self.remote_fs = remote_fs
 
         self.savepath = savepath
+        self.collect_only = collect_only
 
         if savepath is not None:
             parent, child = os.path.split(savepath)
@@ -313,6 +314,11 @@ class DictJSON(Writeable):
         )
 
 
+class AtomsBatch(Writeable):
+    def write(self, calcpath):
+        self.remote_fs.write_ase(Path(calcpath) / self.filename, self.content)
+
+
 class Reader(ABC):
     @abstractmethod
     def read(self, calcpath):
@@ -357,10 +363,11 @@ class ArrayScriptTask(RemoteTask):
 
     def __init__(
         self,
-        python_script_file: os.PathLike,
         local_savepath: os.PathLike,
         remote_fs: FileSystemHandlerBase,
-        *prepared_data: list[list[Writeable]],
+        python_script_file: os.PathLike = None,
+        individual_ressources: list[list[Writeable]] = [],
+        shared_ressources: list[os.PathLike] = [],
         logfile: os.PathLike = "task.log",
         remote_savepath: Optional[os.PathLike] = None,
         collect_only: bool = False,
@@ -372,13 +379,12 @@ class ArrayScriptTask(RemoteTask):
         if remote_fs.slurm_config is None:
             raise Exception("remote_fs needs slurm_config!")
 
-        assert len(prepared_data) > 0, "Specify some inputs for you script!"
-        for content in prepared_data:
-            assert len(content) == len(
-                prepared_data[0]
-            ), "args need to have same length!"
-        self.prepared_data = prepared_data[0]
-        self.num_array_tasks = len(self.prepared_data[0])
+        # assert len(individual_ressources) > 0, "Specify some inputs for you script!"
+        # for content in individual_ressources:
+        #     assert len(content) == len(
+        #         individual_ressources[0]
+        #     ), "args need to have same length!"
+        # self.num_array_tasks = len(self.individual_ressources[0])
 
         if remote_savepath is None:
             remote_savepath = remote_fs.slurm_config["savepath"]
@@ -390,17 +396,18 @@ class ArrayScriptTask(RemoteTask):
             collect_only=collect_only,
             remote_fs=remote_fs,
         )
-        self.calchome = Path(self.savepath)
+        self.rootpath = Path(self.savepath)
 
         self.python_script_file = python_script_file
-        # self.input_file = input_file
+        self.individual_ressources = individual_ressources
+        self.shared_ressources = shared_ressources
         self.loop_time = loop_time
         self.local_savepath = local_savepath
 
         self.slurm_handler = cluster_handler.SlurmArrayHandler(
             jobname=jobname,
             partition=remote_fs.slurm_config["partition"],
-            savepath=self.calchome,
+            savepath=self.rootpath,
             conda_env=remote_fs.slurm_config["conda_env"],
             n_processors=n_processors,
             map_indices=None,
@@ -411,34 +418,54 @@ class ArrayScriptTask(RemoteTask):
             job_type_template="body_array.sh.j2",
         )
 
+        self.calcdir = self.slurm_handler.calcdir
+
         self.logger.print(f"ArrayScriptTask")
-        self.logger.print(f"calchome: {str(self.calchome)}")
+        self.logger.print(f"rootpath: {str(self.rootpath)}")
 
     def copy_file(self, local_path):
-        moved_path = self.calchome / os.path.split(local_path)[-1]
+        moved_path = self.rootpath / os.path.split(local_path)[-1]
         self.remote_fs.put(local_path, moved_path)
         return moved_path
 
-    def allocate_data(self):
+    def allocate_data(self, slurm_only=False):
+        assert (
+            self.python_script_file is not None
+        ), "Need self.python_script_file"
+        assert (
+            len(self.individual_ressources) > 0
+        ), "Specify some inputs for your script!"
+        for content in self.individual_ressources:
+            assert len(content) == len(
+                self.individual_ressources[0]
+            ), "args need to have same length!"
+
         self.script_file_remote = self.copy_file(self.python_script_file)
         self.slurm_handler.write_jobfile(
             self.script_file_remote, self.num_array_tasks
         )
 
-        self.all_calcpaths = []
-        for idx, data_at_idx in enumerate(zip(*self.prepared_data)):
-            calcpath = self.calchome / f"{idx}"
-            self.remote_fs.makedirs(calcpath)
-            for data in data_at_idx:
-                data.write(calcpath)
-            self.all_calcpaths.append(calcpath)
+        if not slurm_only:
+            if self.shared_ressources:
+                for ressource in self.shared_ressources:
+                    self.copy_file(ressource)
+
+            self.all_calcpaths = []
+            for idx, data_at_idx in enumerate(
+                zip(*self.individual_ressources)
+            ):
+                calcpath = self.calcdir / f"{idx}"
+                self.remote_fs.makedirs(calcpath)
+                for data in data_at_idx:
+                    data.write(calcpath)
+                self.all_calcpaths.append(calcpath)
 
     def submit(self):
         self.slurm_handler.submit()
         self.slurm_handler.wait_until_finished()
 
     def collect_results(self):
-        self.remote_fs.get_dir(self.calchome, self.local_savepath)
+        self.remote_fs.get_dir(self.rootpath, self.local_savepath)
 
     def finish_check(self):
         assert self.all_calcpaths, "There are no calcpaths to check!"

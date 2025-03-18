@@ -198,13 +198,15 @@ class SlurmArrayHandler(SlurmHandlerBase):
         self.num_parallel = num_parallel
         self.map_indices = map_indices
 
-        self.calcdir = Path(savepath)
-        if not remote_fs.exists(self.calcdir.parent):
+        self.rootpath = Path(savepath)
+        if not remote_fs.exists(self.rootpath.parent):
             raise Exception("Parent dir of savepath needs to exist!")
 
-        self.slurm_script_path = self.calcdir / self.jobfile_name
-        self.output_path = self.calcdir / "slurm_output"
+        self.slurm_script_path = self.rootpath / self.jobfile_name
+        self.output_path = self.rootpath / "slurm_output"
+        self.calcdir = self.rootpath / "calcdirs"
         remote_fs.makedirs(self.output_path, exist_ok=True)
+        remote_fs.makedirs(self.calcdir, exist_ok=True)
 
         super().__init__(
             jobname,

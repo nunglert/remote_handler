@@ -153,7 +153,7 @@ def test_ArrayScriptTask_simple(data_dir, filesystem):
         script_path,
         local_results_path,
         filesystem,
-        prepared_data,
+        *prepared_data,
         logfile=local_savepath / "test_ArrayScriptTask.log",
         loop_time=1,
         remote_savepath=None,  # fall back to savepath in config
