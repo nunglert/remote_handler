@@ -374,6 +374,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         local_savepath: Optional[os.PathLike] = None,
         logfile: str = "opt.log",
         collect_only: bool = False,
+        tag: str = "opt",
         python_script_path: str = "/home/nunglert/code/jaxnest_dev/scripts/utility/optimize_traj.py",
         stub: bool = False,
         pickle_file: str = "/home/nunglert/nnff_trainings/velo/si_bartok_gpu7/run11_r2scan_rerun/model_params_plain_ensemble_VELO_8E04F5B1.pkl",
@@ -389,7 +390,6 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         optimization_backend: str = "NNFF",
         steinhardt_backend: str = "quip",
         steinhardt_l_values: list[int] = [4, 6],
-        tag: str = "opt",
     ):
         super().__init__(
             traj_files,

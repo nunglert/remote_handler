@@ -147,13 +147,14 @@ def test_ArrayScriptTask_simple(data_dir, filesystem):
         input_data.append(tasks.DictJSON(mydict, "input.json", filesystem))
         config_data.append(tasks.DictJSON(mydict, "config.json", filesystem))
 
-    prepared_data = [input_data, config_data]
+    individual_ressources = [input_data, config_data]
 
     task = tasks.ArrayScriptTask(
-        script_path,
         local_results_path,
         filesystem,
-        *prepared_data,
+        script_path,
+        individual_ressources,
+        shared_ressources=[],
         logfile=local_savepath / "test_ArrayScriptTask.log",
         loop_time=1,
         remote_savepath=None,  # fall back to savepath in config

@@ -384,7 +384,8 @@ class ArrayScriptTask(RemoteTask):
         #     assert len(content) == len(
         #         individual_ressources[0]
         #     ), "args need to have same length!"
-        # self.num_array_tasks = len(self.individual_ressources[0])
+        if individual_ressources:
+            self.num_array_tasks = len(individual_ressources[0])
 
         if remote_savepath is None:
             remote_savepath = remote_fs.slurm_config["savepath"]

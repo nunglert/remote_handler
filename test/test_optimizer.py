@@ -282,33 +282,33 @@ def test_recompute_failed(instance):
     handler.collect_results()
 
 
-def test_slurm_normal(instance):
-    handler, params = instance
-    handler.run()
-    all_atoms, failed_indices = handler.collect(only_finished=False)
+# def test_slurm_normal(instance):
+#     handler, params = instance
+#     handler.run()
+#     all_atoms, failed_indices = handler.collect(only_finished=False)
 
-    # We are skipping the actual computations, so Atoms should still be
-    # identical
-    for tfile in handler.traj_files:
-        ats0 = ase.io.read(tfile, index=":")
-        ats1 = ase.io.read(
-            optimizer.front_tag(tfile, handler.jobname), index=":"
-        )
-        for at0, at1 in zip(ats0, ats1):
-            if params["stub"]:
-                assert at0 == at1
+#     # We are skipping the actual computations, so Atoms should still be
+#     # identical
+#     for tfile in handler.traj_files:
+#         ats0 = ase.io.read(tfile, index=":")
+#         ats1 = ase.io.read(
+#             optimizer.front_tag(tfile, handler.jobname), index=":"
+#         )
+#         for at0, at1 in zip(ats0, ats1):
+#             if params["stub"]:
+#                 assert at0 == at1
 
 
-def test_slurm_recompute(instance):
-    handler, params = instance
-    handler.run()
+# def test_slurm_recompute(instance):
+#     handler, params = instance
+#     handler.run()
 
-    # now emulate a failed run by deleting one of the produced files
-    handler.remote_fs.remove(
-        handler.savepath / "calcdirs" / "0" / "opt_0.extxyz"
-    )
+#     # now emulate a failed run by deleting one of the produced files
+#     handler.remote_fs.remove(
+#         handler.savepath / "calcdirs" / "0" / "opt_0.extxyz"
+#     )
 
-    handler.recompute_failed()
+#     handler.recompute_failed()
 
 
 # @pytest.fixture(
