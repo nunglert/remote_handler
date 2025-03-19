@@ -1,6 +1,7 @@
-import json
+
 import sys
 import time
+import json
 
 file = sys.argv[1]
 

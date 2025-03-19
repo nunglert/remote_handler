@@ -355,6 +355,7 @@ class ArrayScriptTask(RemoteTask):
         logfile: os.PathLike = "task.log",
         remote_savepath: Optional[os.PathLike] = None,
         collect_only: bool = False,
+        num_parallel: int = 10,
         loop_time: float = 30.0,
         jobname: str = "job",
         n_processors: int = 2,
@@ -396,6 +397,7 @@ class ArrayScriptTask(RemoteTask):
             remote_fs=remote_fs,
             jobfile_name=jobfile_name,
             loop_time=loop_time,
+            num_parallel=num_parallel,
             job_type_template="body_array.sh.j2",
         )
 
@@ -413,6 +415,7 @@ class ArrayScriptTask(RemoteTask):
         assert (
             self.python_script_file is not None
         ), "Need self.python_script_file"
+        assert os.path.exists(self.python_script_file), "Did not find python script!"
         assert (
             len(self.individual_ressources) > 0
         ), "Specify some inputs for your script!"

@@ -157,12 +157,12 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
             collect_only=collect_only,
             loop_time=loop_time,
             jobname=jobname,
+            num_parallel=num_parallel,
             n_processors=2,
             jobfile_name="run_slurm.sh",
         )
 
         self.logger = tasks.SimpleLogger(logfile)
-        self.num_parallel = num_parallel
         self.loop_time = loop_time
         self.traj_files = traj_files
         self.shard_size = shard_size
@@ -462,9 +462,14 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         atoms_batches = []
         for calc_idx in range(self.num_array_tasks):
             json_config = deepcopy(self.json_args)
+
+            # TODO: this is dirty, properly solve this
             json_config["DATABASE"] = f"opt.extxyz"
-            pickle_file = f"../../{os.path.split(self.pickle_file)[1]}"
-            json_config["calculator_args"]["pickle_file"] = pickle_file
+            pickle_file = f"{os.path.split(self.pickle_file)[1]}"
+            json_config["calculator_args"]["pickle_file"] = (
+                Path(self.savepath) / pickle_file
+            ).resolve().__str__()
+
             config_files.append(
                 tasks.DictJSON(json_config, "input_opt.json", self.remote_fs)
             )
@@ -481,7 +486,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
     def run(self):
         self.allocate_data()
         self.submit()
-        # self.collect_results()
+        self.collect_and_harvest()
         # self.collect_results()
 
     # @property

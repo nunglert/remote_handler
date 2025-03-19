@@ -131,7 +131,8 @@ def parse_write_path(log_text):
         ValueError: If no matching path is found.
     """
     # Regular expression to match the path after 'Writing files to'
-    match = re.search(r"Writing files to\s+(\S+)", log_text)
+    # match = re.search(r"Writing files to\s+(\S+)", log_text)
+    match = re.search(r"rootpath:\s+(\S+)", log_text)
     if match:
         return match.group(1)  # Extract the matched path
     else:
@@ -285,6 +286,11 @@ def get_parser():
         help="Search for walkers files in path and process them",
     )
     parser.add_argument(
+        "--custom_regex",
+        type=str,
+        help="Search for walkers files in path and process them",
+    )
+    parser.add_argument(
         "--files",
         type=str,
         nargs="+",
@@ -419,7 +425,7 @@ def process_args(args, parser):
             args.ats_files.extend(walkers_files)
             logger.info(f"Found {len(walkers_files)} walkers files.")
 
-        if args.custom_regex:
+        if args.custom_regex is not None:
             atoms_files = utils.grep(
                 args.path, rf"{args.custom_regex}", with_path=True
             )
@@ -486,7 +492,7 @@ if __name__ == "__main__":
     parser = get_parser()
     args = parser.parse_args()
 
-    args = process_args(args)
+    args = process_args(args, parser)
 
     handler = setup_optimizer(args)
 
