@@ -16,25 +16,9 @@ from remote_handler.file_handler import (
     RemoteFileSystem,
     tag_path,
 )
+from remote_handler.utils import SimpleLogger
 
 logger = logging.getLogger(__name__)
-
-
-class SimpleLogger:
-    def __init__(self, log_file=None):
-        self.log_file = log_file
-
-    def print(self, *args):
-        # Join all arguments into a single string with spaces, like `print`
-        message = " ".join(map(str, args))
-        logger.info(message)
-
-        if self.log_file is not None:
-            # Write the message to the specified file
-            with open(self.log_file, "a") as f:
-                f.write(message + "\n")
-        else:
-            print(message)
 
 
 class RemoteTask(ABC):
@@ -379,15 +363,11 @@ class ArrayScriptTask(RemoteTask):
         if remote_fs.slurm_config is None:
             raise Exception("remote_fs needs slurm_config!")
 
-        # assert len(individual_ressources) > 0, "Specify some inputs for you script!"
-        # for content in individual_ressources:
-        #     assert len(content) == len(
-        #         individual_ressources[0]
-        #     ), "args need to have same length!"
         if individual_ressources:
             self.num_array_tasks = len(individual_ressources[0])
 
         if remote_savepath is None:
+            logger.info("Falling back to savepath from your slurm_config_file")
             remote_savepath = remote_fs.slurm_config["savepath"]
 
         # Need to init base class first, since it handles savepath

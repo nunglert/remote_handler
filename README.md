@@ -195,3 +195,12 @@ pre-commit install
 ```
 
 which should install the hooks for you.
+
+
+# TODOs
+
+- Refine templating procedure for slurm batch scripts
+- Refine which parameters should be provided by config files `remote_machine.json`
+- Come up with a unified way of handling conda/python environments on remote machine
+- Clean code for command execution (currently only slurms sbatch is used) on remote machine 
+- potentially extend functionality of FileHandler to also execute arbitray shell commands via subprocess

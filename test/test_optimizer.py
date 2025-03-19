@@ -1,9 +1,11 @@
 import hashlib
+import json
 import math
 import os
 import shutil
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import ase.io
@@ -13,7 +15,7 @@ from ase import Atoms
 from ase.calculators.calculator import compare_atoms
 from pytest_lazyfixture import lazy_fixture
 
-from remote_handler import optimizer
+from remote_handler import optimizer, run_optimizer
 
 
 def at_to_hash(at, length=8):
@@ -282,118 +284,165 @@ def test_recompute_failed(instance):
     handler.collect_results()
 
 
-# def test_slurm_normal(instance):
-#     handler, params = instance
-#     handler.run()
-#     all_atoms, failed_indices = handler.collect(only_finished=False)
-
-#     # We are skipping the actual computations, so Atoms should still be
-#     # identical
-#     for tfile in handler.traj_files:
-#         ats0 = ase.io.read(tfile, index=":")
-#         ats1 = ase.io.read(
-#             optimizer.front_tag(tfile, handler.jobname), index=":"
-#         )
-#         for at0, at1 in zip(ats0, ats1):
-#             if params["stub"]:
-#                 assert at0 == at1
+@pytest.fixture()
+def argparser():
+    return run_optimizer.get_parser()
 
 
-# def test_slurm_recompute(instance):
-#     handler, params = instance
-#     handler.run()
-
-#     # now emulate a failed run by deleting one of the produced files
-#     handler.remote_fs.remove(
-#         handler.savepath / "calcdirs" / "0" / "opt_0.extxyz"
-#     )
-
-#     handler.recompute_failed()
+def test_run_optimizer_parse_default(argparser):
+    args = argparser.parse_args([])
+    # for k,v in args.__dict__.items():
+    #     print(k, " = ", v)
 
 
-# @pytest.fixture(
-#     params=[
-#         pytest.param("local", marks=[pytest.mark.local]),
-#         pytest.param("datalab", marks=[pytest.mark.datalab]),
-#         pytest.param("lugus", marks=[pytest.mark.lugus])
-#     ]
-# )
-# def nonslurm_instance(request, traj_files, remote_dir, data_dir):
-#     relative_path = Path("../../scripts/utility/optimize_traj.py")
-#     python_script_path = (data_dir / relative_path).resolve()
-#     pickle_file = data_dir / "systems/silicon/n16/model_params_plain_ensemble_VELO_8E04F5B1.pkl"
+def test_run_optimizer_parse_default_process(argparser):
+    args = argparser.parse_args([])
 
-#     homepath = data_dir / "temp/optimizer/nonslurm"
-#     savepath = homepath / "savepath"
-#     if os.path.exists(homepath):
-#         for root, dirs, files in os.walk(homepath, topdown=False):
-#             for file in files:
-#                 os.remove(os.path.join(root, file))
-#             for dir in dirs:
-#                 os.rmdir(os.path.join(root, dir))
-#         os.rmdir(homepath)
-
-#     os.makedirs(savepath, exist_ok=True)
-
-#     if request.param == "lugus":
-#         remote_fs = optimizer.RemoteFileSystem(
-#             "lugus",
-#             local_temp_path="/home/nico.unglert/dump/optimizations",
-#             remote_temp_path="/home/nunglert/dump/optimizations"
-#         )
-#         savepath = remote_fs.secure_path(
-#             "/home/nunglert/cellar/projects/replica_exchange/silicon/optimizations/pytest",
-#             is_directory=True
-#         )
-#         print(savepath)
-#     elif request.param == "datalab":
-#         remote_fs = optimizer.RemoteFileSystem(
-#             "datalab",
-#             local_temp_path="/home/nico.unglert/dump/optimizations",
-#             remote_temp_path="/home/nico.unglert/dump/optimizations"
-#         )
-#     elif request.param == "local":
-#         remote_fs = optimizer.LocalFileSystem()
-#     else:
-#         raise Exception("Unknown remote machine!")
-
-#     params = dict(
-#         traj_files=traj_files,
-#         shard_size=50,
-#         savepath=savepath,
-#         num_parallel=5,
-#         every=5,
-#         python_script_path=python_script_path,
-#         pickle_file=pickle_file,
-#         supercell_trafo=[3, 3, 3],
-#         max_neighbors_list=[20, 30, 40, 50, 60],
-#         max_neighbors_offset=3,
-#         optimization_backend="LJ",
-#         loop_time=5,
-#         jobname="opt",
-#         stub=False,
-#         do_steinhardt=True,
-#         do_optimization=False,
-#         # remote_machine=request.param
-#         remote_fs=remote_fs,
-#         logfile=data_dir / "temp/optimizer/nonslurm/opt.log"
-#     )
-#     handler = optimizer.RemoteOptimizationHandler(**params)
-#     return handler, params
-
-# def test_nonslurm(nonslurm_instance):
-#     handler, params = nonslurm_instance
-#     handler.run_nonslurm()
+    with pytest.raises(Exception):
+        args = run_optimizer.process_args(args, argparser)
 
 
-# def test_nonslurm_broken(nonslurm_instance):
-#     handler, params = nonslurm_instance
-#     handler.run_nonslurm()
+def test_run_optimizer_parse_simple(argparser):
+    args = argparser.parse_args(["--files", "lel.extxyz"])
+    args = run_optimizer.process_args(args, argparser)
 
-#     opt_file = Path(handler.calcdir) / "0" / "opt_0.extxyz"
-#     ats = ase.io.read(opt_file, index=":")
-#     ase.io.write(opt_file, ats[1:])
+    assert isinstance(args.supercell_trafo, list)
+    assert isinstance(args.max_neighbors_list, list)
+    assert isinstance(args.steinhardt_l_values, list)
 
-#     handler.run_nonslurm()
-#     with open(Path(handler.savepath) / "nonslurm.log", "r") as f:
-#         print(f.read())
+
+# @pytest.mark.parametrize("use_logfile", [True, False])
+# @pytest.mark.parametrize("log_mode", ["stdout", "file"])
+@pytest.mark.parametrize(
+    "log_mode,use_logfile",
+    [
+        ("stdout", True),
+        ("stdout", False),
+        ("file", True),
+    ],
+)
+def test_run_optimizer_parse_logger(
+    argparser, log_mode, use_logfile, data_dir
+):
+    temp_dir = data_dir / "temp/run_optimizer/logger"
+    if not os.path.exists(temp_dir):
+        os.makedirs(temp_dir, exist_ok=True)
+    log_file = temp_dir / "opt.log"
+
+    arg_list = [
+        "--files",
+        "lel.extxyz",
+        "--log_mode",
+        log_mode,
+    ]
+    if use_logfile:
+        arg_list.extend(["--logfile", str(log_file)])
+
+    args = argparser.parse_args(arg_list)
+    args = run_optimizer.process_args(args, argparser)
+
+
+class ScratchDir:
+    def __init__(self, data_dir, subfolder_name, dummy_trajectory):
+        self.asset_dir = data_dir / "assets/run_optimizer/"
+        self.temp_dir = data_dir / "temp/run_optimizer" / subfolder_name
+
+        self.local_dir = self.temp_dir / "local_dir"
+        self.local_results = self.temp_dir / "results"
+
+        self.pickle_file = (
+            self.asset_dir / "model_params_plain_ensemble_VELO_8E04F5B1.pkl"
+        )
+        self.python_script_path = self.asset_dir / "simple_at_processor.py"
+
+        for path in [self.local_dir, self.local_results]:
+            if path is not None:
+                if os.path.exists(path):
+                    shutil.rmtree(path)
+        os.makedirs(self.local_dir, exist_ok=False)
+
+        self.logfile = str(self.temp_dir / "opt.log")
+        if os.path.exists(self.logfile):
+            os.remove(self.logfile)
+
+        self.tfile0 = str(self.local_dir / "traj0.extxyz")
+        ase.io.write(self.tfile0, dummy_trajectory)
+        self.tfile1 = str(self.local_dir / "traj1.extxyz")
+        ase.io.write(self.tfile1, dummy_trajectory)
+
+
+def test_setup_optimizer_case1(argparser, data_dir, dummy_trajectory):
+    # Case 1: Explicitly providing extxyz files
+    data = ScratchDir(data_dir, "case1", dummy_trajectory)
+    args = argparser.parse_args(
+        [
+            "--files",
+            data.tfile0,
+            data.tfile1,
+            "--log_mode",
+            "file",
+            "--logfile",
+            data.logfile,
+        ]
+    )
+    args = run_optimizer.process_args(args, argparser)
+    handler = run_optimizer.setup_optimizer(args)
+
+
+def test_setup_optimizer_case2(argparser, data_dir, dummy_trajectory):
+    # Case 2: Parsing a configuration file
+    data = ScratchDir(data_dir, "case2", dummy_trajectory)
+    json_contents = {
+        "files": [data.tfile0, data.tfile1],
+        "log_mode": "file",
+        "logfile": data.logfile,
+        "every": 1,
+    }
+
+    config_file = str(data.temp_dir / "config.json")
+    with open(config_file, "w") as f:
+        json.dump(json_contents, f)
+
+    args = argparser.parse_args(["--config", config_file, "--every", "2"])
+    args = run_optimizer.process_args(args, argparser)
+    assert args.every == 2, "Config is not overwritten by passed arg!"
+
+    handler = run_optimizer.setup_optimizer(args)
+
+
+def test_setup_optimizer_case3(argparser, data_dir, dummy_trajectory):
+    # Case 3: Parsing an existing logfile
+    data = ScratchDir(data_dir, "case3", dummy_trajectory)
+
+    # we do one dummy run of process_args to generate a logfile
+    args = argparser.parse_args(
+        [
+            "--files",
+            data.tfile0,
+            data.tfile1,
+            "--log_mode",
+            "file",
+            "--logfile",
+            data.logfile,
+            "--every",
+            "1",
+        ]
+    )
+    args0 = run_optimizer.process_args(args, argparser)
+
+    # now we try to parse from it
+    args = argparser.parse_args(
+        ["--read_out", str(data.temp_dir / "opt.log"), "--every", "2"]
+    )
+    args1 = run_optimizer.process_args(args, argparser)
+    assert args1.every == 2, "log params are not overwritten by passed arg!"
+    handler = run_optimizer.setup_optimizer(args)
+
+    for (k0, a0), (k1, a1) in zip(
+        args0.__dict__.items(), args1.__dict__.items()
+    ):
+        # Obviously read_out may not be contained in args0, but we also have to
+        # filter out remote_fs, since this is an object instance which will be
+        # different for two separate initializations
+        if not k0 in ["read_out", "every", "remote_fs"]:
+            assert a0 == a1, f"{k0} not identical!"

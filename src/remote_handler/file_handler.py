@@ -24,9 +24,8 @@ import numpy as np
 import paramiko
 from ase import Atoms
 
-# from remote_handler import slurm_utils, cluster_handler
-
 logger = logging.getLogger(__name__)
+CONFIG_DIR = Path(os.environ.get("REMOTE_HANDLER_CONFIG_DIR"))
 
 
 def tag_path(part0: str, part1: str, is_directory: bool = False):
@@ -48,11 +47,24 @@ class FileSystemHandlerBase(ABC):
     file system.
     """
 
-    def __init__(self, slurm_config_file: os.PathLike = None):
+    def __init__(self, slurm_config_file: Optional[str] = None):
         self.slurm_config = None
 
         if slurm_config_file is not None:
-            with open(slurm_config_file, "r") as f:
+            if CONFIG_DIR is None:
+                raise Exception(
+                    "Set REMOTE_HANDLER_CONFIG_DIR environment variable, "
+                    "where config files for different clusters are stored. See "
+                    "e.g. in examples/config_files!"
+                )
+            slurm_config_path = CONFIG_DIR / slurm_config_file
+            if not os.path.exists(slurm_config_path):
+                raise Exception(
+                    f"{slurm_config_file} does not exist in your "
+                    f"REMOTE_HANDLER_CONFIG_DIR={CONFIG_DIR}"
+                )
+
+            with open(slurm_config_path, "r") as f:
                 self.slurm_config = json.load(f)
 
         super().__init__()

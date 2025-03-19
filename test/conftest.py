@@ -4,8 +4,6 @@ from pathlib import Path
 import pytest
 from pytest_lazyfixture import lazy_fixture
 
-from remote_handler import file_handler
-
 # In order to test the functionality of RemoteFileSystem, we need a path to
 # configuration files set. You should set this as an environmental variable
 # outside python, like:
@@ -26,6 +24,7 @@ if os.environ.get("REMOTE_HANDLER_CONFIG_DIR") is None:
         "REMOTE_HANDLER_CONFIG_DIR"
     ] = "/home/nunglert/code/remote_handler/experiments/config_files"
 
+from remote_handler import file_handler
 
 # def pytest_collection_modifyitems(config, items):
 #     if config.getoption("-m"):
@@ -57,14 +56,14 @@ def data_dir():
 
 
 @pytest.fixture()
-def remote_fs(config_dir):
-    slurm_config_file = config_dir / "remote.json"
+def remote_fs():
+    slurm_config_file = "remote.json"
     return file_handler.RemoteFileSystem(slurm_config_file=slurm_config_file)
 
 
 @pytest.fixture()
-def local_fs(config_dir):
-    slurm_config_file = config_dir / "local.json"
+def local_fs():
+    slurm_config_file = "local.json"
     return file_handler.LocalFileSystem(slurm_config_file=slurm_config_file)
 
 
