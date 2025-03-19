@@ -195,3 +195,14 @@ pre-commit install
 ```
 
 which should install the hooks for you.
+
+
+# TODOs
+
+- Refine jinja templating procedure for slurm batch scripts
+- Refine which parameters should be provided by config files `remote_machine.json`
+- Come up with a unified way of handling conda/python environments on remote machine
+- Clean code for command execution (currently only SLURM's sbatch is used) on remote machine 
+- potentially extend functionality of FileHandler to also execute arbitray shell commands via subprocess
+- While I like the overall class hierarchy and abstraction, the specific implementation is not very clean. Member variables are not handled with great care, leaving room for many potential failures if handled incorrectly. Needs some further thought, probably from someone who is good at OOP :v)
+- Need more documentation

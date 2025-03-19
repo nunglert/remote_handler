@@ -1,6 +1,7 @@
-import json
+
 import sys
 import time
+import json
 from pathlib import Path
 
 calcpath = Path(sys.argv[1])
