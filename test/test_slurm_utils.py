@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from remote_handler import slurm_utils
+from remote_handler.core import slurm_utils
 
 
 @pytest.fixture(

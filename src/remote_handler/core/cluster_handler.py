@@ -12,8 +12,8 @@ from typing import Optional
 import numpy as np
 from jinja2 import Environment, FileSystemLoader
 
-from remote_handler import file_handler, slurm_utils
-from remote_handler.file_handler import FileSystemHandlerBase
+from remote_handler.core import file_handler, slurm_utils
+from remote_handler.core.file_handler import FileSystemHandlerBase
 
 logger = logging.getLogger(__name__)
 

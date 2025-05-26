@@ -1,18 +1,10 @@
 import json
 import os
-import subprocess
 import sys
 import traceback
-from multiprocessing import process
 from pathlib import Path
 
 import ase.io
-import pyscal3 as pc
-from ase.constraints import ExpCellFilter
-from ase.geometry.analysis import Analysis
-from ase.optimize import BFGS, FIRE, LBFGS
-from jaxnest import file_utils, structure_utils, units
-from jaxnest.postprocess import properties
 
 calcpath = Path(sys.argv[1])
 INPUTFILE = calcpath / "input_opt.json"

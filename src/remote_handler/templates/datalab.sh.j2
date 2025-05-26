@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name={{ jobname }}
 #SBATCH --partition={{ partition }}
-#SBATCH --gres=gpu:{{ n_cores }}
+#SBATCH --gres=gpu:{{ partition }}:{{ n_cores }}
 #SBATCH --time=7-00:00:00
 {{ slurm_header_add }}
 

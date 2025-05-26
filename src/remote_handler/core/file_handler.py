@@ -248,7 +248,7 @@ class LocalFileSystem(FileSystemHandlerBase):
 
     def write_dict_to_json(self, filepath: os.PathLike, param_dict) -> None:
         with open(filepath, "w") as f:
-            json.dump(param_dict, f)
+            json.dump(param_dict, f, indent=2)
 
     def read_ase(self, filepath: os.PathLike, **kwargs) -> list[Atoms]:
         return ase.io.read(filepath, **kwargs)
@@ -275,7 +275,7 @@ class LocalFileSystem(FileSystemHandlerBase):
     def write_dict_to_json(self, filepath: os.PathLike, param_dict) -> None:
         filepath = str(filepath)
         with open(filepath, "w") as f:
-            f.write(json.dumps(param_dict))
+            f.write(json.dumps(param_dict, indent=2))
 
 
 def reconnect_on_failure(func):
@@ -486,7 +486,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
     def write_dict_to_json(self, filepath: os.PathLike, param_dict) -> None:
         filepath = str(filepath)
         with self.sftp_client.file(filepath, "w") as f:
-            f.write(json.dumps(param_dict))
+            f.write(json.dumps(param_dict, indent=2))
 
     @reconnect_on_failure
     def read_ase(self, filepath: os.PathLike, **kwargs) -> list[Atoms]:

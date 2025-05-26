@@ -1,0 +1,99 @@
+import os
+import shutil
+from pathlib import Path
+
+import ase.io
+import numpy as np
+import pytest
+from ase import Atoms
+
+from remote_handler.core.active_learning_base import (
+    ActiveLearningHandler,
+    GroundTruthEvaluator,
+    ModelTrainer,
+    Sampler,
+)
+
+
+def get_dummy_configs():
+    np.random.seed(0)
+    n_configs = 10
+    at0 = Atoms("Si3", cell=np.eye(3) * 7, pbc=True)
+    ats = []
+    for idx in range(n_configs):
+        at = at0.copy()
+        at.set_positions(np.random.random(size=(3, 3)) * 7)
+        at.set_cell(at.cell[...] * np.random.random(size=(3, 3)))
+        at.info["shard_idx"] = idx
+        ats.append(at)
+    return ats
+
+
+dummy_configs = get_dummy_configs()
+
+
+class SamplerMock(Sampler):
+    def update(self, calcdir, x):
+        os.makedirs(Path(calcdir) / "sampler_dir")
+
+    def get_sampled_configs(self):
+        return dummy_configs
+
+
+class EvaluatorMock(GroundTruthEvaluator):
+    def update(self, calcdir, x):
+        os.makedirs(Path(calcdir) / "evaluator_dir")
+
+    def get_evaluated_configs(self):
+        return dummy_configs
+
+
+class TrainerMock(ModelTrainer):
+    def __init__(self, path):
+        self.model_file = Path(path) / "model.pkl"
+        with open(self.model_file, "w") as f:
+            f.write("keklelsos")
+
+    def update(self, calcdir, x):
+        os.makedirs(Path(calcdir) / "trainer_dir")
+
+    def get_trained_model(self):
+        return self.model_file
+
+
+def test_ActiveLearningHandler(data_dir):
+    asset_dir = data_dir / "active_learning/handler"
+    temp_dir = data_dir / "temp/active_learning/handler"
+
+    local_dir = temp_dir / "local_dir"
+    local_results = temp_dir / "results"
+
+    for path in [local_dir, local_results]:
+        if path is not None:
+            if os.path.exists(path):
+                shutil.rmtree(path)
+    os.makedirs(local_dir, exist_ok=False)
+
+    sampler = SamplerMock()
+    evaluator = EvaluatorMock()
+    trainer = TrainerMock(temp_dir)
+
+    initial_model_file = temp_dir / "model.pkl"
+    with open(initial_model_file, "w") as f:
+        f.write("keklelsos")
+
+    initial_db_file = temp_dir / "initial_db.extxyz"
+    with open(initial_model_file, "w") as f:
+        f.write("keklelsos")
+
+    al_handler = ActiveLearningHandler(
+        sampler,
+        evaluator,
+        trainer,
+        calcdir=local_dir,
+        initial_model_file=initial_model_file,
+        initial_db_file=initial_db_file,
+        num_iterations=5,
+    )
+
+    al_handler.run()
