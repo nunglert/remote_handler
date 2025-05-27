@@ -5,7 +5,7 @@ import shutil
 import sys
 from abc import ABC, abstractmethod
 from json.encoder import ESCAPE_DCT
-from typing import Callable, Optional
+from typing import Callable, Literal, Optional
 
 import ase.io
 import jax.numpy as jnp
@@ -21,10 +21,26 @@ class Sampler(ABC):
     def update(
         self, calcdir: os.PathLike, model_file: os.PathLike, **kwargs
     ) -> None:
+        """Function updating the sampling logic for the current
+        iteration. This in general can include file/directory creation or
+        movement, as well as changes to the logic of the sampling itself, like
+        e.g. parameters for a nested sampling run.
+
+        Args:
+            calcdir: The directory in `calchome` (see `ActiveLearningHandler`)
+                of the current iteration. This is passed here such that the
+                `Sampler` can eventually write into it.
+            collected_file: Path to a file containing parameters for a MLFF
+                model used by `Sampler`. These are usually pickle files.
+            **kwargs: Optional parameters returned from a schedule to modify
+                the sampling logic (see also `Schedule`)
+        """
         pass
 
     @abstractmethod
     def get_sampled_configs(self) -> list[Atoms]:
+        """Function must return a list of `ase.Atoms` objects which are
+        unlabelled."""
         pass
 
 
@@ -33,10 +49,28 @@ class GroundTruthEvaluator(ABC):
     def update(
         self, calcdir: os.PathLike, collected_file: os.PathLike, **kwargs
     ) -> None:
+        """Function updating the ground truth evaluation logic for the current
+        iteration. This in general can include file/directory creation or
+        movement, as well as changes to the logic of the groun truth evaluation
+        itself, like e.g. parameters for DFT.
+
+        Args:
+            calcdir: The directory in `calchome` (see `ActiveLearningHandler`)
+                of the current iteration. This is passed here such that the
+                `GroundTruthEvaluator` can eventually write into it.
+            collected_file: Path to a file containing unlabelled configurations
+                which shall be labelled.
+            **kwargs: Optional parameters returned from a schedule to modify
+                the labelling logic (see also `Schedule`)
+        """
         pass
 
     @abstractmethod
     def get_evaluated_configs(self) -> list[Atoms]:
+        """Function must return a list of `ase.Atoms` objects which are
+        labelled by a ground truth method like DFT. The miniumum requirement
+        is that a valid calculator is attached, such that
+        `get_potential_energy` and `get_forces` can be called."""
         pass
 
 
@@ -45,18 +79,40 @@ class ModelTrainer(ABC):
     def update(
         self, calcdir: os.PathLike, db_files: list[os.PathLike], **kwargs
     ) -> None:
+        """Function updating the training logic for the current iteration.
+
+        Args:
+            calcdir: The directory in `calchome` (see `ActiveLearningHandler`)
+                of the current iteration. This is passed here such that the
+                `ModelTrainer` can eventually write into it.
+            db_files: List of paths to a files containing labelled
+                configurations which shall be used for training a MLFF model.
+            **kwargs: Optional parameters returned from a schedule to modify
+                the labelling logic (see also `Schedule`)
+        """
         pass
 
     @abstractmethod
     def get_trained_model(self) -> os.PathLike:
+        """Function must return a path to an existing model file."""
         pass
 
 
 def process_progress(
-    progress,
-    num_iterations,
-    db_files,
-):
+    progress: list[dict],
+    num_iterations: int,
+    db_files: list[os.PathLike],
+) -> tuple[
+    int,  # iteration_idx
+    os.PathLike,  # collected_file
+    list[os.PathLike],  # db_files
+    os.PathLike,  # model_file
+    dict,  # progress
+]:
+    """Parses the contents of a dumped `AL_progress.json` file and returns
+    the quantities necessary for resuming a active learning loop with
+    `ActiveLearningHandler`.
+    """
     keys = range(len(progress))
     # collect all config dbs from the previous iterations because they
     # are all needed for retraining.
@@ -107,14 +163,40 @@ def process_progress(
 
 
 class Schedule(ABC):
-    """Utility class to parametrize schedules for active learning cycles."""
+    """Utility class to parametrize schedules for active learning cycles.
+    We enforce that the schedule needs to provide the same parameters
+    for each iteration (their values can change of course). This makes it
+    much easier to check and avoids potential failures.
 
-    def __init__(self, num_iterations):
+    Args:
+        num_iterations: Number of iterations that should be run with this
+            schedule.
+    """
+
+    def __init__(self, num_iterations: int):
         super().__init__()
         self.num_iterations = num_iterations
         self.check()
 
-    def visualize(self, column_width=20):
+    def visualize(self, column_width: int = 20) -> None:
+        """Visualizes the parameter that change during the defined schedule.
+        It is recommended to check this before actually starting an active
+        learning run to see whether you actually implemented what you wanted..
+
+        Args:
+            column_width: Width of the column in which parameter is printed to
+                stdout.
+
+        Example:
+            For a schedule modifying the parameters 'n_walkers', 'gpu_n_batch'
+            and 'MC_cell_P' of a nested sampling run, the output of this would
+            look like the following:
+
+            n_walkers           gpu_n_batch         MC_cell_P
+            200                 200                 3 7 11 15
+            300                 400                 2 4 6 8 10 12 14 16
+            400                 600                 2 4 6 8 10 12 14 16
+        """
         params = self.get_kwargs(0)
         header_str = ""
         for k in params.keys():
@@ -129,7 +211,9 @@ class Schedule(ABC):
                 iter_str += f"{v:<{column_width}}"
             print(iter_str)
 
-    def check(self):
+    def check(self) -> None:
+        """Checks whether at each iteration the returned parameters are the
+        same."""
         params = self.get_kwargs(0)
         for i in range(self.num_iterations):
             try:
@@ -146,7 +230,22 @@ class Schedule(ABC):
                     "iteration!"
                 )
 
-    def test(self, kwargs_consumer: Callable[[dict], None]):
+    def test(self, kwargs_consumer: Callable[[dict], None]) -> None:
+        """Eventually, `Schedule` will be used in `ActiveLearningBase` to feed
+        some additional kwargs usually into a `Sampler.update`. This function
+        can be used to test your schedule before actually running the active
+        learning loop. You need to pass a `kwargs_consumer`, which is a
+        function that can check the kwargs you pass for validity. While
+        potentially being a small additional effort to implement such a
+        `kwargs_consumer` it can easily prevent your active loop from crashing
+        during the loop.
+
+        Example:
+            If the `Sampler` instance handles a nested sampling simulation,
+            at each iteration a dictionary is updated by `Sampler.update` and
+            parsed by the nested sampling code. This parser checks the
+            parameters for validity and can be casted into a `kwargs_consumer`.
+        """
         for i in range(self.num_iterations):
             try:
                 kwargs_consumer(self.get_kwargs(i))
@@ -159,6 +258,27 @@ class Schedule(ABC):
 
     @abstractmethod
     def get_kwargs(self, iteration_idx: int) -> dict:
+        """Here you have to encode the logic of your schedule.
+
+        Example:
+            For a nested sampling active learning workflow, a simple schedule
+            could look like the following:
+
+            def get_kwargs(self, iteration_idx: int):
+                if iteration_idx == 0:
+                    kwargs = {
+                        "n_walkers": 400,
+                        "gpu_n_batch": 200,
+                        "MC_cell_P": "3 7 11 15",
+                    }
+                if iteration_idx > 0:
+                    kwargs = {
+                        "n_walkers": 400,
+                        "gpu_n_batch": 400,
+                        "MC_cell_P": "2 4 6 8 10 12 14 16",
+                    }
+                return kwargs
+        """
         pass
 
 
@@ -177,22 +297,115 @@ class ActiveLearningHandler(ABC):
 
     iteration_idx: int
 
+    """Implementation of the core functionality of an active learning loop
+    consisting of three actors: A sampler, a ground truth evaluator and a 
+    model trainer. `ActiveLearningHandler` handles the bookkeeping of created
+    files and passes required files to the corresponding actors. It offers
+    functionality to resume broken runs by caching the current progress and
+    at which point to enter/exit the cycle.
+
+    Args:
+        sampler: A `Sampler` instance for sampling new configurations.
+        evaluator: A `GroundTruthEvaluator` instance for running DFT.
+        trainer: A `ModelTrainer` instance for retraining your MLFF model.
+        calchome: The working directory for the active learning loop.
+        num_iterations: Number of active learning iterations to perform.
+        cycle_entry_point: Defines the actor where your loop starts. Can either
+            be 'sampler', 'evaluation' or 'training'
+        cycle_exit_point: Defines the actor where your loop ends. Can either
+            be 'sampler', 'evaluation' or 'training'
+        initial_model_file: An initial model file (usually .pickle) containing
+            the parameters for your MLFF model, which is required by `Sampler`.
+            This is only required if you start from scratch and enter the loop 
+            with cycle_entry_point='sampler'
+        initial_sample_file: An initial file of unlabeled configurations. This
+            is only required if you start from scratch and enter the loop with
+            cycle_entry_point='evaluator'
+        initial_db_file: An initial file of labeled configurations. This
+            is only required if you start from scratch and enter the loop with
+            cycle_entry_point='training'
+        sampler_schedule: A `Schedule` instance encoding a schedule for the 
+            sampler
+        evaluator_schedule: A `Schedule` instance encoding a schedule for the 
+            evaluator
+        trainer_schedule: A `Schedule` instance encoding a schedule for the 
+            trainer
+
+    Examples:
+        In general `ActiveLearningHandler` will create a folder structure like 
+        the following:
+
+            calchome 
+            ├── 0
+            │   ├── sampler
+            │   ├── dft
+            │   └── training
+            ├── 1
+            │   ├── sampler
+            │   ├── dft
+            │   └── training
+            ├── ...
+            ├── evaluated_configs
+            │   ├── evaluated_0.extxyz
+            │   ├── evaluated_1.extxyz
+            │   ├── ...
+            ├── sampled_configs
+            │   ├── sampled_0.extxyz
+            │   ├── sampled_1.extxyz
+            │   ├── ...
+            ├── trained_models
+            │   ├── model_0.pkl
+            │   ├── model_1.pkl
+            │   ├── ...
+            ├── AL_progress.json
+            └── al_loop.py
+
+        Here, `AL_progress.json` contains the bookkeeping. During each 
+        iteration, it updates a dictionary that contains information on the 
+        progress of the loop. Once a full loop is finished, it could look like 
+        this:
+
+        {
+            'steps': [0, 0, 0],
+            'collected_file': PATH_TO_COLLECTED,
+            'db_file': PATH_TO_DB,
+            'model_file': PATH_TO_MODEL
+        }
+
+        where 'steps' indicate which actor still needs to be run (hence its 0
+        if it was already successfully run). Hence, if e.g. only the sampler 
+        finished successfully so far, the entry for the current iteration in 
+        `AL_progress.json` would look like this:
+        
+        {
+            'steps': [0, 1, 1],
+            'collected_file': PATH_TO_COLLECTED,
+        }
+
+        This logic allows the `ActiveLearningHandler` to easily resume runs
+        that crashed during some part of the loop.
+    """
+
     def __init__(
         self,
         sampler: Sampler,
         evaluator: GroundTruthEvaluator,
         trainer: ModelTrainer,
-        calcdir: os.PathLike,
+        calchome: os.PathLike,
+        num_iterations: int = 5,
+        cycle_entry_point: Literal[
+            "sampler", "evaluation", "training"
+        ] = "sampler",
+        cycle_exit_point: Literal[
+            "sampler", "evaluation", "training"
+        ] = "sampler",
+        initial_model_file: Optional[os.PathLike] = None,
         initial_sample_file: Optional[os.PathLike] = None,
         initial_db_file: Optional[os.PathLike] = None,
-        initial_model_file: Optional[os.PathLike] = None,
         sampler_schedule: Optional[Schedule] = None,
         evaluator_schedule: Optional[Schedule] = None,
         trainer_schedule: Optional[Schedule] = None,
-        num_iterations: int = 5,
-        cycle_entry_point: str = "sampler",
-        cycle_exit_point: str = "sampler",
-    ):
+    ) -> None:
         super().__init__()
         self.sampler = sampler
         self.evaluator = evaluator
@@ -202,9 +415,9 @@ class ActiveLearningHandler(ABC):
         self.trainer_schedule = trainer_schedule
 
         self.num_iterations = num_iterations
-        self.calcdir = calcdir
+        self.calchome = calchome
 
-        self.progress_file = self.calcdir / "AL_progress.json"
+        self.progress_file = self.calchome / "AL_progress.json"
 
         self.db_files = []
         if os.path.exists(self.progress_file):
@@ -269,9 +482,9 @@ class ActiveLearningHandler(ABC):
         if self.remaining_iterations <= 0:
             raise Exception("No iterations left, increase num_iterations!")
 
-        self.sampled_configs_dir = self.calcdir / "sampled_configs"
-        self.evaluated_configs_dir = self.calcdir / "evaluated_configs"
-        self.trained_models_dir = self.calcdir / "trained_models"
+        self.sampled_configs_dir = self.calchome / "sampled_configs"
+        self.evaluated_configs_dir = self.calchome / "evaluated_configs"
+        self.trained_models_dir = self.calchome / "trained_models"
         for path in [
             self.sampled_configs_dir,
             self.evaluated_configs_dir,
@@ -296,13 +509,18 @@ class ActiveLearningHandler(ABC):
             "iterations."
         )
 
-    def update_progress_file(self):
+    def update_progress_file(self) -> None:
+        """Updates the `AL_progress.json` file."""
         with open(self.progress_file, "w") as f:
             json.dump(self.progress, f, indent=2)
 
     def sample(self, **kwargs) -> None:
         """Runs the Sampler, requiring `self.model_file` and updating
-        `self.collected_file`"""
+        `self.collected_file`
+
+        Args:
+            **kwargs: kwargs passed to the `update` function of `sampler`.
+        """
         assert self.model_file is not None
         self.sampler.update(self.current_iter_dir, self.model_file, **kwargs)
         sampled_configs = self.sampler.get_sampled_configs()
@@ -318,7 +536,11 @@ class ActiveLearningHandler(ABC):
 
     def evaluate(self, **kwargs) -> None:
         """Runs the GroundTruthEvaluator, requiring `self.model_file` and
-        updating `self.db_files`"""
+        updating `self.db_files`
+
+        Args:
+            **kwargs: kwargs passed to the `update` function of `evaluator`.
+        """
         assert self.collected_file is not None
         self.evaluator.update(
             self.current_iter_dir, self.collected_file, **kwargs
@@ -334,9 +556,13 @@ class ActiveLearningHandler(ABC):
         self.progress[self.iteration_idx]["steps"] = [0, 0, 1]
         self.update_progress_file()
 
-    def retrain(self, **kwargs):
+    def retrain(self, **kwargs) -> None:
         """Runs the ModelTrainer, requiring `self.db_files` and updating
-        `self.model_file`"""
+        `self.model_file`
+
+        Args:
+            **kwargs: kwargs passed to the `update` function of `trainer`.
+        """
         assert self.db_files
         self.trainer.update(self.current_iter_dir, self.db_files, **kwargs)
         results_model_file = self.trainer.get_trained_model()
@@ -349,8 +575,12 @@ class ActiveLearningHandler(ABC):
         self.progress[self.iteration_idx]["model_file"] = str(self.model_file)
         self.update_progress_file()
 
-    def single_iteration(self):
-        self.current_iter_dir = self.calcdir / str(self.iteration_idx)
+    def single_iteration(self) -> None:
+        """Runs a single active learning iteration. For each iteration it
+        creates a new calcdir in `calchome`. If provided, schedules are
+        applied to the individual actors.
+        """
+        self.current_iter_dir = self.calchome / str(self.iteration_idx)
         os.makedirs(self.current_iter_dir, exist_ok=True)
 
         (do_sample, do_eval, do_retrain) = self.progress[self.iteration_idx][
@@ -380,7 +610,7 @@ class ActiveLearningHandler(ABC):
 
             self.retrain()
 
-    def run(self):
+    def run(self) -> None:
         """Runs the active learning cycle. In case a crashed run is restarted,
         it only runs the remaining iterations until `num_iterations` is reached.
         """

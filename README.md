@@ -4,7 +4,7 @@
 
 ![Image description](examples/remote_handler.png)
 
-# Installation
+## 1. Installation
 If you want to set up a new python environment first, create a conda env, e.g.
 
 ```bash
@@ -16,14 +16,14 @@ Then move into the cloned repository and hit
 `pip install -e .`
 
 
-# Usage
+## 2. Usage
 
-## Getting started: configuration
+### Getting started: configuration
 There are essentially two things that need a tiny bit of configuration to let `remote_handler` work:
 - SSH authentication
 - SLURM setup
 
-### SSH authentication
+#### SSH authentication
 
 The ssh connection, which is required to use SFTP for file transfer, is managed by the `paramiko` package. To have as little additional configuration as possible required for the ssh setup, `remote_handler` parses your SSH config. To reach a remote machine like lugus, you therefore have to set up lugus as a host in your `.ssh/config` file and have key authentication enabled.
 
@@ -34,7 +34,7 @@ host lugus
     HostName lugus.theochem.tuwien.ac.at
 ```
 
-### SLURM setup
+#### SLURM setup
 In case `remote_handler` is supposed to be used for running batch jobs via the SLURM scheduler on a cluster, we have to provide some information on the specific setup of SLURM on this cluster. Currently this is achieved by compact json files, which need to be provided. For example if you want to use slurm on lugus, a file `lugus.json` would require these entries:
 
 ```json
@@ -49,7 +49,7 @@ In case `remote_handler` is supposed to be used for running batch jobs via the S
 
 This will probably undergo a few changes in the close future to make it more general for different systems. The idea at the moment is, to generate the required queuing scripts using `jinja2` templates. You may also want to specify a `REMOTE_HANDLER_SLURM_TEMPLATES` env variable, for more info see below.
 
-## Manipulating files on remote machines
+### Manipulating files on remote machines
 
 `FileSystemHandlerBase` defines an interface for manipulating files on a file system, like you are used to from manipulating files in a shell environment. Examples are 
 - `makedirs(path, exist_ok=False)`: creates a directory at `path`
@@ -94,9 +94,9 @@ local_fs.put(my_file, my_directory / "file2")
 This creates the same folder structure in your lugus home!
 
 
-## Running a task on a remote machine
+### Running a task on a remote machine
 
-### What is a task?
+#### What is a task?
 We define an interface for a task in `RemoteTask`. This is currently in progress and may change rapidly, but the idea is that we can define a task in an abstract fashion by only a few central logical constituents:
 - Setup: Does the task require some script or input data that potentially needs to be transferred to the remote machine (`allocate_data`)?
 - Execution: How is the computation executed? Do we run a batch job in slurm? Is it run locally?
@@ -105,9 +105,66 @@ We define an interface for a task in `RemoteTask`. This is currently in progress
 
 Examples coming as soon as the implementation converges to sth sensible...
 
-# How it works
+### Active learning workflows
 
-## SLURM and jinja templates
+`remote_handler` is designed for automating active learning workflows. For this purpose we provide an interface that can handle workflows of the following form, consisting of three actors (Sampler, Evaluator, Trainer):
+
+![Image description](examples/al_loop.png)
+
+
+#### Basic setup
+Essentially, three things must be supplied by the user. The logic of a sampling algorithm needs to be encapsulated into a `Sampler` object
+
+```python
+class Sampler(ABC):
+    @abstractmethod
+    def update(
+        self, calcdir: os.PathLike, model_file: os.PathLike, **kwargs
+    ) -> None:
+        pass
+    @abstractmethod
+    def get_sampled_configs(self) -> list[Atoms]:
+        pass
+```
+
+The logic of the ground truth evaluator (like DFT) need to be encapsulated into a `GroundTruthEvaluator` object
+
+```python
+class GroundTruthEvaluator(ABC):
+    @abstractmethod
+    def update(
+        self, calcdir: os.PathLike, collected_file: os.PathLike, **kwargs
+    ) -> None:
+        pass
+    @abstractmethod
+    def get_evaluated_configs(self) -> list[Atoms]:
+        pass
+```
+
+and the logic of the MLFF training encapsulated into a `ModelTrainer` object. 
+
+```python
+class ModelTrainer(ABC):
+    @abstractmethod
+    def update(
+        self, calcdir: os.PathLike, db_files: list[os.PathLike], **kwargs
+    ) -> None:
+        pass
+    @abstractmethod
+    def get_trained_model(self) -> os.PathLike:
+        pass
+```
+Everything else is handled by the `ActiveLearningHandler` class. 
+
+#### Schedules
+Optionally, the user can also supply schedules for each actor to  adjust parameters throughout the active learning loop. Currently, only static schedules (completely fixed before the loop starts) are supported since they are much more robust than dynamically changing schedules.
+
+#### Active learning x remote_handler
+In principle, the ActiveLearningHandler does not require the individual actors to be run on remote machine. The logic how they run is completely abstracted and left to the user. However, in combination with the capabilities of `remote_handler` we can construct complex automated workflows distributed on different remote machines. E.g. `dft_runner.py` already provides a basic implementation to run DFT simulations on a remote machine, which could be used as a potential backbone for your `GroundTruthEvaluator`. An example for a working active learning workflow coded in this fashion, can be found in `examples/nested_sampling_AL`. The code contains some extra dependencies, so it can not be run directly, but it can serve as a template for your workflow!
+
+## 3. How it works
+
+### SLURM and jinja templates
 We are automatically generating the queueing scripts for the desired remote system using jinja templates. This allows for piecing together the queuing scripts in a modular fashion. For example, for lugus a minimal template for the header could look like (see also `src/remote_handler/templates/lugus.sh.j2`):
 
 ```jinja
@@ -166,7 +223,7 @@ export REMOTE_HANDLER_SLURM_TEMPLATES=/path/to/your/templates
 
 
 
-# Development
+## Development
 In order to use the development features, be sure you have installed the dev version.
 
 ```bash
@@ -175,7 +232,7 @@ In order to use the development features, be sure you have installed the dev ver
 
 If you want to contribute to this repository, please adhere to the following rules. 
 
-## Testing
+### Testing
 Write proper tests for everything you implement. 
 
 Run all tests via
@@ -188,7 +245,7 @@ Run a specific test with additional logging and stdout
 pytest -k test_SingleScriptTask -s --log-cli-level info
 ```
 
-## pre-commit hooks
+### pre-commit hooks
 Only push commits with pre-commit hooks enabled, to keep formatting as clean as possible. In the root directory use:
 
 ```bash
@@ -198,7 +255,7 @@ pre-commit install
 which should install the hooks for you.
 
 
-# TODOs
+## TODOs
 
 - Refine jinja templating procedure for slurm batch scripts
 - Refine which parameters should be provided by config files `remote_machine.json`

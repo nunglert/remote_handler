@@ -40,7 +40,6 @@ class SlurmHandlerBase(ABC):
             `slurm_config`.
         loop_time: The time interval which is used to check whether the job is
             completed.
-
     """
 
     def __init__(
