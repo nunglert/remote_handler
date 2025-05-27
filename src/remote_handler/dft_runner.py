@@ -6,8 +6,8 @@ from pathlib import Path
 from re import T
 from typing import Any, Optional, Union
 
-from remote_handler import cluster_handler, file_handler, tasks
 from remote_handler.atoms_handler import RemoteAtomsHandler
+from remote_handler.core import cluster_handler, file_handler, tasks
 
 logger = logging.getLogger(__name__)
 
@@ -25,12 +25,13 @@ class VASPHandler(RemoteAtomsHandler):
         start: Optional[int] = None,
         end: Optional[int] = None,
         local_savepath: Optional[os.PathLike] = None,
-        logfile: str = "opt.log",
+        logfile: str = "dft.log",
         collect_only: bool = False,
-        tag: str = "opt",
+        tag: str = "dft",
         python_script_path: str = "/home/nico.unglert/code/remote_handler/src/remote_handler/scripts/dft_singlepoint.py",
         stub: bool = False,
         launcher: str = "mpiexec -np",
+        slurm_header_add: str = "#SBATCH --time=0-02:00:00\nmodule purge\nmodule load vasp/6.4.2_intel\nsource /opt/intel/oneapi/setvars.sh --force\nexport VASP_PP_PATH=/home/nunglert/cellar/vasp/paw",
         vasp_binary: str = "vasp_std",
         n_processors: int = 8,
         incar_kwargs: dict = {
@@ -52,12 +53,11 @@ class VASPHandler(RemoteAtomsHandler):
             "kspacing": 0.3,
         },
     ):
-        slurm_header_add = """#SBATCH --time=0-02:00:00
-module load vasp/6.4.2
-# export ASE_VASP_VDW=/opt/ohpc/pub/vasp/vdW/
-# export VASP_PP_PATH=/opt/ohpc/pub/dft/vasp.6.4.2/paw/
-export VASP_PP_PATH=/home/nunglert/cellar/vasp/paw
-"""
+        #         slurm_header_add = """#SBATCH --time=0-02:00:00
+        # module load vasp/6.4.2_intel
+        # source /opt/intel/oneapi/setvars.sh --force
+        # export VASP_PP_PATH=/home/nunglert/cellar/vasp/paw
+        # """
         super().__init__(
             traj_files,
             remote_fs,

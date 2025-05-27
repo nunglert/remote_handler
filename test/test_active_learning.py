@@ -33,7 +33,8 @@ dummy_configs = get_dummy_configs()
 
 
 class SamplerMock(Sampler):
-    def update(self, calcdir, x):
+    def update(self, calcdir, model_file):
+        assert os.path.exists(model_file)
         os.makedirs(Path(calcdir) / "sampler_dir")
 
     def get_sampled_configs(self):
@@ -41,7 +42,8 @@ class SamplerMock(Sampler):
 
 
 class EvaluatorMock(GroundTruthEvaluator):
-    def update(self, calcdir, x):
+    def update(self, calcdir, collected_file):
+        assert os.path.exists(collected_file)
         os.makedirs(Path(calcdir) / "evaluator_dir")
 
     def get_evaluated_configs(self):
@@ -54,14 +56,19 @@ class TrainerMock(ModelTrainer):
         with open(self.model_file, "w") as f:
             f.write("keklelsos")
 
-    def update(self, calcdir, x):
+    def update(self, calcdir, db_files):
+        for file in db_files:
+            assert os.path.exists(file)
         os.makedirs(Path(calcdir) / "trainer_dir")
 
     def get_trained_model(self):
         return self.model_file
 
 
-def test_ActiveLearningHandler(data_dir):
+@pytest.mark.parametrize(
+    "cycle_entry_point", ["sampler", "evaluation", "training"]
+)
+def test_ActiveLearningHandler(data_dir, cycle_entry_point):
     asset_dir = data_dir / "active_learning/handler"
     temp_dir = data_dir / "temp/active_learning/handler"
 
@@ -83,7 +90,11 @@ def test_ActiveLearningHandler(data_dir):
         f.write("keklelsos")
 
     initial_db_file = temp_dir / "initial_db.extxyz"
-    with open(initial_model_file, "w") as f:
+    with open(initial_db_file, "w") as f:
+        f.write("keklelsos")
+
+    initial_sample_file = temp_dir / "initial_sample.extxyz"
+    with open(initial_sample_file, "w") as f:
         f.write("keklelsos")
 
     al_handler = ActiveLearningHandler(
@@ -93,7 +104,71 @@ def test_ActiveLearningHandler(data_dir):
         calcdir=local_dir,
         initial_model_file=initial_model_file,
         initial_db_file=initial_db_file,
+        initial_sample_file=initial_sample_file,
         num_iterations=5,
+        cycle_entry_point=cycle_entry_point,
+    )
+
+    al_handler.run()
+
+
+@pytest.mark.parametrize(
+    "cycle_exit_point", ["sampler", "evaluation", "training"]
+)
+def test_restart_ActiveLearningHandler(data_dir, cycle_exit_point):
+    asset_dir = data_dir / "active_learning/handler_restart"
+    temp_dir = data_dir / "temp/active_learning/handler_restart"
+
+    local_dir = temp_dir / "local_dir"
+    local_results = temp_dir / "results"
+
+    for path in [local_dir, local_results]:
+        if path is not None:
+            if os.path.exists(path):
+                shutil.rmtree(path)
+    os.makedirs(local_dir, exist_ok=False)
+
+    sampler = SamplerMock()
+    evaluator = EvaluatorMock()
+    trainer = TrainerMock(temp_dir)
+
+    initial_model_file = temp_dir / "model.pkl"
+    with open(initial_model_file, "w") as f:
+        f.write("keklelsos")
+
+    initial_db_file = temp_dir / "initial_db.extxyz"
+    with open(initial_db_file, "w") as f:
+        f.write("keklelsos")
+
+    initial_sample_file = temp_dir / "initial_sample.extxyz"
+    with open(initial_sample_file, "w") as f:
+        f.write("keklelsos")
+
+    al_handler = ActiveLearningHandler(
+        sampler,
+        evaluator,
+        trainer,
+        calcdir=local_dir,
+        initial_model_file=initial_model_file,
+        initial_db_file=initial_db_file,
+        initial_sample_file=initial_sample_file,
+        num_iterations=5,
+        cycle_exit_point=cycle_exit_point,
+    )
+
+    al_handler.run()
+
+    al_handler = ActiveLearningHandler(
+        sampler,
+        evaluator,
+        trainer,
+        calcdir=local_dir,
+        initial_model_file=initial_model_file,
+        initial_db_file=initial_db_file,
+        initial_sample_file=initial_sample_file,
+        num_iterations=10,
+        cycle_entry_point="sampler",  # This will be ignored!
+        cycle_exit_point="sampler",
     )
 
     al_handler.run()

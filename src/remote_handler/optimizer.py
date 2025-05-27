@@ -5,8 +5,8 @@ from pathlib import Path
 from re import T
 from typing import Any, Optional, Union
 
-from remote_handler import cluster_handler, file_handler, tasks
 from remote_handler.atoms_handler import RemoteAtomsHandler
+from remote_handler.core import cluster_handler, file_handler, tasks
 
 
 class RemoteOptimizationHandler(RemoteAtomsHandler):

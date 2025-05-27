@@ -8,7 +8,8 @@ import sys
 from multiprocessing import process
 from pathlib import Path
 
-from remote_handler import file_handler, optimizer, utils
+from remote_handler import optimizer
+from remote_handler.core import file_handler, utils
 
 # from jaxnest import file_utils
 # from jaxnest.file_utils import grep, secure_path

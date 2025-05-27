@@ -47,12 +47,13 @@ class RemoteTask(ABC):
 
     def __init__(
         self,
-        logfile: os.PathLike,
+        logfile: str,
         savepath: os.PathLike,
         remote_fs: file_handler.FileSystemHandlerBase,
         collect_only: bool = False,
     ):
-        self.logger = SimpleLogger(logfile)
+        assert not "/" in str(logfile), "logfile should only be filename!"
+
         self.local_fs = LocalFileSystem()
         self.remote_fs = remote_fs
 
@@ -105,6 +106,8 @@ class RemoteTask(ABC):
             )
             self.savepath = self.remote_fs.create_tempdir()
             logger.info(f"{self.savepath=}")
+
+        self.logger = SimpleLogger(Path(self.savepath) / logfile)
 
         super().__init__()
 
@@ -218,7 +221,7 @@ class SingleScriptTask(RemoteTask):
 
         # Need to init base classs first, since it handles savepath
         super().__init__(
-            logfile=Path(remote_savepath) / logfile,
+            logfile=logfile,
             savepath=remote_savepath,
             collect_only=collect_only,
             remote_fs=remote_fs,
@@ -244,8 +247,8 @@ class SingleScriptTask(RemoteTask):
             job_type_template=job_type_template,
         )
 
-        self.logger.print(f"SingleScriptTask")
-        self.logger.print(f"calcdir: {str(self.calcdir)}")
+        logger.info(f"SingleScriptTask")
+        logger.info(f"calcdir: {str(self.calcdir)}")
 
     def copy_file(self, local_path):
         moved_path = self.calcdir / os.path.split(local_path)[-1]
@@ -384,7 +387,7 @@ class ArrayScriptTask(RemoteTask):
 
         # Need to init base class first, since it handles savepath
         super().__init__(
-            logfile=Path(remote_savepath) / logfile,
+            logfile=logfile,
             savepath=remote_savepath,
             collect_only=collect_only,
             remote_fs=remote_fs,
@@ -414,8 +417,8 @@ class ArrayScriptTask(RemoteTask):
 
         self.calcdir = self.slurm_handler.calcdir
 
-        self.logger.print(f"ArrayScriptTask")
-        self.logger.print(f"rootpath: {str(self.rootpath)}")
+        logger.info(f"ArrayScriptTask")
+        logger.info(f"rootpath: {str(self.rootpath)}")
 
     def copy_file(self, local_path):
         moved_path = self.rootpath / os.path.split(local_path)[-1]

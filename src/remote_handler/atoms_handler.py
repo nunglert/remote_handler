@@ -16,7 +16,7 @@ import ase.io
 import numpy as np
 from ase import Atoms
 
-from remote_handler import cluster_handler, file_handler, tasks
+from remote_handler.core import cluster_handler, file_handler, tasks
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +160,7 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
             slurm_header_add=slurm_header_add,
         )
 
-        self.logger = tasks.SimpleLogger(logfile)
+        # self.logger = tasks.SimpleLogger(logfile)
         self.loop_time = loop_time
         self.traj_files = traj_files
         self.shard_size = shard_size
@@ -207,10 +207,10 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
         self.num_array_tasks = math.ceil(
             self.num_configs_total / self.shard_size
         )
-        self.logger.print(
+        logger.info(
             f"Collected {self.num_configs_total} configs for processing"
         )
-        self.logger.print(f"Processing in {self.num_array_tasks} batches")
+        logger.info(f"Processing in {self.num_array_tasks} batches")
         assert (
             self.num_array_tasks <= 1000
         ), "Max size for slurm array jobs is 1000!"
@@ -287,18 +287,18 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
 
         all_atoms_sets = self.regroup(all_atoms)
         self.redistribute(all_atoms_sets)
-        self.logger.print("Successfully harvested all processed configs!")
+        logger.info("Successfully harvested all processed configs!")
 
     def recompute_failed(self):
         """"""
         assert (
             self.collect_only
         ), "Recompute only makes sense in collect_only mode"
-        self.logger.print("... Trying to recompute failed shards")
+        logger.info("... Trying to recompute failed shards")
         all_atoms, failed_indices = self.collect()
-        self.logger.print(f"found {len(failed_indices)} broken shards")
-        self.logger.print("Broken shard indices:")
-        self.logger.print(failed_indices)
+        logger.info(f"found {len(failed_indices)} broken shards")
+        logger.info("Broken shard indices:")
+        logger.info(failed_indices)
 
         if failed_indices:
             self.size = len(failed_indices)
