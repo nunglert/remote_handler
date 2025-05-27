@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pytest_lazyfixture import lazy_fixture
 
-from remote_handler import file_handler, tasks
+from remote_handler.core import file_handler, tasks
 
 SCRIPT_STR = """
 import sys

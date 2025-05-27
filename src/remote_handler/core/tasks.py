@@ -9,14 +9,14 @@ from pathlib import Path
 from typing import Any, Optional, Union
 from xml.etree.ElementPath import prepare_star
 
-from remote_handler import cluster_handler, file_handler, slurm_utils
-from remote_handler.file_handler import (
+from remote_handler.core import cluster_handler, file_handler, slurm_utils
+from remote_handler.core.file_handler import (
     FileSystemHandlerBase,
     LocalFileSystem,
     RemoteFileSystem,
     tag_path,
 )
-from remote_handler.utils import SimpleLogger
+from remote_handler.core.utils import SimpleLogger
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class RemoteTask(ABC):
     Args:
         logfile: A log file on the host machine where output is printed
         savepath: The path on the remote system where computations should be
-            performed
+            performed. Will try to use temporary dir if None.
         remote_fs: A FileSystemHandlerBase derived object.
         collect_only: By default, RemoteTask creates a new tagged savepath if
             the provided savepath already exists. If you want RemoteTask act on
@@ -47,12 +47,13 @@ class RemoteTask(ABC):
 
     def __init__(
         self,
-        logfile: os.PathLike,
+        logfile: str,
         savepath: os.PathLike,
         remote_fs: file_handler.FileSystemHandlerBase,
         collect_only: bool = False,
     ):
-        self.logger = SimpleLogger(logfile)
+        assert not "/" in str(logfile), "logfile should only be filename!"
+
         self.local_fs = LocalFileSystem()
         self.remote_fs = remote_fs
 
@@ -105,6 +106,8 @@ class RemoteTask(ABC):
             )
             self.savepath = self.remote_fs.create_tempdir()
             logger.info(f"{self.savepath=}")
+
+        self.logger = SimpleLogger(Path(self.savepath) / logfile)
 
         super().__init__()
 
@@ -181,7 +184,7 @@ class SingleScriptTask(RemoteTask):
             initialized with valid slurm_config.
         logfile: Path to the logfile of the task.
         remote_savepath: Path on remote machine, where computation will be
-            performed
+            performed. Will try to use temporary dir if None
         collect_only: If True, results may be overwritten if the
             `remote_savepath` already exists. If False a new savepath will be
             created with a tag to prevent overwriting.
@@ -207,6 +210,7 @@ class SingleScriptTask(RemoteTask):
         jobname: str = "job",
         n_processors: int = 2,
         jobfile_name: str = "run_slurm.sh",
+        job_type_template: os.PathLike = "body_single.sh.j2",
     ):
         assert (
             remote_fs.slurm_config is not None
@@ -240,11 +244,11 @@ class SingleScriptTask(RemoteTask):
             remote_fs=remote_fs,
             jobfile_name=jobfile_name,
             loop_time=loop_time,
-            job_type_template="body_single.sh.j2",
+            job_type_template=job_type_template,
         )
 
-        self.logger.print(f"SingleScriptTask")
-        self.logger.print(f"calcdir: {str(self.calcdir)}")
+        logger.info(f"SingleScriptTask")
+        logger.info(f"calcdir: {str(self.calcdir)}")
 
     def copy_file(self, local_path):
         moved_path = self.calcdir / os.path.split(local_path)[-1]
@@ -252,7 +256,11 @@ class SingleScriptTask(RemoteTask):
         return moved_path
 
     def allocate_data(self):
-        self.script_file_remote = self.copy_file(self.script_file)
+        if self.script_file is not None:
+            self.script_file_remote = self.copy_file(self.script_file)
+        else:
+            self.script_file_remote = None
+
         self.input_file_remote = self.copy_file(self.input_file)
         self.slurm_handler.write_jobfile(
             self.input_file_remote, self.script_file_remote
@@ -267,6 +275,11 @@ class SingleScriptTask(RemoteTask):
 
     def finish_check(self):
         return self.remote_fs.exists(self.calcdir / "is_finished.info")
+
+    def run(self):
+        self.allocate_data()
+        self.submit()
+        self.collect_results()
 
 
 @dataclass
@@ -360,6 +373,7 @@ class ArrayScriptTask(RemoteTask):
         jobname: str = "job",
         n_processors: int = 2,
         jobfile_name: str = "run_slurm.sh",
+        slurm_header_add: str = "",
     ):
         if remote_fs.slurm_config is None:
             raise Exception("remote_fs needs slurm_config!")
@@ -393,7 +407,7 @@ class ArrayScriptTask(RemoteTask):
             conda_env=remote_fs.slurm_config["conda_env"],
             n_processors=n_processors,
             map_indices=None,
-            slurm_header_add="",
+            slurm_header_add=slurm_header_add,
             remote_fs=remote_fs,
             jobfile_name=jobfile_name,
             loop_time=loop_time,
@@ -403,8 +417,8 @@ class ArrayScriptTask(RemoteTask):
 
         self.calcdir = self.slurm_handler.calcdir
 
-        self.logger.print(f"ArrayScriptTask")
-        self.logger.print(f"rootpath: {str(self.rootpath)}")
+        logger.info(f"ArrayScriptTask")
+        logger.info(f"rootpath: {str(self.rootpath)}")
 
     def copy_file(self, local_path):
         moved_path = self.rootpath / os.path.split(local_path)[-1]
@@ -415,7 +429,9 @@ class ArrayScriptTask(RemoteTask):
         assert (
             self.python_script_file is not None
         ), "Need self.python_script_file"
-        assert os.path.exists(self.python_script_file), "Did not find python script!"
+        assert os.path.exists(
+            self.python_script_file
+        ), "Did not find python script!"
         assert (
             len(self.individual_ressources) > 0
         ), "Specify some inputs for your script!"

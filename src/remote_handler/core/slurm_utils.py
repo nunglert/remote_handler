@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import subprocess
+from typing import Optional
 
 import numpy as np
 from jinja2 import Environment, FileSystemLoader
@@ -10,11 +11,12 @@ from remote_handler import DEFAULT_TEMPLATE_DIR
 
 logger = logging.getLogger(__name__)
 
-CUSTOM_TEMPLATE_DIRS = os.environ.get("REMOTE_HANDLER_SLURM_TEMPLATES")
-TEMPLATE_DIRS = [DEFAULT_TEMPLATE_DIR]
-if CUSTOM_TEMPLATE_DIRS is not None:
-    for template_path in CUSTOM_TEMPLATE_DIRS:
-        TEMPLATE_DIRS.append(template_path)
+CUSTOM_TEMPLATE_DIR = os.environ.get("REMOTE_HANDLER_SLURM_TEMPLATES")
+TEMPLATE_DIRS = []
+if CUSTOM_TEMPLATE_DIR is not None:
+    TEMPLATE_DIRS.append(CUSTOM_TEMPLATE_DIR)
+    # for template_path in CUSTOM_TEMPLATE_DIR:
+TEMPLATE_DIRS.append(DEFAULT_TEMPLATE_DIR)
 
 
 def submit_job(script_path, output_path, ssh_command=None, cwd=None):
@@ -41,13 +43,13 @@ def submit_job(script_path, output_path, ssh_command=None, cwd=None):
 
 
 def submit_job_array(
-    script_path,
-    output_path,
-    num_array_tasks,
-    num_parallel=10,
-    ssh_command=None,
-    cwd=None,
-):
+    script_path: os.PathLike,
+    output_path: os.PathLike,
+    num_array_tasks: int,
+    num_parallel: int = 10,
+    ssh_command: Optional[str] = None,
+    cwd: Optional[os.PathLike] = None,
+) -> str:
     command = ""
     if cwd is not None:
         command += f"cd {cwd}; "
@@ -129,6 +131,8 @@ def get_array_slurm_str(
     slurm_header_add="",
     per_task=1,
 ):
+    """The directories contained in TEMPLATE_DIRS will be scanned in order
+    until the first succesful hit of a `header_template` file."""
     if map_indices is None:
         map_indices = np.arange(num_array_tasks)
 

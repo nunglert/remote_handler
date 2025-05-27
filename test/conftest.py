@@ -20,11 +20,14 @@ from pytest_lazyfixture import lazy_fixture
 # (e.g. cp datalab.json remote.json)
 if os.environ.get("REMOTE_HANDLER_CONFIG_DIR") is None:
     # os.environ["REMOTE_HANDLER_CONFIG_DIR"] = "/home/nico.unglert/code/jaxnest_dev/experiments/remote_handler/examples/config_files"
+    raise Exception(
+        "Can't run tests without REMOTE_HANDLER_CONFIG_DIR environment variable set"
+    )
     os.environ[
         "REMOTE_HANDLER_CONFIG_DIR"
     ] = "/home/nunglert/code/remote_handler/experiments/config_files"
 
-from remote_handler import file_handler
+from remote_handler.core import file_handler
 
 # def pytest_collection_modifyitems(config, items):
 #     if config.getoption("-m"):

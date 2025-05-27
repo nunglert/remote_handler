@@ -9,7 +9,7 @@ ulimit -s unlimited
 
 pwd; hostname; date
 
-source /opt/ohpc/pub/anaconda3/etc/profile.d/conda.sh
+source ~/miniconda3/etc/profile.d/conda.sh 
 conda activate {{ conda_env }}
 
 {% include job_type_template %}
