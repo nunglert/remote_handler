@@ -522,6 +522,7 @@ class ActiveLearningHandler(ABC):
             **kwargs: kwargs passed to the `update` function of `sampler`.
         """
         assert self.model_file is not None
+        logger.info("SAMPLING...")
         self.sampler.update(self.current_iter_dir, self.model_file, **kwargs)
         sampled_configs = self.sampler.get_sampled_configs()
         self.collected_file = (
@@ -542,6 +543,7 @@ class ActiveLearningHandler(ABC):
             **kwargs: kwargs passed to the `update` function of `evaluator`.
         """
         assert self.collected_file is not None
+        logger.info("EVALUATING GROUND TRUTH...")
         self.evaluator.update(
             self.current_iter_dir, self.collected_file, **kwargs
         )
@@ -564,6 +566,7 @@ class ActiveLearningHandler(ABC):
             **kwargs: kwargs passed to the `update` function of `trainer`.
         """
         assert self.db_files
+        logger.info("RETRAINING MODEL...")
         self.trainer.update(self.current_iter_dir, self.db_files, **kwargs)
         results_model_file = self.trainer.get_trained_model()
         self.model_file = (

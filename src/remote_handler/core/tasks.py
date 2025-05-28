@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any, Optional, Union
 from xml.etree.ElementPath import prepare_star
 
-from remote_handler.core import cluster_handler, file_handler, slurm_utils
+from remote_handler.core import (
+    cluster_handler,
+    file_handler,
+    file_utils,
+    slurm_utils,
+)
 from remote_handler.core.file_handler import (
     FileSystemHandlerBase,
     LocalFileSystem,
@@ -271,6 +276,9 @@ class SingleScriptTask(RemoteTask):
         self.slurm_handler.wait_until_finished()
 
     def collect_results(self):
+        file_utils.secure_declare_path(
+            self.local_savepath, move=True, is_directory=True
+        )
         self.remote_fs.get_dir(self.calcdir, self.local_savepath)
 
     def finish_check(self):
@@ -465,6 +473,9 @@ class ArrayScriptTask(RemoteTask):
         self.slurm_handler.wait_until_finished()
 
     def collect_results(self):
+        file_utils.secure_declare_path(
+            self.local_savepath, move=True, is_directory=True
+        )
         self.remote_fs.get_dir(self.rootpath, self.local_savepath)
 
     def finish_check(self):
