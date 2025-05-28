@@ -33,8 +33,8 @@ dummy_configs = get_dummy_configs()
 
 
 class SamplerMock(Sampler):
-    def update(self, calcdir, model_file):
-        assert os.path.exists(model_file)
+    def update(self, calcdir, model_file, **kwargs):
+        assert os.path.exists(model_file.absolute())
         os.makedirs(Path(calcdir) / "sampler_dir")
 
     def get_sampled_configs(self):
@@ -42,8 +42,8 @@ class SamplerMock(Sampler):
 
 
 class EvaluatorMock(GroundTruthEvaluator):
-    def update(self, calcdir, collected_file):
-        assert os.path.exists(collected_file)
+    def update(self, calcdir, collected_file, **kwargs):
+        assert os.path.exists(collected_file.absolute())
         os.makedirs(Path(calcdir) / "evaluator_dir")
 
     def get_evaluated_configs(self):
@@ -56,9 +56,9 @@ class TrainerMock(ModelTrainer):
         with open(self.model_file, "w") as f:
             f.write("keklelsos")
 
-    def update(self, calcdir, db_files):
+    def update(self, calcdir, db_files, **kwargs):
         for file in db_files:
-            assert os.path.exists(file)
+            assert os.path.exists(file.absolute())
         os.makedirs(Path(calcdir) / "trainer_dir")
 
     def get_trained_model(self):
@@ -85,15 +85,15 @@ def test_ActiveLearningHandler(data_dir, cycle_entry_point):
     evaluator = EvaluatorMock()
     trainer = TrainerMock(temp_dir)
 
-    initial_model_file = temp_dir / "model.pkl"
+    initial_model_file = local_dir / "model.pkl"
     with open(initial_model_file, "w") as f:
         f.write("keklelsos")
 
-    initial_db_file = temp_dir / "initial_db.extxyz"
+    initial_db_file = local_dir / "initial_db.extxyz"
     with open(initial_db_file, "w") as f:
         f.write("keklelsos")
 
-    initial_sample_file = temp_dir / "initial_sample.extxyz"
+    initial_sample_file = local_dir / "initial_sample.extxyz"
     with open(initial_sample_file, "w") as f:
         f.write("keklelsos")
 
@@ -140,7 +140,7 @@ def test_restart_ActiveLearningHandler(data_dir, cycle_exit_point):
     with open(initial_db_file, "w") as f:
         f.write("keklelsos")
 
-    initial_sample_file = temp_dir / "initial_sample.extxyz"
+    initial_sample_file = local_dir / "initial_sample.extxyz"
     with open(initial_sample_file, "w") as f:
         f.write("keklelsos")
 

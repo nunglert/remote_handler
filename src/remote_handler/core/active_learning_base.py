@@ -5,6 +5,7 @@ import shutil
 import sys
 from abc import ABC, abstractmethod
 from json.encoder import ESCAPE_DCT
+from pathlib import Path
 from typing import Callable, Literal, Optional
 
 import ase.io
@@ -101,12 +102,13 @@ class ModelTrainer(ABC):
 def process_progress(
     progress: list[dict],
     num_iterations: int,
-    db_files: list[os.PathLike],
+    # db_files: list[os.PathLike],
+    homepath: Path,
 ) -> tuple[
     int,  # iteration_idx
-    os.PathLike,  # collected_file
-    list[os.PathLike],  # db_files
-    os.PathLike,  # model_file
+    Path,  # collected_file
+    list[Path],  # db_files
+    Path,  # model_file
     dict,  # progress
 ]:
     """Parses the contents of a dumped `AL_progress.json` file and returns
@@ -122,6 +124,7 @@ def process_progress(
     # pickle_file = db_files[0]
     model_file = None
     collected_file = None
+    db_files = []
     if len(keys) > 1:
         for key in keys[:-1]:
             db_file = progress[key].get("db_file")
@@ -152,7 +155,7 @@ def process_progress(
             # last loaded iteration is complete, proceed with next iter
             iteration_idx = idx + 1
             collected_file = None
-            sampler_todo, evaluation_todo, training_todo = steps
+            # sampler_todo, evaluation_todo, training_todo = steps
             db_file = progress[last_iteration_key].get("db_file")
             if db_file is not None:
                 db_files.append(db_file)
@@ -293,7 +296,7 @@ class ActiveLearningHandler(ABC):
 
     model_file: os.PathLike
     collected_file: os.PathLike
-    db_files: list[os.PathLike]
+    db_files: list[Path]
 
     iteration_idx: int
 
@@ -419,7 +422,8 @@ class ActiveLearningHandler(ABC):
 
         self.progress_file = self.calchome / "AL_progress.json"
 
-        self.db_files = []
+        self.get_rel = lambda x: Path(x).relative_to(self.calchome)
+
         if os.path.exists(self.progress_file):
             logger.info("Continuing crashed run...")
             with open(self.progress_file, "r") as f:
@@ -432,7 +436,7 @@ class ActiveLearningHandler(ABC):
                 self.model_file,
                 self.progress,
             ) = process_progress(
-                self.progress, self.num_iterations, self.db_files
+                self.progress, self.num_iterations, self.calchome
             )
 
             steps = self.progress[self.iteration_idx]["steps"]
@@ -452,22 +456,28 @@ class ActiveLearningHandler(ABC):
                 f"Starting from scratch. Entry at {cycle_entry_point}..."
             )
 
+            self.db_files = []
             self.progress = []
             self.iteration_idx = 0
 
             if cycle_entry_point == "sampler":
                 assert initial_model_file is not None
-                self.model_file = initial_model_file
+                initial_model_file = self.move_file_to_home(initial_model_file)
+                self.model_file = self.get_rel(initial_model_file)
                 self.progress.append({"steps": [1, 1, 1]})
 
             elif cycle_entry_point == "evaluation":
                 assert initial_sample_file is not None
-                self.collected_file = initial_sample_file
+                initial_sample_file = self.move_file_to_home(
+                    initial_sample_file
+                )
+                self.collected_file = self.get_rel(initial_sample_file)
                 self.progress.append({"steps": [0, 1, 1]})
 
             elif cycle_entry_point == "training":
                 assert initial_db_file is not None
-                self.db_files.append(initial_db_file)
+                initial_db_file = self.move_file_to_home(initial_db_file)
+                self.db_files.append(self.get_rel(initial_db_file))
                 self.progress.append({"steps": [0, 0, 1]})
 
             else:
@@ -509,6 +519,13 @@ class ActiveLearningHandler(ABC):
             "iterations."
         )
 
+    def move_file_to_home(self, file):
+        if not Path(file).is_relative_to(self.calchome):
+            file_home = self.calchome / os.path.split(file)[1]
+            shutil.copy(file, file_home)
+            file = file_home
+        return file
+
     def update_progress_file(self) -> None:
         """Updates the `AL_progress.json` file."""
         with open(self.progress_file, "w") as f:
@@ -523,12 +540,14 @@ class ActiveLearningHandler(ABC):
         """
         assert self.model_file is not None
         logger.info("SAMPLING...")
-        self.sampler.update(self.current_iter_dir, self.model_file, **kwargs)
+        self.sampler.update(
+            self.current_iter_dir, self.calchome / self.model_file, **kwargs
+        )
         sampled_configs = self.sampler.get_sampled_configs()
-        self.collected_file = (
+        self.collected_file = self.get_rel(
             self.sampled_configs_dir / f"samples_{self.iteration_idx}.extxyz"
         )
-        ase.io.write(self.collected_file, sampled_configs)
+        ase.io.write(self.calchome / self.collected_file, sampled_configs)
         self.progress[self.iteration_idx]["steps"] = [0, 1, 1]
         self.progress[self.iteration_idx]["collected_file"] = str(
             self.collected_file
@@ -545,14 +564,16 @@ class ActiveLearningHandler(ABC):
         assert self.collected_file is not None
         logger.info("EVALUATING GROUND TRUTH...")
         self.evaluator.update(
-            self.current_iter_dir, self.collected_file, **kwargs
+            self.current_iter_dir,
+            self.calchome / self.collected_file,
+            **kwargs,
         )
         evaluated_configs = self.evaluator.get_evaluated_configs()
-        evaluated_file = (
+        evaluated_file = self.get_rel(
             self.evaluated_configs_dir
             / f"evaluated_{self.iteration_idx}.extxyz"
         )
-        ase.io.write(evaluated_file, evaluated_configs)
+        ase.io.write(self.calchome / evaluated_file, evaluated_configs)
         self.db_files.append(evaluated_file)
         self.progress[self.iteration_idx]["db_file"] = str(evaluated_file)
         self.progress[self.iteration_idx]["steps"] = [0, 0, 1]
@@ -567,12 +588,16 @@ class ActiveLearningHandler(ABC):
         """
         assert self.db_files
         logger.info("RETRAINING MODEL...")
-        self.trainer.update(self.current_iter_dir, self.db_files, **kwargs)
+        self.trainer.update(
+            self.current_iter_dir,
+            [self.calchome / db_file for db_file in self.db_files],
+            **kwargs,
+        )
         results_model_file = self.trainer.get_trained_model()
-        self.model_file = (
+        self.model_file = self.get_rel(
             self.trained_models_dir / f"model_{self.iteration_idx}.pkl"
         )
-        shutil.copy(results_model_file, self.model_file)
+        shutil.copy(results_model_file, self.calchome / self.model_file)
 
         self.progress[self.iteration_idx]["steps"] = [0, 0, 0]
         self.progress[self.iteration_idx]["model_file"] = str(self.model_file)

@@ -13,6 +13,21 @@ from pytest_lazyfixture import lazy_fixture
 from remote_handler import atoms_handler, dft_runner
 
 
+@pytest.fixture()
+def dummy_trajectory():
+    np.random.seed(0)
+    n_configs = 2
+    at0 = Atoms("Si3", cell=np.eye(3) * 7, pbc=True)
+    ats = []
+    for idx in range(n_configs):
+        at = at0.copy()
+        at.set_positions(np.random.random(size=(3, 3)) * 7)
+        at.set_cell(at.cell[...] * np.random.random(size=(3, 3)))
+        at.info["shard_idx"] = idx
+        ats.append(at)
+    return ats
+
+
 def at_to_hash(at, length=8):
     arrays = [at.positions, at.cell]
     sha = hashlib.sha256()
@@ -49,7 +64,7 @@ def default_params(filesystem, data_dir, dummy_trajectory):
     python_script_path = asset_dir / "dft_singlepoint.py"
     # python_script_path = asset_dir / "optimize_traj.py"
 
-    logfile = temp_dir / "test_slurm.log"
+    logfile = "test_slurm.log"
 
     for path in [local_dir, local_results]:
         if path is not None:
@@ -135,6 +150,7 @@ def test_allocate_data(instance):
         )
 
 
+@pytest.mark.heavy
 def test_submit(instance):
     handler, params = instance
 
@@ -151,6 +167,7 @@ def test_submit(instance):
         )
 
 
+@pytest.mark.heavy
 def test_collect_and_redistribute(instance):
     handler, params = instance
 
@@ -185,6 +202,7 @@ def test_collect_and_redistribute(instance):
         assert handler.local_fs.exists(opt_tfile)
 
 
+@pytest.mark.heavy
 def test_full_run(instance):
     handler, params = instance
     handler.allocate_data()
