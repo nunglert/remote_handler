@@ -69,7 +69,7 @@ class RemoteTask(ABC):
             parent, child = os.path.split(savepath)
             if not self.remote_fs.exists(parent):
                 raise Exception(
-                    "The parent of savepath must already exist on the remote system!"
+                    f"The parent of {savepath=} must already exist on the remote system!"
                 )
 
             if self.remote_fs.exists(savepath):
@@ -439,7 +439,7 @@ class ArrayScriptTask(RemoteTask):
         ), "Need self.python_script_file"
         assert os.path.exists(
             self.python_script_file
-        ), "Did not find python script!"
+        ), f"Did not find python script at {self.python_script_file}!"
         assert (
             len(self.individual_ressources) > 0
         ), "Specify some inputs for your script!"

@@ -204,7 +204,7 @@ class Schedule(ABC):
         header_str = ""
         for k in params.keys():
             header_str += f"{k:<{column_width}}"
-        print(header_str)
+        logger.info(header_str)
 
         for i in range(self.num_iterations):
             params = self.get_kwargs(i)
@@ -212,7 +212,7 @@ class Schedule(ABC):
             iter_str = ""
             for v in params.values():
                 iter_str += f"{v:<{column_width}}"
-            print(iter_str)
+            logger.info(iter_str)
 
     def check(self) -> None:
         """Checks whether at each iteration the returned parameters are the
