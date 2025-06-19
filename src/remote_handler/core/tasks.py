@@ -95,6 +95,7 @@ class RemoteTask(ABC):
                         )
                         + random_string
                     )
+                    logger.info(f"results saved to: {self.savepath}")
                     self.remote_fs.makedirs(self.savepath, exist_ok=True)
 
             else:
