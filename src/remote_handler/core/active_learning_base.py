@@ -4,13 +4,10 @@ import os
 import shutil
 import sys
 from abc import ABC, abstractmethod
-from json.encoder import ESCAPE_DCT
 from pathlib import Path
 from typing import Callable, Literal, Optional
 
 import ase.io
-import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import numpy as np
 from ase import Atoms
 
