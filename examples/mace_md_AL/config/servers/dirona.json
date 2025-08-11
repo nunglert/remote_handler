@@ -1,0 +1,7 @@
+{
+    "remote_machine": "dirona",
+    "partition": "normal",
+    "savepath": "/home/ffitsch/dirona-repo/active_learning/remote_handler/outputs",
+    "conda_env": "bsc_base",
+    "template": "dirona.sh.j2"
+}

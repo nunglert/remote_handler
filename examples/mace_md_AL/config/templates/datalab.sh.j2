@@ -1,0 +1,13 @@
+#!/bin/bash
+#SBATCH --job-name={{ jobname }}
+#SBATCH --partition={{ partition }}
+
+#SBATCH --time=23:59:59
+{{ slurm_header_add }}
+
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate {{ conda_env }}
+
+pwd; hostname; date
+
+{% include job_type_template %}
