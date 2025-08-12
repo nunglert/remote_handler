@@ -63,10 +63,28 @@ mace_trainer = cu_co_active_learning.MaceModelTrainer(
     remote_savepath=Path("/home/e12218283/dump/dump"),
 )
 
-lammps_sampler = cu_co_active_learning.LammpsSampler()
+lammps_sampler = cu_co_active_learning.LammpsSampler(
+    remote_fs=datalab_fs,
+    sampling_script=data_dir / "lammps_sampling.py",
+    template_path=data_dir / "config/templates/lammps.in.template",
+    data_path=data_dir / "4-4-6_roughened_hydroxide.data",
+    remote_savepath=Path("/home/e12218283/dump/dump"),
+)
 
 
-"""vasp_evaluator.update(data_dir / 'test', data_dir / 'prim.xyz')
+model_files = [
+    data_dir / "models/71_v7_Model_stagetwo.model",
+    data_dir / "models/72_v7_Model_stagetwo.model",
+    data_dir / "models/73_v7_Model_stagetwo.model",
+    data_dir / "models/74_v7_Model_stagetwo.model",
+    data_dir / "models/75_v7_Model_stagetwo.model",
+]
+
+lammps_sampler.update(data_dir / "test", model_files)
+lammps_sampler.get_sampled_configs()
+
+
+vasp_evaluator.update(data_dir / "test", data_dir / "prim.xyz")
 dft_evaluated_samples = vasp_evaluator.get_evaluated_configs()
 
 for s in dft_evaluated_samples:
@@ -74,12 +92,14 @@ for s in dft_evaluated_samples:
     s.arrays["REF_forces"] = s.get_forces()
     s.calc = None
 
-db = read('al_test_db.extxyz', index=':')
+db = read("al_test_db.extxyz", index=":")
 if isinstance(db, list):
     db.extend(dft_evaluated_samples)
 elif isinstance(db, Atoms):
     db = [db, dft_evaluated_samples]
-write('al_test_db.extxyz', db, format='extxyz')
+write("al_test_db.extxyz", db, format="extxyz")
 
-mace_trainer.update(calcdir=data_dir / 'test', db_files=[data_dir / 'al_test_db.extxyz'])
-mace_trainer.get_trained_model()"""
+mace_trainer.update(
+    calcdir=data_dir / "test", db_files=[data_dir / "al_test_db.extxyz"]
+)
+mace_trainer.get_trained_model()

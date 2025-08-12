@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from pathlib import Path
@@ -110,6 +111,77 @@ class VASPEvaluator(GroundTruthEvaluator):
                 logger.info(f"VASP run failed for {calcpath=}")
 
         return all_ats
+
+
+class LammpsSampler(Sampler):
+    def __init__(
+        self,
+        remote_fs: FileSystemHandlerBase,
+        sampling_script: os.PathLike,  # lammps_sampling.py
+        template_path: os.PathLike,  # lammps.in.template
+        data_path: os.PathLike,  # lammps .data file
+        remote_savepath: Optional[os.PathLike] = None,
+        loop_time: float = 5,
+    ):
+        super().__init__()
+        self.remote_fs = remote_fs
+        self.sampling_script = sampling_script
+        self.template_path = template_path
+        self.data_path = data_path
+        self.remote_savepath = remote_savepath
+        self.loop_time = loop_time
+
+    def update(
+        self, calcdir: os.PathLike, model_files: list[os.PathLike], **kwargs
+    ) -> None:
+        self.sample_dir = Path(calcdir) / "sample"
+        self.results_dir = self.sample_dir / "results"
+        os.makedirs(self.sample_dir, exist_ok=True)
+
+        # TODO: somehow pass list of paths to actual files instead of dir
+        self.model_files = model_files
+
+        script_input = {
+            "lammps_path": "/home/e12218283/software/lammps/build-mliap/lmp",
+            "template_file": Path(self.template_path).name,
+            "data_file": Path(self.data_path).name,
+            "model_files": [Path(p).name for p in model_files],
+            "lammps_config_name": "lammps.in",
+            "seed": 42,
+        }
+
+        self.script_input_file = (
+            self.sample_dir / "input_sample.json"
+        )  # script input file
+        with open(self.script_input_file, "w") as f:
+            f.write(json.dumps(script_input))
+
+        self.sampling_task = SingleScriptTask(
+            local_savepath=self.results_dir,
+            input_file=self.script_input_file,
+            remote_fs=self.remote_fs,
+            script_file=self.sampling_script,
+            remote_savepath=self.remote_savepath,
+            jobfile_name="run_train.sh",
+            jobname="sample",
+            logfile="sample.log",
+            n_processors=1,
+            loop_time=self.loop_time,
+            collect_only=False,
+        )
+
+        self.sampling_task.allocate_data()  # moves script and input files
+
+        self.sampling_task.copy_file(self.template_path)
+        self.sampling_task.copy_file(self.data_path)
+        for p in model_files:
+            self.sampling_task.copy_file(p)
+
+    def get_sampled_configs(self) -> os.PathLike:
+        self.sampling_task.submit()
+        self.sampling_task.collect_results()
+
+        return Path(self.sampling_task.local_savepath) / "train/results"
 
 
 class MaceModelTrainer(ModelTrainer):

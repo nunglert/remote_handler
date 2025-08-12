@@ -32,7 +32,7 @@ dump    d_nvt   all custom 1 {{ dump_file }} id type xu yu zu vx vy vz
 
 fix     md_nvt  all nvt temp 300 300 $(100.0*dt)
 
-run     10000
+run     100
 
 unfix   md_nvt
 
