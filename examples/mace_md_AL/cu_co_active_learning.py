@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Optional
 
 import ase.io
-from ase import Atoms
 
 from remote_handler.core.active_learning_base import (
     GroundTruthEvaluator,
@@ -30,22 +29,9 @@ class VASPEvaluator(GroundTruthEvaluator):
         singlepoint_script: os.PathLike,
         remote_fs: FileSystemHandlerBase,
         num_parallel: int,
+        incar_kwargs: dict,
         remote_savepath: Optional[os.PathLike] = None,
         launcher: str = "mpirun -n",
-        incar_kwargs: dict = {
-            "xc": "PBE",
-            "encut": 300,
-            "prec": "Normal",
-            "ismear": -1,
-            "sigma": 0.025,
-            "ibrion": -1,
-            "ediff": 1e-5,
-            "symprec": 1e-5,
-            "lwave": False,
-            "lcharg": False,
-            "lreal": False,
-            "kspacing": 2.0,
-        },
         stub: bool = False,  # just for testing
         loop_time: float = 30,
         required_fraction: float = 0.5,
@@ -64,12 +50,18 @@ class VASPEvaluator(GroundTruthEvaluator):
         self.n_processors = n_processors
 
     def update(
-        self, calcdir: os.PathLike, collected_file: os.PathLike, **kwargs
+        self, calcdir: Path, evaluator_input: Path | list[Path], **kwargs
     ) -> None:
         self.dft_dir = Path(calcdir) / "dft"
         self.results_dir = self.dft_dir / "results"
         os.makedirs(self.dft_dir, exist_ok=True)
         it = str(calcdir).split("/")[-1]
+
+        traj_files = (
+            [str(evaluator_input)]
+            if isinstance(evaluator_input, Path)
+            else [str(p) for p in evaluator_input]
+        )
 
         self.vasp_handler = VASPHandler(
             loop_time=self.loop_time,
@@ -84,7 +76,7 @@ class VASPEvaluator(GroundTruthEvaluator):
             remote_fs=self.remote_fs,
             savepath=self.remote_fs.slurm_config["savepath"],
             local_savepath=self.results_dir,
-            traj_files=[collected_file],
+            traj_files=traj_files,
             python_script_path=self.singlepoint_script,
             num_parallel=self.num_parallel,
             n_processors=self.n_processors,
@@ -92,7 +84,7 @@ class VASPEvaluator(GroundTruthEvaluator):
             launcher=self.launcher,
         )
 
-    def get_evaluated_configs(self) -> list[Atoms]:
+    def get_evaluated_configs(self) -> Path:
         self.vasp_handler.run()
 
         if not self.vasp_handler.finish_check(self.required_fraction):
@@ -103,14 +95,21 @@ class VASPEvaluator(GroundTruthEvaluator):
             )
 
         all_ats = []
-        for calcpath in grep(self.results_dir / "calcdirs", ""):
+        for calcpath in grep(str(self.results_dir / "calcdirs"), ""):
             try:
                 at = ase.io.read(Path(calcpath) / "vasprun.xml")
                 all_ats.append(at)
             except:
                 logger.info(f"VASP run failed for {calcpath=}")
 
-        return all_ats
+        for s in all_ats:
+            s.info["REF_energy"] = s.get_potential_energy()
+            s.arrays["REF_forces"] = s.get_forces()
+            s.calc = None
+
+        path = self.results_dir / "evaluated_configs.extxyz"
+        ase.io.write(path, all_ats)
+        return path
 
 
 class LammpsSampler(Sampler):
@@ -120,38 +119,70 @@ class LammpsSampler(Sampler):
         sampling_script: os.PathLike,  # lammps_sampling.py
         template_path: os.PathLike,  # lammps.in.template
         data_path: os.PathLike,  # lammps .data file
+        element_mapping: dict,
+        num_samples: int,
+        uncertainty_cutoff_radius: float,
+        remote_lammps_executable_path: os.PathLike,
         remote_savepath: Optional[os.PathLike] = None,
-        loop_time: float = 5,
+        loop_time: float = 30,
     ):
+        """
+        Args:
+            remote_fs: `FileSystemHandlerBase` for the machine on which the sampling
+                should be run
+            sampling_script: Path to lammps_sampling.py or another compatible sampling
+                script.
+            template_path: Path to a jinja-template of the lammps.in file which should
+                be used for sampling
+            data_path: Path to a lammps.data file which contains the starting configuration
+                for all sampling MD runs
+            element_mapping: Dict that maps the atom species number from the given
+                data file to the corresponding element symbol
+            num_samples: number of configurations to sample each generation
+            uncertainty_cutoff_radius: cutoff radius (in Angstrom) for the calculation
+                of local uncertainties
+            remote_lammps_executable_path: Path to lammps executable on the machine on
+                which the sampling script is run
+            remote_savepath: Path in which files for the remote calculations are stored
+            loop_time: interval (in seconds) at which to poll if the sampling slurm job
+                has finished
+        """
         super().__init__()
         self.remote_fs = remote_fs
         self.sampling_script = sampling_script
         self.template_path = template_path
         self.data_path = data_path
+        self.element_mapping = element_mapping
+        self.num_samples = num_samples
+        self.uncertainty_cutoff_radius = uncertainty_cutoff_radius
+        self.remote_lammps_executable_path = remote_lammps_executable_path
         self.remote_savepath = remote_savepath
         self.loop_time = loop_time
 
     def update(
-        self, calcdir: os.PathLike, model_files: list[os.PathLike], **kwargs
+        self, calcdir: Path, sampler_input: list[Path], **kwargs
     ) -> None:
-        self.sample_dir = Path(calcdir) / "sample"
+        self.sample_dir = calcdir / "sample"
         self.results_dir = self.sample_dir / "results"
         os.makedirs(self.sample_dir, exist_ok=True)
+        os.makedirs(self.results_dir, exist_ok=True)
 
-        # TODO: somehow pass list of paths to actual files instead of dir
-        self.model_files = model_files
+        self.model_files = sampler_input
 
         script_input = {
-            "lammps_path": "/home/e12218283/software/lammps/build-mliap/lmp",
+            "lammps_path": Path(self.remote_lammps_executable_path).as_posix(),
             "template_file": Path(self.template_path).name,
             "data_file": Path(self.data_path).name,
-            "model_files": [Path(p).name for p in model_files],
+            "model_files": [p.name for p in self.model_files],
             "lammps_config_name": "lammps.in",
+            "element_mapping": self.element_mapping,
+            "cutoff_radius": self.uncertainty_cutoff_radius,
+            "bin_count": self.num_samples,
             "seed": 42,
         }
 
         self.script_input_file = (
-            self.sample_dir / "input_sample.json"
+            self.results_dir / "input_sample.json"
         )  # script input file
         with open(self.script_input_file, "w") as f:
             f.write(json.dumps(script_input))
@@ -162,7 +193,7 @@ class LammpsSampler(Sampler):
             remote_fs=self.remote_fs,
             script_file=self.sampling_script,
             remote_savepath=self.remote_savepath,
-            jobfile_name="run_train.sh",
+            jobfile_name="run_sample.sh",
             jobname="sample",
             logfile="sample.log",
             n_processors=1,
@@ -174,14 +205,14 @@ class LammpsSampler(Sampler):
 
         self.sampling_task.copy_file(self.template_path)
         self.sampling_task.copy_file(self.data_path)
-        for p in model_files:
+        for p in self.model_files:
             self.sampling_task.copy_file(p)
 
-    def get_sampled_configs(self) -> os.PathLike:
+    def get_sampled_configs(self) -> Path:
         self.sampling_task.submit()
         self.sampling_task.collect_results()
 
-        return Path(self.sampling_task.local_savepath) / "train/results"
+        return Path(self.sampling_task.local_savepath) / "out/samples.xyz"
 
 
 class MaceModelTrainer(ModelTrainer):
@@ -190,28 +221,56 @@ class MaceModelTrainer(ModelTrainer):
         remote_fs: FileSystemHandlerBase,
         training_script: os.PathLike,
         template_path: os.PathLike,
+        remote_mace_train_runner: os.PathLike,
         remote_savepath: Optional[os.PathLike] = None,
-        loop_time: float = 5,
+        loop_time: float = 30,
     ):
+        """
+        Args:
+            remote_fs: `FileSystemHandlerBase` for the machine on which the training
+                should be run
+            training_script: Path to mace_training.py or another compatible training
+                script.
+            template_path: Path to a jinja2-template of the mace_config.yaml file which
+                should be used for training
+            remote_mace_train_runner: Path to MACE run_train.py script on the machine
+                on which the sampling script is run
+            remote_savepath: Path in which files for the remote calculations are stored
+            loop_time: interval (in seconds) at which to poll if all training slurm jobs
+                have finished
+        """
         super().__init__()
         self.training_script = training_script
         self.remote_fs = remote_fs
         self.template_path = template_path
+        self.remote_mace_train_runner = remote_mace_train_runner
         self.remote_savepath = remote_savepath
         self.loop_time = loop_time
 
     def update(
-        self, calcdir: os.PathLike, db_files: list[os.PathLike], **kwargs
+        self, calcdir: Path, trainer_input: Path | list[Path], **kwargs
     ) -> None:
-        self.train_dir = Path(calcdir) / "train"
+        self.train_dir = calcdir / "train"
         self.results_dir = self.train_dir / "results"
         os.makedirs(self.train_dir, exist_ok=True)
+
+        # TODO: let user set these
+        self.model_name = "Model"
+        self.num_models = 5
+        self.validation_fraction = 0.1
+
+        db_files = (
+            [trainer_input]
+            if isinstance(trainer_input, Path)
+            else trainer_input
+        )
 
         script_input_shared = {
             "database_files": [Path(p).name for p in db_files],
             "template_file": Path(self.template_path).name,
-            "model_name": "Test_Model",
-            "train_runner": "/home/e12218283/miniconda3/envs/bsc_base/lib/python3.10/site-packages/mace/cli/run_train.py",
+            "model_name": self.model_name,
+            "validation_fraction": self.validation_fraction,
+            "train_runner": Path(self.remote_mace_train_runner).as_posix(),
         }
 
         individual_resources = [
@@ -221,7 +280,7 @@ class MaceModelTrainer(ModelTrainer):
                     filename="input_train.json",
                     remote_fs=self.remote_fs,
                 )
-                for i in range(5)
+                for i in range(self.num_models)
             ]
         ]
 
@@ -243,14 +302,14 @@ class MaceModelTrainer(ModelTrainer):
 
         self.training_task.allocate_data()
 
-    def get_trained_model(self) -> os.PathLike:
+    def get_trained_model(self) -> list[Path]:
         self.training_task.submit()
         self.training_task.collect_results()
 
-        """models_dir = self.results_dir / 'models'
-        os.makedirs(models_dir, exist_ok=True)
-        for p in (results_dir / 'calcdirs').iterdir():
-            if p.is_dir():
-                self.local_fs.put(p / 'models/Test_Model_stagetwo.model', models_dir)"""
+        model_paths = []
+        for calcpath in grep(str(self.results_dir / "calcdirs"), ""):
+            model_paths.append(
+                Path(calcpath) / f"models/{self.model_name}_stagetwo.model"
+            )
 
-        return Path(self.training_task.local_savepath) / "train/results"
+        return model_paths

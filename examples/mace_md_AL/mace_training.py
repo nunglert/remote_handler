@@ -11,6 +11,7 @@ from typing import Generator, Optional
 import ase.io
 import jinja2
 import numpy as np
+from ase import Atoms
 
 calcpath = Path(sys.argv[1])
 INPUTFILE = calcpath / "input_train.json"
@@ -18,16 +19,29 @@ input_args = json.load(open(INPUTFILE, "r"))
 
 rootpath = calcpath.parents[1]
 
-database_path = (
-    rootpath / input_args["database_files"][0]
-)  # TODO: Allow for more than one DB
+if len(input_args["database_files"]) > 1:
+    all_ats = []
+    for p in input_args["database_files"]:
+        ats = ase.io.read(rootpath / p, index=":")
+        if ats is Atoms:
+            all_ats.append(ats)
+        else:
+            all_ats.extend(ats)
+    combined_path = calcpath / "combined_db.extxyz"
+    ase.io.write(combined_path, all_ats)
+    database_path = combined_path
+
+else:
+    database_path = rootpath / input_args["database_files"][0]
+
+
 template_file_name = input_args["template_file"]
 model_name = input_args["model_name"]
 seed = input_args["seed"]
+valid_fraction = input_args["validation_fraction"]
 train_runner = Path(input_args["train_runner"])
 
 config_path = calcpath / "mace_config.yaml"
-storage_dir = calcpath
 
 
 def make_dir(path: pathlib.Path, **kwargs) -> None:
@@ -169,7 +183,7 @@ split = split_db(
     database_path,
     calcpath / "db.extxyz",
     do_return_path=True,
-    validation_fraction=0.5,
+    validation_fraction=valid_fraction,
 )
 train_path = split[0]
 valid_path = split[1]
@@ -180,8 +194,8 @@ run_training_from_config_template(
     seed=seed,
     train_file=train_path,
     valid_file=valid_path,
-    train_runner=train_runner,
-    storage_dir=storage_dir,
+    train_runner=str(train_runner),
+    storage_dir=calcpath,
     template_dir=rootpath,
     template_file_name=template_file_name,
     logger=logging.getLogger(),

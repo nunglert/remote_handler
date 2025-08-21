@@ -4,34 +4,32 @@ import sys
 from pathlib import Path
 
 import cu_co_active_learning
-from ase.atoms import Atoms
-from ase.io import read, write
 
-import remote_handler.core.slurm_utils
+from remote_handler.core.active_learning_base import ActiveLearningHandler
 from remote_handler.core.file_handler import RemoteFileSystem
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
-data_dir = Path(
-    "/home/ffitsch/Documents/university/bsc_thesis/dirona-repo/active_learning/remote_handler"
+example_dir = Path(
+    "/home/ffitsch/Documents/university/bsc_thesis/remote_handler/repo/examples/mace_md_AL"
 )
-homepath = Path(os.getcwd())
-
-remote_handler.core.slurm_utils.TEMPLATE_DIRS.append(
-    str(data_dir / "config/servers")
+test_files_dir = Path(
+    "/home/ffitsch/Documents/university/bsc_thesis/remote_handler/test_files"
 )
 
 dirona_fs = RemoteFileSystem(slurm_config_file="dirona.json")
 
-datalab_fs = RemoteFileSystem(slurm_config_file="datalab.json")
+datalab_a100s_fs = RemoteFileSystem(slurm_config_file="datalab_a100s.json")
+
+datalab_l40s_fs = RemoteFileSystem(slurm_config_file="datalab_l40s.json")
 
 vasp_evaluator = cu_co_active_learning.VASPEvaluator(
-    singlepoint_script=data_dir / "dft_singlepoint.py",
+    singlepoint_script=example_dir / "dft_singlepoint.py",
     remote_fs=dirona_fs,
     num_parallel=25,
     remote_savepath=Path("/home/ffitsch/dump"),
     incar_kwargs={
-        "ncore": 1,
+        "ncore": 8,
         "algo": "Normal",
         # "prec": "Accurate",
         "xc": "pbe",
@@ -39,8 +37,8 @@ vasp_evaluator = cu_co_active_learning.VASPEvaluator(
         # "setups": {"H": "_h", "O": "_h"},
         "encut": 300,
         # "encut": 850,
-        "ediff": 1e-6,
-        "kpts": [11, 11, 11],
+        "ediff": 1e-3,
+        "kpts": [3, 3, 1],
         "gamma": True,
         "ismear": 0,
         "sigma": 0.05,
@@ -50,56 +48,59 @@ vasp_evaluator = cu_co_active_learning.VASPEvaluator(
         "lcharg": False,
         "lreal": False,
     },
-    n_processors=2,
+    n_processors=16,
     stub=False,
-    loop_time=1,
+    loop_time=30,
     required_fraction=1,
 )
 
 mace_trainer = cu_co_active_learning.MaceModelTrainer(
-    remote_fs=datalab_fs,
-    training_script=data_dir / "mace_training.py",
-    template_path=data_dir / "config/templates/mace_config_l2.yaml.template",
+    remote_fs=datalab_l40s_fs,
+    training_script=example_dir / "mace_training.py",
+    template_path=example_dir
+    / "config/templates/mace_config_l2.yaml.template",
     remote_savepath=Path("/home/e12218283/dump/dump"),
+    remote_mace_train_runner=Path(
+        "/home/e12218283/miniconda3/envs/bsc_base/lib/python3.10/site-packages/mace/cli/run_train.py"
+    ),
+    loop_time=30,
 )
 
 lammps_sampler = cu_co_active_learning.LammpsSampler(
-    remote_fs=datalab_fs,
-    sampling_script=data_dir / "lammps_sampling.py",
-    template_path=data_dir / "config/templates/lammps.in.template",
-    data_path=data_dir / "4-4-6_roughened_hydroxide.data",
+    remote_fs=datalab_a100s_fs,
+    sampling_script=example_dir / "lammps_sampling.py",
+    template_path=example_dir / "config/templates/lammps.in.template",
+    data_path=test_files_dir / "inputs/test_fcc100_hollow_2x2.data",
+    element_mapping={1: "Co", 2: "Cu", 3: "H", 4: "O"},
+    num_samples=2,
+    uncertainty_cutoff_radius=4,
+    remote_lammps_executable_path=Path(
+        "/home/e12218283/software/lammps/build-mliap/lmp"
+    ),
     remote_savepath=Path("/home/e12218283/dump/dump"),
+    loop_time=30,
 )
 
-
+db_file = test_files_dir / "inputs/cu+cu_co_db_v8.xyz"
 model_files = [
-    data_dir / "models/71_v7_Model_stagetwo.model",
-    data_dir / "models/72_v7_Model_stagetwo.model",
-    data_dir / "models/73_v7_Model_stagetwo.model",
-    data_dir / "models/74_v7_Model_stagetwo.model",
-    data_dir / "models/75_v7_Model_stagetwo.model",
+    test_files_dir / "inputs/models/81_v8_Model_stagetwo.model",
+    test_files_dir / "inputs/models/82_v8_Model_stagetwo.model",
+    test_files_dir / "inputs/models/83_v8_Model_stagetwo.model",
+    test_files_dir / "inputs/models/84_v8_Model_stagetwo.model",
+    test_files_dir / "inputs/models/85_v8_Model_stagetwo.model",
 ]
 
-lammps_sampler.update(data_dir / "test", model_files)
-lammps_sampler.get_sampled_configs()
-
-
-vasp_evaluator.update(data_dir / "test", data_dir / "prim.xyz")
-dft_evaluated_samples = vasp_evaluator.get_evaluated_configs()
-
-for s in dft_evaluated_samples:
-    s.info["REF_energy"] = s.get_potential_energy()
-    s.arrays["REF_forces"] = s.get_forces()
-    s.calc = None
-
-db = read("al_test_db.extxyz", index=":")
-if isinstance(db, list):
-    db.extend(dft_evaluated_samples)
-elif isinstance(db, Atoms):
-    db = [db, dft_evaluated_samples]
-write("al_test_db.extxyz", db, format="extxyz")
-
-mace_trainer.update(
-    calcdir=data_dir / "test", db_files=[data_dir / "al_test_db.extxyz"]
+al_handler = ActiveLearningHandler(
+    sampler=lammps_sampler,
+    evaluator=vasp_evaluator,
+    trainer=mace_trainer,
+    calchome=test_files_dir / "outputs",
+    num_iterations=5,
+    cycle_entry_point="sampler",
+    cycle_exit_point="training",
+    initial_evaluator_out=db_file,
+    initial_trainer_out=model_files,
+    trainer_output_extension="model",
 )
-mace_trainer.get_trained_model()
+
+al_handler.run()

@@ -128,7 +128,7 @@ class VASPHandler(RemoteAtomsHandler):
         finished_fraction = num_converged / len(self.all_calcpaths)
         if finished_fraction < 0.5:
             logger.warning("More than 50% of the submitted runs failed..")
-        return finished_fraction > required_fraction
+        return finished_fraction >= required_fraction
 
     def run(self):
         self.allocate_data()

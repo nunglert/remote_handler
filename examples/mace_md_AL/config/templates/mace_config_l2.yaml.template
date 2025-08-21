@@ -9,7 +9,7 @@ model: ScaleShiftMACE
 hidden_irreps: 64x0e + 64x1o
 r_max: 5.0
 max_ell: 2
-batch_size: 1
+batch_size: 16
 max_num_epochs: 1600
 stage_two: yes
 start_stage_two: 1200

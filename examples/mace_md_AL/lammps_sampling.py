@@ -40,26 +40,13 @@ data_path = calcpath / input_args["data_file"]
 model_paths = [calcpath / p for p in input_args["model_files"]]
 
 config_path = outpath / input_args["lammps_config_name"]
-
-seed = input_args["seed"]
-
-element_mapping = {1: "Co", 2: "Cu", 3: "H", 4: "O"}
-cutoff_radius = 4
-bin_count = 2
 samples_file = outpath / "samples.xyz"
 full_traj_file = outpath / "traj+uncertainties.xyz"
 
-
-def make_dir(path: pathlib.Path, **kwargs) -> None:
-    """Create a directory if it does not exist yet
-
-    Args:
-        path: Directory to create
-    """
-    try:
-        path.mkdir(**kwargs)
-    except FileExistsError:
-        pass
+element_mapping = input_args["element_mapping"]
+cutoff_radius = input_args["cutoff_radius"]
+bin_count = input_args["bin_count"]
+seed = input_args["seed"]
 
 
 def parse_jinja_template(
@@ -226,26 +213,49 @@ def get_samples_from_dump(
     cutoff_radius: int,
     bin_count: int,
     samples_file: pathlib.Path,
+    logger: logging.Logger,
     output_full_uncertainties_traj: bool = False,
     full_file: pathlib.Path = None,
-):
+) -> None:
+    """Sample from the given trajectory by dividing it into segments and sampling
+    the structure with the highest individual local uncertainty value out of each
+    segement.
+
+    Args:
+        trajectory_file: Path to lammps .dump output file to sample from
+        model_files: List of Paths to models to calculate committee uncertainties
+            with
+        element_mapping: Dict that maps the atom species number from the given
+            trajectory file (as strings) to the corresponding element symbol
+        cutoff_radius: cutoff radius (in Angstrom) for calculating the local
+            uncertainties
+        bin_count: number of segments to divide the trajectory into - if the length
+            of the trajectory is not evenly divisible by this number, configurations
+            will be removed from the end of the trajectory until it is
+        samples_file: path to write the sampled structures to
+        logger: logger
+        output_full_uncertainties_traj: determines whether to additionally output
+            the full trajectory with attached uncertainties
+        full_file: if output_full_uncertainties_traj=True, the full trajectory
+            with attached uncertainties is output to this path
+    """
+
     structs = ase.io.read(
         trajectory_file, format="lammps-dump-text", index=":"
     )
 
     mod = len(structs) % bin_count
     if mod != 0:
-        print(
-            f"Input trajectory size of {len(structs)} is not evenly divisible by {bin_count} segments."
-        )
-        print(
-            f"Cutting last {mod} structures from trajectory to ensure evenly sized segments."
+        logger.warning(
+            f"Input trajectory size of {len(structs)} is not evenly divisible by "
+            f"{bin_count} segments., Cutting last {mod} structures from trajectory "
+            f"to ensure evenly sized segments."
         )
         structs = structs[:-mod]
 
     for atoms in structs:
         for atom in atoms:
-            atom.symbol = element_mapping[atom.number]
+            atom.symbol = element_mapping[str(atom.number)]
 
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=FutureWarning)
@@ -300,6 +310,7 @@ trajectory = run_lammps_from_template(
     data_file=data_path,
     seed=seed,
     dump_file=outpath / "md_sampling.dump",
+    final_data_file=outpath / "surface_final.data",
     do_return_path=True,
     trj_file_key="dump_file",
 )
@@ -313,4 +324,5 @@ get_samples_from_dump(
     samples_file=samples_file,
     output_full_uncertainties_traj=True,
     full_file=full_traj_file,
+    logger=logging.getLogger(),
 )

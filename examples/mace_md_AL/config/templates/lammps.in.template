@@ -37,4 +37,4 @@ run     100
 unfix   md_nvt
 
 
-write_data surface_final.data
+write_data {{ final_data_file }}

@@ -7,7 +7,7 @@
 module purge
 module load vasp/6.4.2_intel
 source /opt/intel/oneapi/setvars.sh --force
-ulimit -s $((SLURM_MEM_PER_NODE * 1024))
+ulimit -s unlimited
 
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate {{ conda_env }}
