@@ -12,6 +12,7 @@ from remote_handler.core.active_learning_base import (
     GroundTruthEvaluator,
     ModelTrainer,
     Sampler,
+    process_progress,
 )
 
 
@@ -178,157 +179,175 @@ def test_restart_ActiveLearningHandler(data_dir, cycle_exit_point):
     al_handler.run()
 
 
-# class Test_process_progress:
-#     def test_fully_completed(self):
-#         progress_case0 = [
-#             dict(
-#                 steps=(0, 0, 0),
-#                 collected_file="collected_0",
-#                 db_file="db_0",
-#                 pickle_file="pickle_0",
-#             ),
-#             dict(
-#                 steps=(0, 0, 0),
-#                 collected_file="collected_1",
-#                 db_file="db_1",
-#                 pickle_file="pickle_1",
-#             ),
-#         ]
+class Test_process_progress:
+    def test_fully_completed(self):
+        progress = [
+            dict(
+                steps=[0, 0, 0],
+                sampler_output=["collected_0"],
+                evaluator_output=["db_00", "db_01"],
+                trainer_output=["model_00", "model_01"],
+            ),
+            dict(
+                steps=[0, 0, 0],
+                sampler_output=["collected_1"],
+                evaluator_output=["db_10"],
+                trainer_output=["model_10"],
+            ),
+        ]
 
-#         (
-#             iteration_idx,
-#             collected_file,
-#             db_files,
-#             pickle_file,
-#             progress,
-#         ) = al_loop.process_progress(
-#             progress_case0, num_iterations=10, db_files=["base_model"]
-#         )
+        (
+            iteration_idx,
+            evaluator_input,
+            trainer_input,
+            sampler_input,
+            progress,
+        ) = process_progress(progress, 10, False, True, False)
 
-#         assert iteration_idx == 2
-#         assert collected_file is None
-#         assert len(db_files) == 3
-#         assert pickle_file == "pickle_1"
-#         assert len(progress) == 3
-#         assert list(progress[-1].keys()) == ["steps"]
+        assert iteration_idx == 2
+        assert len(evaluator_input) == 0
+        assert len(trainer_input) == 3
+        assert sampler_input == [Path("model_10")]
+        assert len(progress) == 3
+        assert list(progress[-1].keys()) == ["steps"]
 
-#     def test_ns_completed(self):
-#         progress_case1 = [
-#             dict(
-#                 steps=(0, 0, 0),
-#                 collected_file="collected_0",
-#                 db_file="db_0",
-#                 pickle_file="pickle_0",
-#             ),
-#             dict(
-#                 steps=(0, 1, 1),
-#                 collected_file="collected_1",
-#             ),
-#         ]
-#         (
-#             iteration_idx,
-#             collected_file,
-#             db_files,
-#             pickle_file,
-#             progress,
-#         ) = al_loop.process_progress(
-#             progress_case1, num_iterations=10, db_files=["base_model"]
-#         )
+    def test_sampler_completed(self):
+        progress = [
+            dict(
+                steps=[0, 0, 0],
+                sampler_output=["collected_0"],
+                evaluator_output=["db_0"],
+                trainer_output=["pickle_0"],
+            ),
+            dict(
+                steps=[0, 1, 1],
+                trainer_output=["collected_1"],
+            ),
+        ]
+        (
+            iteration_idx,
+            evaluator_input,
+            trainer_input,
+            sampler_input,
+            progress,
+        ) = process_progress(progress, 10, False, False, False)
 
-#         assert iteration_idx == 1
-#         assert collected_file == "collected_1"
-#         assert len(db_files) == 2
-#         assert pickle_file == "pickle_0"
-#         assert len(progress) == 2
-#         assert list(progress[-1].keys()) == ["steps", "collected_file"]
+        assert iteration_idx == 1
+        assert evaluator_input == [Path("collected_1")]
+        assert len(trainer_input) == 0
+        assert len(sampler_input) == 0
+        assert len(progress) == 2
+        assert list(progress[-1].keys()) == ["steps", "sampler_output"]
 
-#     def test_ns_dft_completed(self):
-#         progress_case2 = [
-#             dict(
-#                 steps=(0, 0, 0),
-#                 collected_file="collected_0",
-#                 db_file="db_0",
-#                 pickle_file="pickle_0",
-#             ),
-#             dict(
-#                 steps=(0, 0, 1),
-#                 collected_file="collected_1",
-#                 db_file="db_1",
-#             ),
-#         ]
+    def test_sampler_evaluator_completed(self):
+        progress = [
+            dict(
+                steps=[0, 0, 0],
+                sampler_output=["collected_0"],
+                evaluator_output=["db_0"],
+                trainer_output=["pickle_0"],
+            ),
+            dict(
+                steps=[0, 0, 1],
+                trainer_output=["collected_1"],
+                evaluator_output=["db_1"],
+            ),
+        ]
 
-#         (
-#             iteration_idx,
-#             collected_file,
-#             db_files,
-#             pickle_file,
-#             progress,
-#         ) = al_loop.process_progress(
-#             progress_case2, num_iterations=10, db_files=["base_model"]
-#         )
+        (
+            iteration_idx,
+            evaluator_input,
+            trainer_input,
+            sampler_input,
+            progress,
+        ) = process_progress(progress, 10, False, False, True)
 
-#         assert iteration_idx == 1
-#         assert collected_file == "collected_1"
-#         assert len(db_files) == 3
-#         assert pickle_file == "pickle_0"
-#         assert len(progress) == 2
-#         assert list(progress[-1].keys()) == [
-#             "steps",
-#             "collected_file",
-#             "db_file",
-#         ]
+        assert iteration_idx == 1
+        assert len(evaluator_input) == 0
+        assert trainer_input == [Path("db_1")]
+        assert sampler_input == [Path("pickle_0")]
+        assert len(progress) == 2
+        assert list(progress[-1].keys()) == [
+            "steps",
+            "trainer_output",
+            "evaluator_output",
+        ]
 
-#     def test_single_ns_completed(self):
-#         progress_case2 = [
-#             dict(
-#                 steps=(0, 1, 1),
-#                 collected_file="collected_0",
-#             ),
-#         ]
+    def test_none_completed(self):
+        progress = [
+            dict(
+                steps=[0, 0, 0],
+                sampler_output=["collected_0"],
+                evaluator_output=["db_0"],
+                trainer_output=["pickle_0"],
+            ),
+            dict(
+                steps=[1, 1, 1],
+            ),
+        ]
 
-#         (
-#             iteration_idx,
-#             collected_file,
-#             db_files,
-#             pickle_file,
-#             progress,
-#         ) = al_loop.process_progress(
-#             progress_case2, num_iterations=10, db_files=["base_model"]
-#         )
+        (
+            iteration_idx,
+            evaluator_input,
+            trainer_input,
+            sampler_input,
+            progress,
+        ) = process_progress(progress, 10, False, False, False)
 
-#         assert iteration_idx == 0
-#         assert collected_file == "collected_0"
-#         assert len(db_files) == 1
-#         assert pickle_file == "base_model"
-#         assert len(progress) == 1
-#         assert list(progress[-1].keys()) == ["steps", "collected_file"]
+        assert iteration_idx == 1
+        assert sampler_input == [Path("pickle_0")]
+        assert len(evaluator_input) == 0
+        assert len(trainer_input) == 0
+        assert len(progress) == 2
+        assert list(progress[-1].keys()) == ["steps"]
 
-#     def test_single_ns_dft_completed(self):
-#         progress_case2 = [
-#             dict(
-#                 steps=(0, 0, 1),
-#                 collected_file="collected_0",
-#                 db_file="db_0",
-#             ),
-#         ]
+    def test_single_sampler_completed(self):
+        progress = [
+            dict(
+                steps=[0, 1, 1],
+                sampler_output=["collected_0"],
+            ),
+        ]
 
-#         (
-#             iteration_idx,
-#             collected_file,
-#             db_files,
-#             pickle_file,
-#             progress,
-#         ) = al_loop.process_progress(
-#             progress_case2, num_iterations=10, db_files=["base_model"]
-#         )
+        (
+            iteration_idx,
+            evaluator_input,
+            trainer_input,
+            sampler_input,
+            progress,
+        ) = process_progress(progress, 10, False, False, False)
 
-#         assert iteration_idx == 0
-#         assert collected_file == "collected_0"
-#         assert len(db_files) == 2
-#         assert pickle_file == "base_model"
-#         assert len(progress) == 1
-#         assert list(progress[-1].keys()) == [
-#             "steps",
-#             "collected_file",
-#             "db_file",
-#         ]
+        assert iteration_idx == 0
+        assert evaluator_input == [Path("collected_0")]
+        assert len(trainer_input) == 0
+        assert len(sampler_input) == 0
+        assert len(progress) == 1
+        assert list(progress[-1].keys()) == ["steps", "sampler_output"]
+
+    def test_single_sampler_evaluator_completed(self):
+        progress = [
+            dict(
+                steps=[0, 0, 1],
+                sampler_output=["collected_0"],
+                evaluator_output=["db_0"],
+            ),
+        ]
+
+        (
+            iteration_idx,
+            evaluator_input,
+            trainer_input,
+            sampler_input,
+            progress,
+        ) = process_progress(progress, 10, True, False, False)
+
+        assert iteration_idx == 0
+        assert evaluator_input == [Path("collected_0")]
+        assert trainer_input == [Path("db_0")]
+        assert sampler_input == []
+        assert len(progress) == 1
+        assert list(progress[-1].keys()) == [
+            "steps",
+            "sampler_output",
+            "evaluator_output",
+        ]

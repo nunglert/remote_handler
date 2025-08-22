@@ -101,6 +101,16 @@ class ModelTrainer(ABC):
         pass
 
 
+def append_or_extend(item, append_list):
+    """Appends item to append_list if item is not a list. If item is a list,
+    appends each individual entry of item to append_list instead.
+    """
+    if isinstance(item, list):
+        append_list.extend(item)
+    else:
+        append_list.append(item)
+
+
 def process_progress(
     progress: list[dict],
     num_iterations: int,
@@ -118,6 +128,8 @@ def process_progress(
     the quantities necessary for resuming a active learning loop with
     `ActiveLearningHandler`.
     """
+    # TODO: Unsure what happens when restarting in final generation with exit point that is not training
+    # TODO: This appends the wrong steps if current steps are [0,0,0] and next gen is final one with steps != [1,1,1]
     keys = range(len(progress))
     assert len(keys) <= num_iterations
 
@@ -127,83 +139,74 @@ def process_progress(
     if combine_sampler_outputs:
         if len(keys) > 1:
             for key in keys[:-1]:
-                item = progress[key].get("sampler_output")
-                if isinstance(item, list):
-                    evaluator_in.extend(item)
-                else:
-                    evaluator_in.append(item)
+                append_or_extend(
+                    progress[key].get("sampler_output"), evaluator_in
+                )
 
     if combine_evaluator_outputs:
         if len(keys) > 1:
             for key in keys[:-1]:
-                item = progress[key].get("evaluator_output")
-                if isinstance(item, list):
-                    trainer_in.extend(item)
-                else:
-                    trainer_in.append(item)
+                append_or_extend(
+                    progress[key].get("evaluator_output"), trainer_in
+                )
 
     if combine_trainer_outputs:
         if len(keys) > 1:
             for key in keys[:-1]:
-                item = progress[key].get("trainer_output")
-                if isinstance(item, list):
-                    trainer_in.extend(item)
-                else:
-                    trainer_in.append(item)
+                append_or_extend(
+                    progress[key].get("trainer_output"), sampler_in
+                )
 
     last_iteration_key = keys[-1]
     last_iter_keys = progress[last_iteration_key].keys()
     if "steps" in last_iter_keys:
         steps = progress[last_iteration_key]["steps"]
+        iteration_idx = last_iteration_key
 
-        remaining_steps = np.sum(steps)
-        if remaining_steps > 0:
-            # last loaded iteration is incomplete, proceed with missing
-            iteration_idx = last_iteration_key
-            if steps == [1, 1, 1]:
-                # TODO This might break if there is only one iteration
-                if not combine_trainer_outputs:
-                    previous_iter_output = progress[last_iteration_key - 1][
-                        "trainer_output"
-                    ]
-                    if isinstance(previous_iter_output, list):
-                        sampler_in.extend(previous_iter_output)
-                    else:
-                        sampler_in.append(previous_iter_output)
+        if steps == [1, 1, 1]:
+            if not combine_trainer_outputs and last_iteration_key is not 0:
                 # not needed if combine is true since the previous generation
                 # trainer_output would have already been added above
+                append_or_extend(
+                    progress[last_iteration_key - 1]["trainer_output"],
+                    sampler_in,
+                )
 
-            # if configs from sampling were already collected
-            if steps == [0, 1, 1]:
-                last_iter_output = progress[last_iteration_key][
-                    "sampler_output"
-                ]
-                if isinstance(last_iter_output, list):
-                    evaluator_in.extend(last_iter_output)
-                else:
-                    evaluator_in.append(last_iter_output)
+        # if configs from sampling were already collected
+        elif steps == [0, 1, 1]:
+            append_or_extend(
+                progress[last_iteration_key]["sampler_output"], evaluator_in
+            )
 
-            # if dft was already run, collect db_file
-            elif steps == [0, 0, 1]:
-                last_iter_output = progress[last_iteration_key][
-                    "evaluator_output"
-                ]
-                if isinstance(last_iter_output, list):
-                    trainer_in.extend(last_iter_output)
-                else:
-                    trainer_in.append(last_iter_output)
+        # if dft was already run, collect sampler_out as well as evaluator_out
+        elif steps == [0, 0, 1]:
+            if combine_sampler_outputs:
+                append_or_extend(
+                    progress[last_iteration_key]["sampler_output"],
+                    evaluator_in,
+                )
+
+            append_or_extend(
+                progress[last_iteration_key]["evaluator_output"], trainer_in
+            )
 
         else:
-            """if steps are [0,0,0], outputs from previous gen training step
-            are needed to start sampling"""
-            if not combine_trainer_outputs:
-                previous_iter_output = progress[last_iteration_key][
-                    "trainer_output"
-                ]
-                if isinstance(previous_iter_output, list):
-                    sampler_in.extend(previous_iter_output)
-                else:
-                    sampler_in.append(previous_iter_output)
+            # if steps are [0,0,0], all combinable outputs need to be appended
+            # even if combine_trainer_output=False, trainer_output is needed for
+            # the next generation's sampling
+            if combine_sampler_outputs:
+                append_or_extend(
+                    progress[last_iteration_key]["sampler_output"],
+                    evaluator_in,
+                )
+            if combine_evaluator_outputs:
+                append_or_extend(
+                    progress[last_iteration_key]["evaluator_output"],
+                    trainer_in,
+                )
+            append_or_extend(
+                progress[last_iteration_key]["trainer_output"], sampler_in
+            )
 
             # last loaded iteration is complete, proceed with next iter
             iteration_idx = last_iteration_key + 1
