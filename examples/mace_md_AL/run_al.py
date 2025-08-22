@@ -10,11 +10,11 @@ from remote_handler.core.file_handler import RemoteFileSystem
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
-example_dir = Path(
-    "/home/ffitsch/Documents/university/bsc_thesis/remote_handler/repo/examples/mace_md_AL"
-)
+example_dir = Path(__file__).parent.resolve()
+input_dir = example_dir / "inputs"
+
 test_files_dir = Path(
-    "/home/ffitsch/Documents/university/bsc_thesis/remote_handler/test_files"
+    "/home/ffitsch/Documents/university/bsc_thesis/remote_handler/test_files/outputs"
 )
 
 dirona_fs = RemoteFileSystem(slurm_config_file="dirona.json")
@@ -70,7 +70,7 @@ lammps_sampler = cu_co_active_learning.LammpsSampler(
     remote_fs=datalab_a100s_fs,
     sampling_script=example_dir / "lammps_sampling.py",
     template_path=example_dir / "config/templates/lammps.in.template",
-    data_path=test_files_dir / "inputs/test_fcc100_hollow_2x2.data",
+    data_path=input_dir / "test_fcc100_hollow_2x2.data",
     element_mapping={1: "Co", 2: "Cu", 3: "H", 4: "O"},
     num_samples=2,
     uncertainty_cutoff_radius=4,
@@ -81,20 +81,20 @@ lammps_sampler = cu_co_active_learning.LammpsSampler(
     loop_time=30,
 )
 
-db_file = test_files_dir / "inputs/cu+cu_co_db_v8.xyz"
+db_file = input_dir / "cu+cu_co_db_example.xyz"
 model_files = [
-    test_files_dir / "inputs/models/81_v8_Model_stagetwo.model",
-    test_files_dir / "inputs/models/82_v8_Model_stagetwo.model",
-    test_files_dir / "inputs/models/83_v8_Model_stagetwo.model",
-    test_files_dir / "inputs/models/84_v8_Model_stagetwo.model",
-    test_files_dir / "inputs/models/85_v8_Model_stagetwo.model",
+    input_dir / "models/81_v8_Model_stagetwo.model",
+    input_dir / "models/82_v8_Model_stagetwo.model",
+    input_dir / "models/83_v8_Model_stagetwo.model",
+    input_dir / "models/84_v8_Model_stagetwo.model",
+    input_dir / "models/85_v8_Model_stagetwo.model",
 ]
 
 al_handler = ActiveLearningHandler(
     sampler=lammps_sampler,
     evaluator=vasp_evaluator,
     trainer=mace_trainer,
-    calchome=test_files_dir / "outputs",
+    calchome=test_files_dir,
     num_iterations=5,
     cycle_entry_point="sampler",
     cycle_exit_point="training",
