@@ -221,7 +221,7 @@ class Test_process_progress:
             ),
             dict(
                 steps=[0, 1, 1],
-                trainer_output=["collected_1"],
+                sampler_output=["collected_1"],
             ),
         ]
         (
