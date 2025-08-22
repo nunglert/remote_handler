@@ -37,6 +37,24 @@ class VASPEvaluator(GroundTruthEvaluator):
         required_fraction: float = 0.5,
         n_processors: int = 2,
     ):
+        """
+        Args:
+            singlepoint_script: Path to dft_singlepoint.py or another compatible
+                evaluation script
+            remote_fs: `FileSystemHandlerBase` for the machine on which the evaluation
+                should be run
+            num_parallel: number of parallel slurm jobs to queue
+            incar_kwargs: VASP incar tags
+            remote_savepath: Path in which file for remote calculations are stored
+            launcher: launch command used for starting VASP including flag for setting
+                number of processors
+            stub: if True, only writes VASP input files without running calculations
+            loop_time: interval (in seconds) at which to poll if the evaluation slurm
+                jobs have finished
+            required_fraction: fraction of samples for which DFT must succeed to
+                progress to the next step
+            n_processors: number of CPU cores to run each VASP job on
+        """
         super().__init__()
         self.singlepoint_script = singlepoint_script
         self.incar_kwargs = incar_kwargs
@@ -131,7 +149,7 @@ class LammpsSampler(Sampler):
             remote_fs: `FileSystemHandlerBase` for the machine on which the sampling
                 should be run
             sampling_script: Path to lammps_sampling.py or another compatible sampling
-                script.
+                script
             template_path: Path to a jinja-template of the lammps.in file which should
                 be used for sampling
             data_path: Path to a lammps.data file which contains the starting configuration
