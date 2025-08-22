@@ -240,6 +240,8 @@ class MaceModelTrainer(ModelTrainer):
         training_script: os.PathLike,
         template_path: os.PathLike,
         remote_mace_train_runner: os.PathLike,
+        num_models: int = 5,
+        validation_fraction: float = 0.1,
         remote_savepath: Optional[os.PathLike] = None,
         loop_time: float = 30,
     ):
@@ -251,6 +253,8 @@ class MaceModelTrainer(ModelTrainer):
                 script.
             template_path: Path to a jinja2-template of the mace_config.yaml file which
                 should be used for training
+            num_models: Number of models to train in each generation
+            validation_fraction: fraction for train/validation split
             remote_mace_train_runner: Path to MACE run_train.py script on the machine
                 on which the sampling script is run
             remote_savepath: Path in which files for the remote calculations are stored
@@ -261,6 +265,8 @@ class MaceModelTrainer(ModelTrainer):
         self.training_script = training_script
         self.remote_fs = remote_fs
         self.template_path = template_path
+        self.num_models = num_models
+        self.validation_fraction = validation_fraction
         self.remote_mace_train_runner = remote_mace_train_runner
         self.remote_savepath = remote_savepath
         self.loop_time = loop_time
@@ -272,11 +278,6 @@ class MaceModelTrainer(ModelTrainer):
         self.results_dir = self.train_dir / "results"
         os.makedirs(self.train_dir, exist_ok=True)
 
-        # TODO: let user set these
-        self.model_name = "Model"
-        self.num_models = 5
-        self.validation_fraction = 0.1
-
         db_files = (
             [trainer_input]
             if isinstance(trainer_input, Path)
@@ -286,7 +287,7 @@ class MaceModelTrainer(ModelTrainer):
         script_input_shared = {
             "database_files": [Path(p).name for p in db_files],
             "template_file": Path(self.template_path).name,
-            "model_name": self.model_name,
+            "model_name": "Model",
             "validation_fraction": self.validation_fraction,
             "train_runner": Path(self.remote_mace_train_runner).as_posix(),
         }
