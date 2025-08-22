@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 import ase.io
+import numpy as np
 
 from remote_handler.core.active_learning_base import (
     GroundTruthEvaluator,
@@ -196,7 +197,7 @@ class LammpsSampler(Sampler):
             "element_mapping": self.element_mapping,
             "cutoff_radius": self.uncertainty_cutoff_radius,
             "bin_count": self.num_samples,
-            "seed": 42,
+            "seed": np.random.randint(1e6),
         }
 
         self.script_input_file = (
@@ -295,7 +296,8 @@ class MaceModelTrainer(ModelTrainer):
         individual_resources = [
             [
                 DictJSON(
-                    content=script_input_shared | {"seed": i + 10},
+                    content=script_input_shared
+                    | {"seed": np.random.randint(1e6)},
                     filename="input_train.json",
                     remote_fs=self.remote_fs,
                 )
