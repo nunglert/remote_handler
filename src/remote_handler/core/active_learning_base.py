@@ -337,22 +337,8 @@ class Schedule(ABC):
 
 
 class ActiveLearningHandler(ABC):
-    sampler: Sampler
-    evaluator: GroundTruthEvaluator
-    trainer: ModelTrainer
-
-    sampler_schedule: Schedule
-    evaluator_schedule: Schedule
-    trainer_schedule: Schedule
-
-    sampler_in: list[Path] = []
-    evaluator_in: list[Path] = []
-    trainer_in: list[Path] = []
-
-    iteration_idx: int
-
     """Implementation of the core functionality of an active learning loop
-    consisting of three actors: A sampler, a ground truth evaluator and a 
+    consisting of three actors: A sampler, a ground truth evaluator and a
     model trainer. `ActiveLearningHandler` handles the bookkeeping of created
     files and passes required files to the corresponding actors. It offers
     functionality to resume broken runs by caching the current progress and
@@ -371,14 +357,14 @@ class ActiveLearningHandler(ABC):
         initial_trainer_out: Any input similar to the outputs of the used
             `ModelTrainer` which should be used by the `Sampler`. May for example
             be the path(s) to one or several model files that should be used in
-            the sampling step. Required when starting from scratch with 
-            cycle_entry_point='sampler', however will also be used if 
+            the sampling step. Required when starting from scratch with
+            cycle_entry_point='sampler', however will also be used if
             combine_trainer_outputs=True.
         initial_sampler_out: Any input similar to the outputs of the used
             `Sampler` which should be used by the `GroundTruthEvaluator`.
-            May for example be the path(s) to one or several .extxyz files 
-            that should be evaluated in the evaluation step. Required when 
-            starting from scratch with cycle_entry_point='evaluation', however 
+            May for example be the path(s) to one or several .extxyz files
+            that should be evaluated in the evaluation step. Required when
+            starting from scratch with cycle_entry_point='evaluation', however
             will also be used if combine_sampler_outputs=True.
         initial_evaluator_out: Any input similar to the outputs of the used
             `GroundTruthEvaluator` which should be used by the `ModelTrainer`.
@@ -386,11 +372,11 @@ class ActiveLearningHandler(ABC):
             that should be used in the training step. Required when starting
             from scratch with cycle_entry_point='training', however will also
             be used if combine_evaluator_outputs=True.
-        sampler_schedule: A `Schedule` instance encoding a schedule for the 
+        sampler_schedule: A `Schedule` instance encoding a schedule for the
             sampler
-        evaluator_schedule: A `Schedule` instance encoding a schedule for the 
+        evaluator_schedule: A `Schedule` instance encoding a schedule for the
             evaluator
-        trainer_schedule: A `Schedule` instance encoding a schedule for the 
+        trainer_schedule: A `Schedule` instance encoding a schedule for the
             trainer
         combine_sampler_outputs: If true, the outputs of all previous sampling
             steps (as well as initial_sampler_out) will be passed to the
@@ -414,10 +400,10 @@ class ActiveLearningHandler(ABC):
             files.
 
     Examples:
-        In general `ActiveLearningHandler` will create a folder structure like 
+        In general `ActiveLearningHandler` will create a folder structure like
         the following:
 
-            calchome 
+            calchome
             ├── 0
             │   ├── sampler
             │   ├── dft
@@ -442,9 +428,9 @@ class ActiveLearningHandler(ABC):
             ├── AL_progress.json
             └── al_loop.py
 
-        Here, `AL_progress.json` contains the bookkeeping. During each 
-        iteration, it updates a dictionary that contains information on the 
-        progress of the loop. Once a full loop is finished, it could look like 
+        Here, `AL_progress.json` contains the bookkeeping. During each
+        iteration, it updates a dictionary that contains information on the
+        progress of the loop. Once a full loop is finished, it could look like
         this:
 
         {
@@ -455,10 +441,10 @@ class ActiveLearningHandler(ABC):
         }
 
         where 'steps' indicate which actor still needs to be run (hence its 0
-        if it was already successfully run). Hence, if e.g. only the sampler 
-        finished successfully so far, the entry for the current iteration in 
+        if it was already successfully run). Hence, if e.g. only the sampler
+        finished successfully so far, the entry for the current iteration in
         `AL_progress.json` would look like this:
-        
+
         {
             'steps': [0, 1, 1],
             'sampler_output': [PATH_TO_SAMPLES],
@@ -512,6 +498,9 @@ class ActiveLearningHandler(ABC):
         self.calchome = Path(calchome)
 
         self.progress_file = self.calchome / "AL_progress.json"
+        self.sampler_in = []
+        self.evaluator_in = []
+        self.trainer_in = []
 
         self.get_rel = lambda x: Path(x).relative_to(self.calchome)
 
