@@ -163,7 +163,7 @@ def process_progress(
         steps = progress[last_iteration_key]["steps"]
         iteration_idx = last_iteration_key
 
-        if steps == [1, 1, 1]:
+        if steps in [[1, 1, 1], [1, 1, 0], [1, 0, 0]]:
             if not combine_trainer_outputs and last_iteration_key is not 0:
                 # not needed if combine is true since the previous generation
                 # trainer_output would have already been added above
@@ -173,7 +173,7 @@ def process_progress(
                 )
 
         # if configs from sampling were already collected
-        elif steps == [0, 1, 1]:
+        elif steps in [[0, 1, 1] or [0, 1, 0]]:
             append_or_extend(
                 progress[last_iteration_key]["sampler_output"], evaluator_in
             )
@@ -526,10 +526,18 @@ class ActiveLearningHandler(ABC):
                 self.combine_trainer_outputs,
             )
 
+            if self.iteration_idx + 1 == self.num_iterations and self.progress[
+                self.iteration_idx
+            ]["steps"] == [1, 1, 1]:
+                if cycle_exit_point == "sampler":
+                    self.progress[self.iteration_idx]["steps"] = [1, 0, 0]
+                elif cycle_exit_point == "evaluator":
+                    self.progress[self.iteration_idx]["steps"] = [1, 1, 0]
+
             steps = self.progress[self.iteration_idx]["steps"]
-            if steps == [1, 1, 1]:
+            if steps in [[1, 1, 1], [1, 1, 0], [1, 0, 0]]:
                 assert len(self.sampler_in) > 0
-            if steps == [0, 1, 1]:
+            if steps in [[0, 1, 1], [0, 1, 0]]:
                 assert len(self.evaluator_in) > 0
             if steps == [0, 0, 1]:
                 assert len(self.trainer_in) > 0
@@ -594,8 +602,8 @@ class ActiveLearningHandler(ABC):
                     self.trainer_in = initial_evaluator_out
                 self.progress.append({"steps": [0, 0, 1]})
 
-        """make sure that initial inputs are always part of lists if corresponding
-        combine parameter is set"""
+        # make sure that initial inputs are always part of lists if corresponding
+        # combine parameter is set
         if initial_trainer_out is not None and combine_trainer_outputs:
             initial_trainer_out = (
                 [self.move_file_to_home(initial_trainer_out)]
