@@ -16,17 +16,19 @@ from remote_handler.core.file_handler import LocalFileSystem, RemoteFileSystem
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
+# Directory paths
 data_dir = Path("/home/nico.unglert/code/jaxnest_dev/test/data")
-# homepath = Path("/share/theochem/nico.unglert/experiments/active_learning_reloaded/run3")
 homepath = Path(os.getcwd())
 
 remote_dir = homepath / "remote_dirs" / "remote_dir"
 os.makedirs(remote_dir.parent, exist_ok=True)
 
+# Add custom template directory for SLURM scripts
 remote_handler.core.slurm_utils.TEMPLATE_DIRS.append(
     str(data_dir / "active_learning/config_files")
 )
 
+# Instance local and remote file systems (with SLURM configurations)
 local_fs = LocalFileSystem(
     slurm_config_file=data_dir / "active_learning/config_files/datalab.json"
 )
