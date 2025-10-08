@@ -22,7 +22,8 @@ class Sampler(ABC):
     def update(
         self, calcdir: os.PathLike, model_file: os.PathLike, **kwargs
     ) -> None:
-        """Function updating the sampling logic for the current
+        """
+        Function updating the sampling logic for the current
         iteration. This in general can include file/directory creation or
         movement, as well as changes to the logic of the sampling itself, like
         e.g. parameters for a nested sampling run.
@@ -31,7 +32,7 @@ class Sampler(ABC):
             calcdir: The directory in `calchome` (see `ActiveLearningHandler`)
                 of the current iteration. This is passed here such that the
                 `Sampler` can eventually write into it.
-            collected_file: Path to a file containing parameters for a MLFF
+            model_file: Path to a file containing parameters for a MLFF
                 model used by `Sampler`. These are usually pickle files.
             **kwargs: Optional parameters returned from a schedule to modify
                 the sampling logic (see also `Schedule`)

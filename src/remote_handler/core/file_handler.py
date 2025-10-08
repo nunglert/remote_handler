@@ -273,6 +273,10 @@ class LocalFileSystem(FileSystemHandlerBase):
     """
     LocalFileSystem is a concrete implementation of FileSystemHandlerBase for
     handling file operations on the local filesystem.
+    Args:
+        slurm_config_file (str, optional): Path to a SLURM configuration file.
+            If provided, the configuration will be loaded and stored in the
+            `slurm_config` attribute. Defaults to None.
     """
 
     def __init__(self, slurm_config_file=None):

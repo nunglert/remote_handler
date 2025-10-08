@@ -28,15 +28,17 @@ remote_handler.core.slurm_utils.TEMPLATE_DIRS.append(
     str(data_dir / "active_learning/config_files")
 )
 
-# Instance local and remote file systems (with SLURM configurations)
+# Instance local file systems (with SLURM configurations)
 local_fs = LocalFileSystem(
     slurm_config_file=data_dir / "active_learning/config_files/datalab.json"
 )
 
+# Instance remote file system (with SLURM configurations)
 remote_fs = RemoteFileSystem(
     slurm_config_file=data_dir / "active_learning/config_files/lugus.json"
 )
 
+# Settings for the active learning loop
 cycle_entry_point = "evaluation"
 initial_model_file = None
 initial_sample_file = homepath / "exp_phases.extxyz"
@@ -49,6 +51,7 @@ initial_db_file = None
 stub = False
 loop_time = 1
 
+# Decide whether to use the stub executable or the real one
 if stub:
     ns_exe = "/home/nico.unglert/code/jaxnest_dev/test/data/active_learning/ns_run_stub.py"
 else:
@@ -153,7 +156,7 @@ def kwargs_consumer(kwargs):
     )
 
 
-sampler_schedule.test(kwargs_consumer)
+sampler_schedule.test(kwargs_consumer),
 sampler_schedule.visualize()
 
 

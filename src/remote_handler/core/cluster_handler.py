@@ -19,14 +19,19 @@ logger = logging.getLogger(__name__)
 
 
 class SlurmHandlerBase(ABC):
-    """Class to handle file transfers and computations via slurm on a remote
+    """
+    Class to handle file transfers and computations via slurm on a remote
     HPC cluster.
+
+    Methods to implement:
+    - submit: Submit a job array to slurm.
+    - write_jobfile: Write a slurm jobfile.
+    - check_status: Check the status of the slurm job.
+
 
     Args:
         jobname: Name of the job used in slurm.
         partition: Name of the partition on the HPC setup.
-        remote_machine: Name of remote machine (Needs to have a host entry in
-            your .ssh/ config)
         savepath: Root path wherein computations are saved on remote directory.
         conda_env: Conda environment that you want to use on the remote machine
             in your slurm batch job.
@@ -35,7 +40,7 @@ class SlurmHandlerBase(ABC):
             the number of GPU devices requested on a single node.
         slurm_header_add: This allows for adding additional header lines to the
             slurm file. You may also consider creating you own jinja templates
-            instead.An examples would be '# SBATCH --nodelist=SOME_NODE'
+            instead. An example would be '# SBATCH --nodelist=SOME_NODE'
         remote_fs: A FileSystemHandlerBase derived object loaded with a valid
             `slurm_config`.
         loop_time: The time interval which is used to check whether the job is
@@ -62,11 +67,14 @@ class SlurmHandlerBase(ABC):
         self.remote_fs = remote_fs
         self.loop_time = loop_time
 
+        # Check if the remote handler has a valid slurm_config
         assert (
             remote_fs.slurm_config is not None
         ), "Need slurm_config set in remote_fs!"
+        # Get remote machine and ssh command
         remote_machine = remote_fs.slurm_config["remote_machine"]
         self.ssh_command = f"ssh {remote_machine}"
+        # Get template file for the slurm scripts
         self.template_file = remote_fs.slurm_config["template"]
 
         self.is_written = False
@@ -95,9 +103,13 @@ class SlurmHandlerBase(ABC):
         pass
 
     def wait_until_finished(self):
+        """
+        Wait until the job is finished by periodically checking the status.
+        """
         while True:
             time.sleep(self.loop_time)
             status = self.check_status()
+            # If status is not None, the job is finished
             if status:
                 break
 
@@ -116,13 +128,19 @@ class SlurmJobHandler(SlurmHandlerBase):
         loop_time: float = 10.0,
         job_type_template: str = "body_single.sh.j2",
     ):
+        
+        # Name of the jobfile that will be created
         self.jobfile_name = jobfile_name
+        # Template for single jobs
         self.job_type_template = job_type_template
-
+        # Directory where the computation will be performed
         self.calcdir = Path(savepath)
+
+        # Check if in the remote machine the parent dir of 'savepath' exists
         if not remote_fs.exists(self.calcdir.parent):
             raise Exception("Parent dir of savepath needs to exist!")
 
+        # Set the path for the slurm script
         self.slurm_script_path = self.calcdir / self.jobfile_name
 
         super().__init__(
@@ -156,19 +174,28 @@ class SlurmJobHandler(SlurmHandlerBase):
         self.is_written = True
 
     def submit(self):
+        """
+        Submit the job to slurm.
+        """
+        # Check if the jobfile has been written
         assert (
             self.is_written
         ), "Can not submit job if batch file is not written yet!"
+        # Submit the job and get the job id
         self.pid = slurm_utils.submit_job(
             script_path=self.slurm_script_path,
             output_path=self.calcdir,
             ssh_command=self.ssh_command,
             cwd=self.calcdir,
         )
+
         logger.info(f"Submitted slurm job with pid {self.pid}")
         self.is_submitted = True
 
     def check_status(self):
+        """
+        Check the status of the job via squeue.
+        """
         assert self.is_submitted, "Can not check status of unsubmitted job!"
         logger.debug("Checking slurm job status...")
         return slurm_utils.check_job_status_squeue(

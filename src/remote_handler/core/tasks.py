@@ -38,6 +38,20 @@ class RemoteTask(ABC):
     and optionally:
     - how can I properly check (on top of slurm) whether your job finished?
 
+    Methods that need to be implemented are:
+    - `allocate_data`: Logic for the allocation of files on the remote file
+        system required for the task.
+    - `submit`: Logic for the submission of the job. This can be a simple
+        `subprocess.run(...)` call, but can also include more elaborate slurm
+        handling via `remote_handler.core.cluster_handler`.
+    - `collect_results`: Logic for the collection of results. This can be a
+        simple copy of files from the remote machine to the host, but can also
+        include parsing of files and returning only the relevant information.
+    - `finish_check` (optional): Logic for an additional check whether the job
+        finished properly. This is useful, as slurm does not know anything about
+        your job itself. Hence, this can be a good complementary way of checking
+        whether a job has really finished.
+
     Args:
         logfile: A log file on the host machine where output is printed
         savepath: The path on the remote system where computations should be
@@ -59,7 +73,9 @@ class RemoteTask(ABC):
     ):
         assert not "/" in str(logfile), "logfile should only be filename!"
 
-        self.local_fs = LocalFileSystem()
+        # Instatiate LocalFileSystem to handle local files without slurm_config_file
+        self.local_fs = LocalFileSystem() 
+        # Save the provided remote_fs
         self.remote_fs = remote_fs
 
         self.savepath = savepath
@@ -67,22 +83,27 @@ class RemoteTask(ABC):
 
         if savepath is not None:
             parent, child = os.path.split(savepath)
+
+            # Check if the parent directory exists on the remote system
             if not self.remote_fs.exists(parent):
                 raise Exception(
                     f"The parent of {savepath=} must already exist on the remote system!"
                 )
-
+            # Check if the directory already exists on the remote system
             if self.remote_fs.exists(savepath):
                 if not collect_only:
                     logger.warning(
-                        "savepath is already existing. A new directory with "
+                        "Savepath already exists. A new directory with "
                         "a tag will be created to prevent overwriting!"
                     )
+
+                    # TODO: use the function from file_utils!
                     random_string = "".join(
                         random.choices(
                             string.ascii_letters + string.digits, k=10
                         )
                     )
+                    
                     working_dir, filename = os.path.split(savepath)
                     savetag = tag_path(
                         working_dir, filename, is_directory=True
@@ -105,14 +126,19 @@ class RemoteTask(ABC):
                         "machine"
                     )
                 logger.info("Creating the savepath at requested location")
+                # Create the directory on the remote system
                 self.remote_fs.makedirs(self.savepath, exist_ok=True)
         else:
             logger.info(
-                "No savepath provided, a temporary director will be created"
+                "No savepath provided, a temporary directory will be created"
             )
-            self.savepath = self.remote_fs.create_tempdir()
-            logger.info(f"{self.savepath=}")
 
+            # Create a temporary directory on the remote system
+            self.savepath = self.remote_fs.create_tempdir()
+            # Print the path of the temporary directory
+            logger.info(f"Temporary directory created at: {self.savepath}")
+
+        # Instantiate the logger on the remote machine, at 'savepath' with 'logfile' name
         self.logger = SimpleLogger(Path(self.savepath) / logfile)
 
         super().__init__()
@@ -133,7 +159,8 @@ class RemoteTask(ABC):
 
     @abstractmethod
     def submit(self):
-        """Function submitting the slurm job(s). This should depend on how
+        """
+        Function submitting the slurm job(s). This should depend on how
         the slurm logic was handled in `setup_slurm`.
         """
         pass
@@ -175,15 +202,17 @@ class RemoteTask(ABC):
 
 
 class SingleScriptTask(RemoteTask):
-    """This is a task that consists of running a python script with some input
-    file using a single slurm job. The `savepath` defines the computation
+    """
+    This class handles the submitting of a single script job, able to run a 
+    python script with an input file. The `savepath` defines the computation
     directory on the remote machine and all output files will be written there.
+    
     This simple implementation just copies the whole computation directory
     to the `local_savepath` if the results are collected by `collect_results`.
 
     Args:
-        script_file:
-        input_file:
+        script_file: Path to a python script that performs the computation.
+        input_file: Path to an input file that is read by the script.
         local_savepath: Path where finished results will be copied from remote
             to local machine
         remote_fs: FileSystemHandlerBase derived object. Needs to be
@@ -191,17 +220,20 @@ class SingleScriptTask(RemoteTask):
         logfile: Path to the logfile of the task.
         remote_savepath: Path on remote machine, where computation will be
             performed. Will try to use temporary dir if None
-        collect_only: If True, results may be overwritten if the
-            `remote_savepath` already exists. If False a new savepath will be
-            created with a tag to prevent overwriting.
+        collect_only: If True, results are collected from `remote_savepath`
+            if it already exists. If False a new savepath will be created with
+            a tag to prevent overwriting.
         loop_time: The time interval which is used to check whether the job is
             completed.
         jobname: Name of the job used in slurm.
         n_processors: Number of processors that are requested per job. For CPU
             this refers to n_tasks, where as for GPU on datalab this refers to
             the number of GPU devices requested on a single node.
-        jobfile_name:
-    """
+        jobfile_name: Name of the slurm job script that is created to submit the job.
+        job_type_template: The template that is used to create the slurm job
+            script. This needs to be present in one of the `TEMPLATE_DIRS` of
+            `remote_handler.core.slurm_utils`.
+        """
 
     def __init__(
         self,
@@ -218,20 +250,25 @@ class SingleScriptTask(RemoteTask):
         jobfile_name: str = "run_slurm.sh",
         job_type_template: os.PathLike = "body_single.sh.j2",
     ):
+        # Check if the remote handler has a valid slurm_config
         assert (
             remote_fs.slurm_config is not None
         ), "remote_fs needs slurm_config!"
 
+        # If no remote_savepath is provided, fall back to the savepath from
+        # the slurm_config
         if remote_savepath is None:
             remote_savepath = remote_fs.slurm_config["savepath"]
 
-        # Need to init base classs first, since it handles savepath
+        # Use the base class to handle savepath creation and logging
         super().__init__(
             logfile=logfile,
             savepath=remote_savepath,
             collect_only=collect_only,
             remote_fs=remote_fs,
         )
+
+        # The directory where the computation will be performed
         self.calcdir = Path(self.savepath)
 
         self.script_file = script_file
@@ -239,7 +276,6 @@ class SingleScriptTask(RemoteTask):
         self.loop_time = loop_time
         self.local_savepath = local_savepath
 
-        # self.slurm_path = None
         self.slurm_handler = cluster_handler.SlurmJobHandler(
             jobname=jobname,
             partition=remote_fs.slurm_config["partition"],
