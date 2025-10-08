@@ -1,9 +1,0 @@
-{
-    "remote_machine": "lugus",
-    "partition": "normal",
-    "savepath": "/home/nunglert/dump/remote_handler",
-    "conda_env": "cppjax",
-    "n_processors": 1,
-    "slurm_header_add": "",
-    "jobfile_name": "run_slurm.sh"
-}
