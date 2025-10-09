@@ -293,35 +293,58 @@ class SingleScriptTask(RemoteTask):
         logger.info(f"calcdir: {str(self.calcdir)}")
 
     def copy_file(self, local_path):
+        """
+        Copies a local file to the remote calculation directory.
+        Args:
+            local_path: Path to the local file.
+        Returns:
+            The path to the file on the remote machine.
+        """
+        # Combine the remote calculation directory with the filename
         moved_path = self.calcdir / os.path.split(local_path)[-1]
+        # Copy the file to the remote machine
         self.remote_fs.put(local_path, moved_path)
         return moved_path
 
     def allocate_data(self):
+        """Allocate the script and input file on the remote machine and
+        prepare the slurm job script.
+        """
         if self.script_file is not None:
             self.script_file_remote = self.copy_file(self.script_file)
         else:
             self.script_file_remote = None
 
         self.input_file_remote = self.copy_file(self.input_file)
+        
+        # After copying the files, write the slurm job script on the remote machine
         self.slurm_handler.write_jobfile(
             self.input_file_remote, self.script_file_remote
         )
 
     def submit(self):
+        """Submit the slurm job and wait until it is finished."""
         self.slurm_handler.submit()
         self.slurm_handler.wait_until_finished()
 
     def collect_results(self):
+        """Copy the entire calculation directory from the remote machine to
+        the local machine."""
         file_utils.secure_declare_path(
             self.local_savepath, move=True, is_directory=True
         )
+        # Copy the content of the remote calculation directory inside the
+        # local_savepath directory
         self.remote_fs.get_dir(self.calcdir, self.local_savepath)
 
     def finish_check(self):
+        """Check for the presence of the 'is_finished.info' file in the
+        calculation directory on the remote machine to confirm that the job
+        has finished successfully."""
         return self.remote_fs.exists(self.calcdir / "is_finished.info")
 
     def run(self):
+        """Run the entire workflow: allocate data, submit job, and collect results."""
         self.allocate_data()
         self.submit()
         self.collect_results()
@@ -337,6 +360,11 @@ class Writeable(ABC):
         you distribute them to 10 individual jobs in an array. Then each job of
         the array will require 100 configurations, which you will have to
         prepare in the directory of the job.
+
+        Methods that need to be implemented are:
+        - `write`: Logic for writing the content to disk. This can be a simple
+            write to a file, but can also include more elaborate logic like
+            writing an ASE trajectory file.
     """
 
     content: Any
@@ -370,7 +398,7 @@ class Reader(ABC):
 class ArrayScriptTask(RemoteTask):
     """This is a task that consists of running the same script for a bunch of
     inputs using the slurm array functionality. The `remote_savepath` is the
-    parent directory of all computatins run on the remote machine. The idea
+    parent directory of all computations run on the remote machine. The idea
     behind this implementation is, that you prepare a indexed directory for
     each individual job of the array (like remote_savepath/0,
     remote_savepath/1, ...). The slurm array then iterates through all of these
@@ -383,24 +411,33 @@ class ArrayScriptTask(RemoteTask):
     overcharging slurm.
 
     Args:
-        script_file: Python script that performs the computation.
         local_savepath: Path where finished results will be copied from remote
             to local machine
         remote_fs: FileSystemHandlerBase derived object. Needs to be
             initialized with valid slurm_config.
+        python_script_file: Python script that performs the computation.
+        individual_ressources: A list of lists of Writeable objects that are
+            needed for the individual jobs of the array. 
+        shared_ressources: A list of paths to files that are copied to the
+            remote computation directory, but are not specific to one job of
+            the array. This can be e.g. a potential file that is read by the
+            script.
         logfile: Path to the logfile of the task.
         remote_savepath: Path on remote machine, where computation will be
             performed
-        collect_only: If True, results may be overwritten if the
-            `remote_savepath` already exists. If False a new savepath will be
-            created with a tag to prevent overwriting.
+        collect_only: If True, results are collected from `remote_savepath`
+            if it already exists. If False a new savepath will be created with
+            a tag to prevent overwriting.
+        num_parallel: Number of array jobs that are submitted in parallel.
         loop_time: The time interval which is used to check whether the job is
             completed.
         jobname: Name of the job used in slurm.
         n_processors: Number of processors that are requested per job. For CPU
             this refers to n_tasks, where as for GPU on datalab this refers to
             the number of GPU devices requested on a single node.
-        jobfile_name:
+        jobfile_name: Name of the slurm job script that is created to submit the job.
+        slurm_header_add: Additional lines that are added to the header of the
+            slurm job script.
     """
 
     def __init__(
@@ -420,10 +457,12 @@ class ArrayScriptTask(RemoteTask):
         jobfile_name: str = "run_slurm.sh",
         slurm_header_add: str = "",
     ):
+        # Check if the remote handler has a valid slurm_config
         if remote_fs.slurm_config is None:
             raise Exception("remote_fs needs slurm_config!")
 
         if individual_ressources:
+            # Save the number of individual jobs in the array
             self.num_array_tasks = len(individual_ressources[0])
 
         if remote_savepath is None:
@@ -437,14 +476,18 @@ class ArrayScriptTask(RemoteTask):
             collect_only=collect_only,
             remote_fs=remote_fs,
         )
+
+        # The directory where the computation will be performed
         self.rootpath = Path(self.savepath)
 
+        # Store the provided arguments
         self.python_script_file = python_script_file
         self.individual_ressources = individual_ressources
         self.shared_ressources = shared_ressources
         self.loop_time = loop_time
         self.local_savepath = local_savepath
 
+        # Instantiate the slurm handler for array jobs
         self.slurm_handler = cluster_handler.SlurmArrayHandler(
             jobname=jobname,
             partition=remote_fs.slurm_config["partition"],
@@ -466,11 +509,20 @@ class ArrayScriptTask(RemoteTask):
         logger.info(f"rootpath: {str(self.rootpath)}")
 
     def copy_file(self, local_path):
+        """Copies a local file to the remote rootpath directory.
+        Args:
+            local_path: Path to the local file.
+        Returns:
+            The path to the file on the remote machine.
+        """
         moved_path = self.rootpath / os.path.split(local_path)[-1]
         self.remote_fs.put(local_path, moved_path)
         return moved_path
 
     def allocate_data(self, slurm_only=False):
+        """Allocate the script and input files on the remote machine and
+        prepare the slurm job script.
+        """
         assert (
             self.python_script_file is not None
         ), "Need self.python_script_file"
@@ -484,8 +536,9 @@ class ArrayScriptTask(RemoteTask):
             assert len(content) == len(
                 self.individual_ressources[0]
             ), "args need to have same length!"
-
+        # Copy the python script to the calculation directory on the remote machine
         self.script_file_remote = self.copy_file(self.python_script_file)
+        # Write the slurm job script on the remote machine
         self.slurm_handler.write_jobfile(
             self.script_file_remote, self.num_array_tasks
         )
@@ -493,29 +546,41 @@ class ArrayScriptTask(RemoteTask):
         if not slurm_only:
             if self.shared_ressources:
                 for ressource in self.shared_ressources:
+                    # Copy each shared resource to the remote calculation directory
                     self.copy_file(ressource)
 
             self.all_calcpaths = []
             for idx, data_at_idx in enumerate(
                 zip(*self.individual_ressources)
             ):
+                # Create a directory for each job in the array
                 calcpath = self.calcdir / f"{idx}"
                 self.remote_fs.makedirs(calcpath)
+
+                # For each Writeable object, call its write method to write its content
+                # to the respective calculation directory
                 for data in data_at_idx:
                     data.write(calcpath)
+                # Store the path to the calculation directory of this job
                 self.all_calcpaths.append(calcpath)
 
     def submit(self):
+        # Submit the slurm job and wait until it is finished.
         self.slurm_handler.submit()
         self.slurm_handler.wait_until_finished()
 
     def collect_results(self):
+        # Copy the entire rootpath directory from the remote machine to
+        # the local machine.
         file_utils.secure_declare_path(
             self.local_savepath, move=True, is_directory=True
         )
         self.remote_fs.get_dir(self.rootpath, self.local_savepath)
 
     def finish_check(self):
+        """Check for the presence of the 'is_finished.info' file in each
+        calculation directory on the remote machine to confirm that all jobs
+        have finished successfully."""
         assert self.all_calcpaths, "There are no calcpaths to check!"
 
         for calcpath in self.all_calcpaths:

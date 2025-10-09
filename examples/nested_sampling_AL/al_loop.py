@@ -65,6 +65,14 @@ temp = input_parser.raw_parse(
     parse_only=True,
 )
 
+#################################################
+# Set up the active learning components
+#################################################
+
+# SAMPLER
+
+# Nested sampling trajectory sampler which runs jaxnest.ns_run.py on the remote machine
+# and collects samples from the nested sampling trajectories for the active learning loop
 ns_traj_sampler = ns_active_learning.NSTrajectorySampler(
     ns_exe=ns_exe,
     remote_fs=local_fs,
@@ -75,6 +83,9 @@ ns_traj_sampler = ns_active_learning.NSTrajectorySampler(
     loop_time=loop_time,
 )
 
+# EVALUATOR
+# VASP evaluator which runs single point DFT calculations on the remote machine
+# to evaluate the energies of the collected samples
 vasp_evaluator = ns_active_learning.VASPEvaluator(
     singlepoint_script=data_dir / "active_learning" / "dft_singlepoint.py",
     remote_fs=remote_fs,
@@ -102,7 +113,7 @@ vasp_evaluator = ns_active_learning.VASPEvaluator(
     loop_time=loop_time,
 )
 
-neuralil_trainer = ns_active_learning.NeuralilILTrainer(
+neuralil_trainer = ns_active_learning.NeuralILTrainer(
     training_script=data_dir / "active_learning" / "train_nnff.py",
     remote_fs=local_fs,
     remote_savepath=remote_dir,
@@ -119,7 +130,10 @@ neuralil_trainer = ns_active_learning.NeuralilILTrainer(
     loop_time=loop_time,
 )
 
-
+# SAMPLER SCHEDULE
+# Schedule for the nested sampling trajectory sampler which changes the
+# number of walkers and the MC_cell_P parameter in the ns.inp file
+# as the active learning loop progresses
 class SamplerSchedule(active_learning_base.Schedule):
     def get_kwargs(self, iteration_idx):
         if iteration_idx == 0:
@@ -144,6 +158,7 @@ class SamplerSchedule(active_learning_base.Schedule):
 
 
 num_iterations = 20
+# Instantiate the sampler schedule with the desired number of iterations
 sampler_schedule = SamplerSchedule(num_iterations)
 
 
@@ -161,16 +176,16 @@ sampler_schedule.visualize()
 
 
 al_handler = active_learning_base.ActiveLearningHandler(
-    sampler=ns_traj_sampler,
-    evaluator=vasp_evaluator,
-    trainer=neuralil_trainer,
-    sampler_schedule=sampler_schedule,
-    calchome=homepath,
-    initial_model_file=initial_model_file,
-    initial_db_file=initial_db_file,
-    initial_sample_file=initial_sample_file,
-    num_iterations=num_iterations,
-    cycle_entry_point=cycle_entry_point,
+    sampler=ns_traj_sampler,                 # Where to get new samples from (Nested sampling trajectories)
+    evaluator=vasp_evaluator,                # How to evaluate the samples (DFT single point calculations)
+    trainer=neuralil_trainer,                # How to train the model (NeuralIL)
+    sampler_schedule=sampler_schedule,       # How to change the sampler parameters as the AL loop progresses
+    calchome=homepath,                       # Home directory where the AL loop is run from
+    initial_model_file=initial_model_file,   # Initial model file (None if starting from scratch)
+    initial_db_file=initial_db_file,         # Initial database file (None if starting from scratch)
+    initial_sample_file=initial_sample_file, # Initial sample file (extxyz with structures to add to the initial database)
+    num_iterations=num_iterations,           # Number of active learning iterations
+    cycle_entry_point=cycle_entry_point      # Entry point for the active learning cycle ("sampling" or "evaluation")
 )
 
 al_handler.run()

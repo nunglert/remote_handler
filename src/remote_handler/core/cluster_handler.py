@@ -142,6 +142,7 @@ class SlurmJobHandler(SlurmHandlerBase):
 
         # Set the path for the slurm script
         self.slurm_script_path = self.calcdir / self.jobfile_name
+        # TODO create output and calcdir directories?
 
         super().__init__(
             jobname,
@@ -155,6 +156,13 @@ class SlurmJobHandler(SlurmHandlerBase):
         )
 
     def write_jobfile(self, input_file, python_script_path):
+        """
+        Write the slurm jobfile for a single job.
+        Args:
+            input_file: Path to the input file that is used in the job.
+            python_script_path: Path to the python script that is executed in
+                the job.
+        """
         self.slurm_str = slurm_utils.get_slurm_str(
             input_file,
             python_script_path,
@@ -204,6 +212,34 @@ class SlurmJobHandler(SlurmHandlerBase):
 
 
 class SlurmArrayHandler(SlurmHandlerBase):
+    """
+    Class to handle job arrays via slurm on a remote HPC cluster.
+    
+    Args:
+        jobname: Name of the job used in slurm.
+        partition: Name of the partition on the HPC setup.
+        savepath: Root path wherein computations are saved on remote directory.
+        conda_env: Conda environment that you want to use on the remote machine
+            in your slurm batch job.
+        n_processors: Number of processors that are requested per job. For CPU
+            this refers to n_tasks, where as for GPU on datalab this refers to
+            the number of GPU devices requested on a single node.
+        remote_fs: A FileSystemHandlerBase derived object loaded with a valid
+            `slurm_config`.
+        slurm_header_add: This allows for adding additional header lines to the
+            slurm file. You may also consider creating you own jinja templates
+            instead. An example would be '# SBATCH --nodelist=SOME_NODE'
+        jobfile_name: Name of the jobfile that will be created.
+        loop_time: The time interval which is used to check whether the job is
+            completed.
+        job_type_template: Template for array jobs.
+        num_parallel: Maximum number of tasks that are submitted in parallel.
+            It is the number after the '%' in the '#SBATCH --array=0-N%num_parallel'
+        map_indices: Optional list of indices that are used to map the array
+            job indices to specific tasks. For example if you have 100 tasks
+            but only want to run tasks 0, 2, 5, you can set map_indices=[0, 2, 5].
+        
+    """
     def __init__(
         self,
         jobname: str,
@@ -219,16 +255,19 @@ class SlurmArrayHandler(SlurmHandlerBase):
         num_parallel: int = 10,
         map_indices: Optional[list[int]] = None,
     ):
+        
         self.jobfile_name = jobfile_name
         self.job_type_template = job_type_template
         self.num_parallel = num_parallel
         self.map_indices = map_indices
 
         self.rootpath = Path(savepath)
+        # Check if in the remote machine the parent dir of 'savepath' exists
         if not remote_fs.exists(self.rootpath.parent):
             raise Exception("Parent dir of savepath needs to exist!")
-
+        # Set the path for the slurm script
         self.slurm_script_path = self.rootpath / self.jobfile_name
+        # Create output and calcdir directories
         self.output_path = self.rootpath / "slurm_output"
         self.calcdir = self.rootpath / "calcdirs"
         remote_fs.makedirs(self.output_path, exist_ok=True)
@@ -246,7 +285,15 @@ class SlurmArrayHandler(SlurmHandlerBase):
         )
 
     def write_jobfile(self, python_script_path, num_array_tasks):
+        """
+        Write the slurm jobfile for the array job.
+        Args:
+            python_script_path: Path to the python script that is executed in
+                each array job.
+            num_array_tasks: Total number of array tasks.
+        """
         self.num_array_tasks = num_array_tasks
+        # Generate the slurm string
         self.slurm_str = slurm_utils.get_array_slurm_str(
             calcdir=self.calcdir,
             python_script_path=python_script_path,

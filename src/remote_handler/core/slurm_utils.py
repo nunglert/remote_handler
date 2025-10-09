@@ -190,14 +190,35 @@ def get_array_slurm_str(
     slurm_header_add="",
     per_task=1,
 ):
-    """The directories contained in TEMPLATE_DIRS will be scanned in order
-    until the first succesful hit of a `header_template` file."""
+    """
+    Get the SLURM script for an array job as a string.
+    The directories contained in TEMPLATE_DIRS will be scanned in order
+    until the first succesful hit of a `header_template` file.
+    Args:
+        calcdir (os.PathLike): Path to the calculation directory.
+        python_script_path (os.PathLike): Path to the python script to be executed.
+        num_array_tasks (int, optional): Number of tasks in the job array. Defaults to 1.
+        num_parallel (int, optional): Maximum number of tasks to run in parallel. Defaults to 10.
+        jobname (str, optional): Name of the job used in slurm. Defaults to "job".
+        partition (str, optional): Name of the partition on the HPC setup. Defaults to "normal".
+        n_processors (int, optional): Number of CPU cores to request. Defaults to 8.
+        conda_env (str, optional): Name of the conda environment to activate. Defaults to "jaxnest".
+        map_indices (Optional[np.ndarray], optional): Specific indices for the array tasks.
+            If None, defaults to np.arange(num_array_tasks). Defaults to None.
+        header_template (str, optional): Template file for the slurm header. Defaults to "lugus.sh.j2".
+        job_type_template (str, optional): Template file for the job body. Defaults to "body_array.sh.j2".
+        slurm_header_add (str, optional): Additional lines to add to the slurm header. Defaults to "".
+        per_task (int, optional): Number of array tasks per job. Defaults to 1.
+    Returns:
+        str: The rendered SLURM script as a string.
+    """
     if map_indices is None:
         map_indices = np.arange(num_array_tasks)
 
+    # Create a Jinja2 environment with the custom loader to have logging
     env = Environment(loader=LoggingFileSystemLoader(TEMPLATE_DIRS))
     template = env.get_template(header_template)
-
+    # Render the template with the provided parameters
     slurm_str = template.render(
         calcdir=calcdir,
         python_script_path=python_script_path,
