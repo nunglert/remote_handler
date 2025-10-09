@@ -84,6 +84,7 @@ ns_traj_sampler = ns_active_learning.NSTrajectorySampler(
 )
 
 # EVALUATOR
+
 # VASP evaluator which runs single point DFT calculations on the remote machine
 # to evaluate the energies of the collected samples
 vasp_evaluator = ns_active_learning.VASPEvaluator(
@@ -113,6 +114,10 @@ vasp_evaluator = ns_active_learning.VASPEvaluator(
     loop_time=loop_time,
 )
 
+# TRAINER
+
+# NeuralIL trainer which runs training of a NeuralIL model on the remote machine
+# using the structures evaluated with DFT in the active learning loop
 neuralil_trainer = ns_active_learning.NeuralILTrainer(
     training_script=data_dir / "active_learning" / "train_nnff.py",
     remote_fs=local_fs,
@@ -131,6 +136,7 @@ neuralil_trainer = ns_active_learning.NeuralILTrainer(
 )
 
 # SAMPLER SCHEDULE
+
 # Schedule for the nested sampling trajectory sampler which changes the
 # number of walkers and the MC_cell_P parameter in the ns.inp file
 # as the active learning loop progresses
@@ -161,7 +167,7 @@ num_iterations = 20
 # Instantiate the sampler schedule with the desired number of iterations
 sampler_schedule = SamplerSchedule(num_iterations)
 
-
+# Function to update the ns.inp file with the new parameters from the schedule
 def kwargs_consumer(kwargs):
     ns_params = deepcopy(ns_traj_sampler.ns_params)
     update_default_args(kwargs, ns_params)
@@ -170,8 +176,8 @@ def kwargs_consumer(kwargs):
         args_dict=ns_params, n_gpu_parallel=n_gpu_parallel, parse_only=True
     )
 
-
-sampler_schedule.test(kwargs_consumer),
+# Test the kwargs consumer function and visualize the schedule
+sampler_schedule.test(kwargs_consumer)
 sampler_schedule.visualize()
 
 

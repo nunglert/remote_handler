@@ -183,9 +183,10 @@ class Schedule(ABC):
         self.check()
 
     def visualize(self, column_width: int = 20) -> None:
-        """Visualizes the parameter that change during the defined schedule.
+        """
+        Visualizes the parameter that change during the defined schedule.
         It is recommended to check this before actually starting an active
-        learning run to see whether you actually implemented what you wanted..
+        learning run to see whether you actually implemented what you wanted.
 
         Args:
             column_width: Width of the column in which parameter is printed to
@@ -201,6 +202,7 @@ class Schedule(ABC):
             300                 400                 2 4 6 8 10 12 14 16
             400                 600                 2 4 6 8 10 12 14 16
         """
+        # Get the parameters names
         params = self.get_kwargs(0)
         header_str = ""
         for k in params.keys():
@@ -208,6 +210,7 @@ class Schedule(ABC):
         logger.info(header_str)
 
         for i in range(self.num_iterations):
+            # Get the parameters values
             params = self.get_kwargs(i)
 
             iter_str = ""
@@ -216,7 +219,8 @@ class Schedule(ABC):
             logger.info(iter_str)
 
     def check(self) -> None:
-        """Checks whether at each iteration the returned parameters are the
+        """
+        Checks whether at each iteration the returned parameters are the
         same."""
         params = self.get_kwargs(0)
         for i in range(self.num_iterations):
@@ -228,6 +232,7 @@ class Schedule(ABC):
                     f"incorrect. Failed due to {e}"
                 )
 
+            # Check that the same parameters are returned at each iteration
             if kwargs.keys() != params.keys():
                 raise Exception(
                     "Schedule needs to return the same parameters for every "
@@ -411,20 +416,28 @@ class ActiveLearningHandler(ABC):
         trainer_schedule: Optional[Schedule] = None,
     ) -> None:
         super().__init__()
+        # Main objects of the AL loop
         self.sampler = sampler
         self.evaluator = evaluator
         self.trainer = trainer
+
+        # Schedules for the AL loop
         self.sampler_schedule = sampler_schedule
         self.evaluator_schedule = evaluator_schedule
         self.trainer_schedule = trainer_schedule
 
+        # Maximum number of iterations
         self.num_iterations = num_iterations
+        # Main path where the AL loop is run from
         self.calchome = calchome
 
+        # Tracking of the progress of the AL loop
         self.progress_file = self.calchome / "AL_progress.json"
-
+        
+        # Function to get paths relative to calchome
         self.get_rel = lambda x: Path(x).relative_to(self.calchome)
 
+        # Check whether we continue a crashed run or start from scratch
         if os.path.exists(self.progress_file):
             logger.info("Continuing crashed run...")
             with open(self.progress_file, "r") as f:
@@ -453,6 +466,7 @@ class ActiveLearningHandler(ABC):
                     "Usually each AL iteration adds one db_file. Take care.."
                 )
         else:
+            #### Start from scratch
             logger.info(
                 f"Starting from scratch. Entry at {cycle_entry_point}..."
             )
@@ -461,23 +475,33 @@ class ActiveLearningHandler(ABC):
             self.progress = []
             self.iteration_idx = 0
 
+            # Entry point of the AL loop
             if cycle_entry_point == "sampler":
+                # We need an initial model file to start sampling
                 assert initial_model_file is not None
+                # Move the initial model file to the working directory
                 initial_model_file = self.move_file_to_home(initial_model_file)
+                # Set the model file path relative to calchome
                 self.model_file = self.get_rel(initial_model_file)
                 self.progress.append({"steps": [1, 1, 1]})
 
             elif cycle_entry_point == "evaluation":
+                # We need an initial sample file to start evaluation
                 assert initial_sample_file is not None
+                # Move the initial sample file to the working directory
                 initial_sample_file = self.move_file_to_home(
                     initial_sample_file
                 )
+                # Set the collected file path relative to calchome
                 self.collected_file = self.get_rel(initial_sample_file)
                 self.progress.append({"steps": [0, 1, 1]})
 
             elif cycle_entry_point == "training":
+                # We need an initial db file to start training
                 assert initial_db_file is not None
+                # Move the initial db file to the working directory
                 initial_db_file = self.move_file_to_home(initial_db_file)
+                # Set the db file path relative to calchome
                 self.db_files.append(self.get_rel(initial_db_file))
                 self.progress.append({"steps": [0, 0, 1]})
 
@@ -487,12 +511,15 @@ class ActiveLearningHandler(ABC):
                     "Use either sampler, evaluation or training"
                 )
 
+        # Fill the remaining iterations with full cycles
         self.remaining_iterations = (
             self.num_iterations - len(self.progress) + 1
         )
         if self.remaining_iterations <= 0:
             raise Exception("No iterations left, increase num_iterations!")
 
+        # Create directories for sampled/evaluated configs and trained models
+        # if they do not exist yet
         self.sampled_configs_dir = self.calchome / "sampled_configs"
         self.evaluated_configs_dir = self.calchome / "evaluated_configs"
         self.trained_models_dir = self.calchome / "trained_models"
@@ -503,6 +530,7 @@ class ActiveLearningHandler(ABC):
         ]:
             os.makedirs(path, exist_ok=True)
 
+        # Define how the last cycle should look like
         if cycle_exit_point == "sampler":
             self.last_cycle_steps = [1, 0, 0]
         elif cycle_exit_point == "evaluation":
@@ -521,8 +549,9 @@ class ActiveLearningHandler(ABC):
         )
 
     def move_file_to_home(self, file):
+        """Moves a file to calchome if it is not already there."""
         if not Path(file).is_relative_to(self.calchome):
-            file_home = self.calchome / os.path.split(file)[1]
+            file_home = self.calchome / os.path.split(file)[1] # should't be there a -1?
             shutil.copy(file, file_home)
             file = file_home
         return file
@@ -535,20 +564,35 @@ class ActiveLearningHandler(ABC):
     def sample(self, **kwargs) -> None:
         """Runs the Sampler, requiring `self.model_file` and updating
         `self.collected_file`
-
+        It calls `self.sampler.update` to prepare the sampling and then
+        retrieves the sampled configurations with `self.sampler.get_sampled_configs`.
+        The sampled configurations are written to
+        `sampled_configs/samples_{iteration_idx}.extxyz`
+        
         Args:
             **kwargs: kwargs passed to the `update` function of `sampler`.
         """
+        # Check if model file exists
         assert self.model_file is not None
         logger.info("SAMPLING...")
+
+        # Call the sampler to prepare the directory, the submission script etc.
+        # and pass the model file
         self.sampler.update(
             self.current_iter_dir, self.calchome / self.model_file, **kwargs
         )
+
+        # Get the list of atoms objects sampled by the sampler
         sampled_configs = self.sampler.get_sampled_configs()
+        
         self.collected_file = self.get_rel(
             self.sampled_configs_dir / f"samples_{self.iteration_idx}.extxyz"
         )
+        # Write the sampled configurations to file in a specific directory
+        # together with the iteration index
         ase.io.write(self.calchome / self.collected_file, sampled_configs)
+
+        # Update the progress file
         self.progress[self.iteration_idx]["steps"] = [0, 1, 1]
         self.progress[self.iteration_idx]["collected_file"] = str(
             self.collected_file
@@ -558,24 +602,39 @@ class ActiveLearningHandler(ABC):
     def evaluate(self, **kwargs) -> None:
         """Runs the GroundTruthEvaluator, requiring `self.model_file` and
         updating `self.db_files`
+        It calls `self.evaluator.update` to prepare the evaluation and then
+        retrieves the evaluated configurations with
+        `self.evaluator.get_evaluated_configs`.
+        The evaluated configurations are written to
+        `evaluated_configs/evaluated_{iteration_idx}.extxyz`.
 
         Args:
             **kwargs: kwargs passed to the `update` function of `evaluator`.
         """
+        # Check if collected file exists
         assert self.collected_file is not None
         logger.info("EVALUATING GROUND TRUTH...")
+
+        # Call the evaluator to prepare the directory, the submission script
+        # etc. and pass the collected file
         self.evaluator.update(
             self.current_iter_dir,
             self.calchome / self.collected_file,
             **kwargs,
         )
+        # Get the list of atoms objects evaluated by the evaluator
         evaluated_configs = self.evaluator.get_evaluated_configs()
+
+        # Write the evaluated configurations to file in a specific directory
+        # together with the iteration index
         evaluated_file = self.get_rel(
             self.evaluated_configs_dir
             / f"evaluated_{self.iteration_idx}.extxyz"
         )
         ase.io.write(self.calchome / evaluated_file, evaluated_configs)
         self.db_files.append(evaluated_file)
+        
+        # Update the progress file
         self.progress[self.iteration_idx]["db_file"] = str(evaluated_file)
         self.progress[self.iteration_idx]["steps"] = [0, 0, 1]
         self.update_progress_file()
@@ -583,61 +642,81 @@ class ActiveLearningHandler(ABC):
     def retrain(self, **kwargs) -> None:
         """Runs the ModelTrainer, requiring `self.db_files` and updating
         `self.model_file`
+        It calls `self.trainer.update` to prepare the training and then
+        retrieves the trained model with `self.trainer.get_trained_model`.
+        The trained model is copied to `trained_models/model_{iteration_idx}.pkl`
+        At every iteration, all db_files are used for training.
 
         Args:
             **kwargs: kwargs passed to the `update` function of `trainer`.
         """
+        # Check if db files exist
         assert self.db_files
         logger.info("RETRAINING MODEL...")
+
+        # Call the trainer to prepare the directory, the submission script
+        # etc. and pass the db files
         self.trainer.update(
             self.current_iter_dir,
             [self.calchome / db_file for db_file in self.db_files],
             **kwargs,
         )
+        # Get the path to the trained model
         results_model_file = self.trainer.get_trained_model()
         self.model_file = self.get_rel(
             self.trained_models_dir / f"model_{self.iteration_idx}.pkl"
         )
+        # Copy the trained model to a specific directory together with the
+        # iteration index
         shutil.copy(results_model_file, self.calchome / self.model_file)
 
+        # Update the progress file
         self.progress[self.iteration_idx]["steps"] = [0, 0, 0]
         self.progress[self.iteration_idx]["model_file"] = str(self.model_file)
         self.update_progress_file()
 
     def single_iteration(self) -> None:
         """Runs a single active learning iteration. For each iteration it
-        creates a new calcdir in `calchome`. If provided, schedules are
-        applied to the individual actors.
+        creates a new calcdir in `calchome`. 
+        If provided, schedules are applied to the individual actors.
         """
+        # Create a new directory for this iteration
         self.current_iter_dir = self.calchome / str(self.iteration_idx)
         os.makedirs(self.current_iter_dir, exist_ok=True)
 
+        # Determine which steps to perform this iteration
         (do_sample, do_eval, do_retrain) = self.progress[self.iteration_idx][
             "steps"
         ]
         if do_sample:
+            # Sample new configurations
             if self.sampler_schedule is None:
                 kwargs = {}
             else:
+                # Update kwargs according to the schedule
                 kwargs = self.sampler_schedule.get_kwargs(self.iteration_idx)
 
             self.sample(**kwargs)
 
         if do_eval:
+            # Evaluate the sampled configurations with DFT
             if self.evaluator_schedule is None:
                 kwargs = {}
             else:
+                # Update kwargs according to the schedule
                 kwargs = self.evaluator_schedule.get_kwargs(self.iteration_idx)
 
-            self.evaluate()
+            self.evaluate(**kwargs)
 
         if do_retrain:
+            # Retrain the MLFF model
             if self.trainer_schedule is None:
                 kwargs = {}
             else:
+                # Update kwargs according to the schedule
                 kwargs = self.trainer_schedule.get_kwargs(self.iteration_idx)
 
-            self.retrain()
+            self.retrain(**kwargs)
 
     def run(self) -> None:
         """Runs the active learning cycle. In case a crashed run is restarted,
@@ -648,9 +727,12 @@ class ActiveLearningHandler(ABC):
             self.iteration_idx += 1
 
             steps = [1, 1, 1]
+            # If this is the second last iteration, we might not want to
+            # run a full cycle, but look at self.last_cycle_steps
             if i == self.remaining_iterations - 2:
                 steps = self.last_cycle_steps
 
+            # Prepare for the next iteration
             self.progress.append({"steps": steps})
             print("_____________________________________________")
             sys.stdout.flush()
