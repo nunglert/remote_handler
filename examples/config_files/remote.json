@@ -1,8 +1,8 @@
 {
-    "remote_machine": "lugus",
+    "remote_machine": "datalab",
     "partition": "normal",
-    "savepath": "/home/nunglert/dump/remote_handler",
-    "conda_env": "cppjax",
+    "savepath": "/home/alessandro.serafini/test_remote_handler",
+    "conda_env": "jaxnest",
     "n_processors": 1,
     "slurm_header_add": "",
     "jobfile_name": "run_slurm.sh"
