@@ -1,9 +1,10 @@
 {
     "remote_machine": "datalab",
-    "partition": "normal",
+    "partition": "GPU-a40,GPU-a100",
     "savepath": "/home/alessandro.serafini/test_remote_handler",
     "conda_env": "jaxnest",
     "n_processors": 1,
     "slurm_header_add": "",
-    "jobfile_name": "run_slurm.sh"
+    "jobfile_name": "run_slurm.sh",
+    "template": "datalab.sh.j2"
 }
