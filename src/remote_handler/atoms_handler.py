@@ -316,7 +316,7 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
                     )
 
                 # Verify that the number of collected configurations matches
-                size_preserved = len(ats) == self.all_shard_sizes[calc_idx]
+                size_preserved = (len(ats) == self.all_shard_sizes[calc_idx])
                 if not size_preserved or not all_finished:
                     logger.warning(
                         f"Shard {calc_idx} failed with {size_preserved=} "
