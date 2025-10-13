@@ -526,12 +526,15 @@ class ArrayScriptTask(RemoteTask):
         assert (
             self.python_script_file is not None
         ), "Need self.python_script_file"
+
         assert os.path.exists(
             self.python_script_file
         ), f"Did not find python script at {self.python_script_file}!"
+        
         assert (
             len(self.individual_ressources) > 0
         ), "Specify some inputs for your script!"
+        
         for content in self.individual_ressources:
             assert len(content) == len(
                 self.individual_ressources[0]

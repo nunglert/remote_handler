@@ -17,8 +17,9 @@ from remote_handler.core.file_handler import LocalFileSystem, RemoteFileSystem
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
 # Directory paths
-data_dir = Path("/home/nico.unglert/code/jaxnest_dev/test/data")
+data_dir = Path("/home/aserafini/code/jaxns/test/data")
 homepath = Path(os.getcwd())
+print(f"Running from {homepath}")
 
 remote_dir = homepath / "remote_dirs" / "remote_dir"
 os.makedirs(remote_dir.parent, exist_ok=True)
@@ -30,35 +31,32 @@ remote_handler.core.slurm_utils.TEMPLATE_DIRS.append(
 
 # Instance local file systems (with SLURM configurations)
 local_fs = LocalFileSystem(
-    slurm_config_file=data_dir / "active_learning/config_files/datalab.json"
+    slurm_config_file="dirona.json"
 )
 
 # Instance remote file system (with SLURM configurations)
 remote_fs = RemoteFileSystem(
-    slurm_config_file=data_dir / "active_learning/config_files/lugus.json"
+    slurm_config_file="datalab.json"
 )
 
 # Settings for the active learning loop
 cycle_entry_point = "evaluation"
 initial_model_file = None
-initial_sample_file = homepath / "exp_phases.extxyz"
+initial_sample_file = homepath / "bartok_very_small_train.extxyz"
 initial_db_file = None
 
-# initial_model_file = None
-# initial_sample_file = "/home/nico.unglert/code/jaxnest_dev/test/data/active_learning/bartok_very_small_train.extxyz"
-# initial_db_file = "/home/nico.unglert/code/jaxnest_dev/test/data/active_learning/bartok_very_small_train.extxyz"
 
 stub = False
 loop_time = 1
 
 # Decide whether to use the stub executable or the real one
 if stub:
-    ns_exe = "/home/nico.unglert/code/jaxnest_dev/test/data/active_learning/ns_run_stub.py"
+    ns_exe = "/home/aserafini/code/jaxns/test/data/active_learning/ns_run_stub.py"
 else:
-    ns_exe = "/home/nico.unglert/code/jaxnest_dev/src/jaxnest/ns_run.py"
+    ns_exe = "/home/aserafini/code/jaxns/src/jaxnest/ns_run.py"
 
 # Trial parse the ns.inp to avoid it crashing on the remote machine
-n_gpu_parallel = 4
+n_gpu_parallel = 2
 temp = input_parser.raw_parse(
     filename=homepath / "ns.inp",
     n_gpu_parallel=n_gpu_parallel,
@@ -75,11 +73,11 @@ temp = input_parser.raw_parse(
 # and collects samples from the nested sampling trajectories for the active learning loop
 ns_traj_sampler = ns_active_learning.NSTrajectorySampler(
     ns_exe=ns_exe,
-    remote_fs=local_fs,
+    remote_fs=remote_fs,
     initial_input_file=homepath / "ns.inp",
     n_gpu_parallel=n_gpu_parallel,
     sample_size=100,
-    remote_savepath=remote_dir,
+    remote_savepath=remote_fs.slurm_config["savepath"],
     loop_time=loop_time,
 )
 
@@ -89,9 +87,9 @@ ns_traj_sampler = ns_active_learning.NSTrajectorySampler(
 # to evaluate the energies of the collected samples
 vasp_evaluator = ns_active_learning.VASPEvaluator(
     singlepoint_script=data_dir / "active_learning" / "dft_singlepoint.py",
-    remote_fs=remote_fs,
+    remote_fs=local_fs,
     num_parallel=25,
-    remote_savepath=remote_fs.slurm_config["savepath"],
+    remote_savepath=remote_dir,
     incar_kwargs={
         # "istart": 0,
         # "icharg": 2,
@@ -120,8 +118,8 @@ vasp_evaluator = ns_active_learning.VASPEvaluator(
 # using the structures evaluated with DFT in the active learning loop
 neuralil_trainer = ns_active_learning.NeuralILTrainer(
     training_script=data_dir / "active_learning" / "train_nnff.py",
-    remote_fs=local_fs,
-    remote_savepath=remote_dir,
+    remote_fs=remote_fs,
+    remote_savepath=remote_fs.slurm_config["savepath"],
     training_kwargs={
         "r_cut": 4.0,
         "training_fraction": 0.75,
