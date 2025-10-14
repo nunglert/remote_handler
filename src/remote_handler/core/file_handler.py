@@ -514,7 +514,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
         # Get the first IdentityFile if available, else None
         identityfiles = host_config.get("identityfile", [None])
         if len(identityfiles) > 1:
-            raise Exception("Found more than 1 key!")
+            print("Warning: Found more than 1 key, using the first one: {}.".format(identityfiles[0]))
         identityfile = identityfiles[0]
         proxyjump = host_config.get("proxyjump")
 
