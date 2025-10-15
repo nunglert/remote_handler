@@ -136,6 +136,7 @@ class SlurmJobHandler(SlurmHandlerBase):
         # Directory where the computation will be performed
         self.calcdir = Path(savepath)
 
+        print(f"Using remote savepath: {self.calcdir}")
         # Check if in the remote machine the parent dir of 'savepath' exists
         if not remote_fs.exists(self.calcdir.parent):
             raise Exception("Parent dir of savepath needs to exist!")

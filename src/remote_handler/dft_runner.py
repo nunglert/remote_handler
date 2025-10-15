@@ -25,7 +25,7 @@ class VASPHandler(RemoteAtomsHandler):
         savepath: str,
         num_parallel: int,
         loop_time: float = 30,
-        jobname: str = "opt",
+        jobname: str = "DFT_Eval",
         every: Optional[int] = None,
         start: Optional[int] = None,
         end: Optional[int] = None,

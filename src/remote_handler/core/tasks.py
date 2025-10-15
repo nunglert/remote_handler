@@ -57,6 +57,7 @@ class RemoteTask(ABC):
         savepath: The path on the remote system where computations should be
             performed. Will try to use temporary dir if None.
         remote_fs: A FileSystemHandlerBase derived object.
+        jobname: A label for the task, used in jobname and savepath tagging.
         collect_only: By default, RemoteTask creates a new tagged savepath if
             the provided savepath already exists. If you want RemoteTask act on
             a `savepath` that exists already, set this to True. This can be
@@ -69,6 +70,7 @@ class RemoteTask(ABC):
         logfile: str,
         savepath: os.PathLike,
         remote_fs: file_handler.FileSystemHandlerBase,
+        jobname: str = "job",
         collect_only: bool = False,
     ):
         assert not "/" in str(logfile), "logfile should only be filename!"
@@ -78,26 +80,34 @@ class RemoteTask(ABC):
         # Save the provided remote_fs
         self.remote_fs = remote_fs
 
-        self.savepath = savepath
         self.collect_only = collect_only
 
         if savepath is not None:
-            parent, child = os.path.split(savepath)
+            # Erase trailing slash if present
+            savepath = Path(savepath)
+            
+            parent, _ = os.path.split(savepath)
 
             # Check if the parent directory exists on the remote system
-            if not self.remote_fs.exists(parent):
+            if not self.remote_fs.exists(parent):    
                 raise Exception(
                     f"The parent of {savepath=} must already exist on the remote system!"
                 )
+
+            if not self.remote_fs.exists(savepath):
+                self.remote_fs.makedirs(savepath, exist_ok=True)
+
+            # Append the specific step to the savepath
+            self.savepath = Path(savepath) / jobname
+            
             # Check if the directory already exists on the remote system
-            if self.remote_fs.exists(savepath):
+            if self.remote_fs.exists(self.savepath):
                 if not collect_only:
                     logger.warning(
                         "Savepath already exists. A new directory with "
                         "a tag will be created to prevent overwriting!"
                     )
 
-                    # TODO: use the function from file_utils!
                     random_string = "".join(
                         random.choices(
                             string.ascii_letters + string.digits, k=10
@@ -108,15 +118,9 @@ class RemoteTask(ABC):
                     savetag = tag_path(
                         working_dir, filename, is_directory=True
                     )
-                    self.savepath = Path(
-                        str(
-                            self.remote_fs.secure_path(
-                                savetag, is_directory=True
-                            )
-                        )
-                        + random_string
-                    )
-                    logger.info(f"results saved to: {self.savepath}")
+                    self.savepath = Path(str(savetag) + random_string)
+                    
+                    logger.info(f"Results saved to: {self.savepath}")
                     self.remote_fs.makedirs(self.savepath, exist_ok=True)
 
             else:
@@ -134,9 +138,31 @@ class RemoteTask(ABC):
             )
 
             # Create a temporary directory on the remote system
-            self.savepath = self.remote_fs.create_tempdir()
+            self.savepath = self.remote_fs.create_tempdir() / jobname
             # Print the path of the temporary directory
             logger.info(f"Temporary directory created at: {self.savepath}")
+            
+            if self.remote_fs.exists(self.savepath):
+                if not collect_only:
+                    logger.warning(
+                        "Savepath already exists. A new directory with "
+                        "a tag will be created to prevent overwriting!"
+                    )
+
+                    random_string = "".join(
+                        random.choices(
+                            string.ascii_letters + string.digits, k=10
+                        )
+                    )
+                    
+                    working_dir, filename = os.path.split(savepath)
+                    savetag = tag_path(
+                        working_dir, filename, is_directory=True
+                    )
+                    self.savepath = Path(str(savetag) + random_string)
+                    
+                    logger.info(f"Results saved to: {self.savepath}")
+                    self.remote_fs.makedirs(self.savepath, exist_ok=True)
 
         # Instantiate the logger on the remote machine, at 'savepath' with 'logfile' name
         self.logger = SimpleLogger(Path(self.savepath) / logfile)
@@ -266,6 +292,7 @@ class SingleScriptTask(RemoteTask):
             savepath=remote_savepath,
             collect_only=collect_only,
             remote_fs=remote_fs,
+            jobname=jobname,
         )
 
         # The directory where the computation will be performed
@@ -475,6 +502,7 @@ class ArrayScriptTask(RemoteTask):
             savepath=remote_savepath,
             collect_only=collect_only,
             remote_fs=remote_fs,
+            jobname=jobname,
         )
 
         # The directory where the computation will be performed

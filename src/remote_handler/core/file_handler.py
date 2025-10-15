@@ -83,18 +83,26 @@ class FileSystemHandlerBase(ABC):
         self.slurm_config = None
 
         if slurm_config_file is not None:
-            if CONFIG_DIR is None:
-                raise Exception(
-                    "Set REMOTE_HANDLER_CONFIG_DIR environment variable, "
-                    "where config files for different clusters are stored. See "
-                    "e.g. in examples/config_files!"
-                )
-            slurm_config_path = CONFIG_DIR / slurm_config_file
-            if not os.path.exists(slurm_config_path):
-                raise Exception(
-                    f"{slurm_config_file} does not exist in your "
-                    f"REMOTE_HANDLER_CONFIG_DIR={CONFIG_DIR}"
-                )
+            if os.path.isabs(slurm_config_file):
+                if not os.path.exists(slurm_config_file):
+                    raise Exception(
+                        f"{slurm_config_file} does not exist!"
+                    )
+                slurm_config_path = slurm_config_file
+            
+            else:
+                if CONFIG_DIR is None:
+                    raise Exception(
+                        "If slurm_config_file is not an absolute path, "
+                        "Set REMOTE_HANDLER_CONFIG_DIR environment variable, "
+                        "where config files for different clusters are stored."
+                    )
+                slurm_config_path = CONFIG_DIR / slurm_config_file
+                if not os.path.exists(slurm_config_path):
+                    raise Exception(
+                        f"{slurm_config_file} does not exist in your "
+                        f"REMOTE_HANDLER_CONFIG_DIR={CONFIG_DIR}"
+                    )
 
             with open(slurm_config_path, "r") as f:
                 self.slurm_config = json.load(f)
