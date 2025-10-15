@@ -13,8 +13,7 @@ logger = logging.getLogger(__name__)
 
 CUSTOM_TEMPLATE_DIR = os.environ.get("REMOTE_HANDLER_SLURM_TEMPLATES")
 TEMPLATE_DIRS = []
-if CUSTOM_TEMPLATE_DIR is not None:
-    TEMPLATE_DIRS.append(CUSTOM_TEMPLATE_DIR)
+
 
 
 def submit_job(script_path, output_path, ssh_command=None, cwd=None) -> str:
@@ -244,7 +243,7 @@ def get_slurm_str(
     partition="normal",
     n_cores=8,
     conda_env="jaxnest",
-    header_template="lugus.sh.j2",
+    header_template="dirona.sh.j2",
     job_type_template="body_single.sh.j2",
     slurm_header_add="",
 ): 
