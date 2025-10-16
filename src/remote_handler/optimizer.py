@@ -12,33 +12,61 @@ from remote_handler.core import cluster_handler, file_handler, tasks
 class RemoteOptimizationHandler(RemoteAtomsHandler):
     """
 
+    Handler to optimize a set of trajectory files on a remote cluster.
+    The trajectory files are sharded into batches of size `shard_size`, and each
+    batch is optimized in a separate job.
+    The optimization is done with either a NNFF or LJ potential, and the
+    Steinhardt parameters are computed with either pyscal or quip.
+    The optimized configurations are collected and redistributed into the shape
+    of the original trajectory files.
+
     Args:
-        savepath: Path on the remote file system, where intermediate results
-            are stored temporarily.
-
-        optimization_backend: NNFF or LJ
-        steinhardt_backend: pyscal or quip
-
-    Example:
-        Given a set of 3 trajectory files, containing 50 configs per file,
-        with a shard_size of 20, this will shard the configs in 8 batches
-        (arising from ceil(3 * 50 / 20)). For each batch a directory will be
-        created in `savepath/calcdirs`. After the computations were run,
-        the `savepath` should look like this:
-
-        savepath
-        |___calcdirs
-            |___0
-            |   |___0.extxyz
-            |   |___input_opt.json
-            |   |___opt_0.extxyz
-            |
-            |___1
-                |___ ...
-
-        The opt_X.extxyz files are collected and redistributed into the shape
-        of the original trajectory files.
-
+        traj_files (str): Path to the trajectory files to be optimized.
+        remote_fs (file_handler.FileSystemHandlerBase): Remote file system handler.
+        shard_size (int): Number of configurations per shard.
+        savepath (str): Path to save the optimized trajectory files.
+        num_parallel (int): Number of parallel jobs to submit.
+        loop_time (float, optional): Time to wait between checking for job
+            completion. Defaults to 30.
+        jobname (str, optional): Name of the job. Defaults to "opt".
+        every (Optional[int], optional): If provided, only every `every`-th
+            configuration is optimized. Defaults to None.
+        start (Optional[int], optional): If provided, only configurations
+            starting from `start` are optimized. Defaults to None.
+        end (Optional[int], optional): If provided, only configurations
+            up to `end` are optimized. Defaults to None.
+        local_savepath (Optional[os.PathLike], optional): If provided,
+            a local copy of the optimized trajectory files is saved here.
+            Defaults to None.
+        logfile (str, optional): Path to the log file. Defaults to "opt.log".
+        collect_only (bool, optional): If True, only collect the results
+            from previous runs. Defaults to False.
+        tag (str, optional): Tag to add to the job name. Defaults to "opt".
+        python_script_path (str, optional): Path to the python script that
+            performs the optimization and Steinhardt calculation.
+            Defaults to
+            "/home/aserafini/code/jaxnest_dev/scripts/utility/optimize_traj.py".
+        stub (bool, optional): If True, run in stub mode. Defaults to False.
+        pickle_file (str, optional): Path to the pickle file containing
+            the NNFF model parameters. Required if optimization_backend is "NNFF".
+        supercell_trafo (list[int], optional): Supercell transformation matrix
+            for the calculator. Defaults to [3, 3, 3].
+        max_neighbors_list (list[int], optional): List of maximum number of
+            neighbors for each species for the optimization. Defaults to [20, 30, 40, 50, 60].
+        max_neighbors_offset (int, optional): Offset to add to the maximum
+            number of neighbors for each species for the optimization.
+        fmax (float, optional): Maximum force tolerance for the optimization.
+        steps (int, optional): Maximum number of optimization steps.
+        rmax (float, optional): Maximum distance for the Steinhardt calculation.
+        nbins (int, optional): Number of bins for the Steinhardt calculation.
+        do_optimization (bool, optional): If True, perform the optimization.
+        do_steinhardt (bool, optional): If True, compute the Steinhardt parameters.
+        optimization_backend (str, optional): Backend to use for the optimization. 
+            Either "NNFF" or "LJ". Defaults to "NNFF".
+        steinhardt_backend (str, optional): Backend to use for the Steinhardt
+            calculation. Either "pyscal" or "quip". Defaults to "quip".
+        steinhardt_l_values (list[int], optional): List of l values to compute
+            for the Steinhardt calculation. Defaults to [4, 6].
 
     """
 
@@ -58,7 +86,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         logfile: str = "opt.log",
         collect_only: bool = False,
         tag: str = "opt",
-        python_script_path: str = "/home/nunglert/code/jaxnest_dev/scripts/utility/optimize_traj.py",
+        python_script_path: str = "/home/aserafini/code/jaxnest_dev/scripts/utility/optimize_traj.py",
         stub: bool = False,
         pickle_file: str = "/home/nunglert/nnff_trainings/velo/si_bartok_gpu7/run11_r2scan_rerun/model_params_plain_ensemble_VELO_8E04F5B1.pkl",
         supercell_trafo: list[int] = [3, 3, 3],
@@ -96,15 +124,6 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         self.logger = tasks.SimpleLogger(logfile)
         self.do_optimization = do_optimization
         self.pickle_file = pickle_file
-
-        # if do_optimization:
-        #     assert steps is not None
-        #     tag = "_"
-        #     tag += "s" if start is None else f"s{start}"
-        #     tag += "e" if end is None else f"e{end}"
-        #     tag += "f" if every is None else f"f{every}"
-
-        #     self.slurm_handler.jobname += tag
 
         self.json_args = {
             "STUB": stub,
