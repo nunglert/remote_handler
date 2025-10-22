@@ -16,6 +16,28 @@ class VASPHandler(RemoteAtomsHandler):
     """
     Handler to run single point DFT calculations with VASP on a remote cluster.
     Inherits from RemoteAtomsHandler to manage remote file operations and job submissions.
+
+    Args:
+        traj_files (list[Union[str, os.PathLike]]): List of paths to trajectory files.
+        remote_fs (file_handler.FileSystemHandlerBase): Remote file system handler.
+        savepath (str): Path to save the results on the remote system.
+        num_parallel (int): Number of parallel jobs to run, i.e. length of the job array.
+        loop_time (float, optional): Time in minutes between each loop iteration.
+        jobname (str, optional): Name of the SLURM job.
+        every (Optional[int], optional): Interval for selecting frames from trajectory files.
+        start (Optional[int], optional): Starting frame index for selection.
+        end (Optional[int], optional): Ending frame index for selection.
+        local_savepath (Optional[os.PathLike], optional): Local path to save results.
+        logfile (str, optional): Path to the log file.
+        collect_only (bool, optional): If True, only collect results without submitting jobs.
+        tag (str, optional): Tag for the job.
+        python_script_path (str, optional): Path to the Python script to run on the remote system.
+        stub (bool, optional): If True, use a stub version of the VASP
+        launcher (str, optional): Command to launch VASP 
+        slurm_header_add (str, optional): Additional SLURM header lines.
+        vasp_binary (str, optional): Name of the VASP binary to execute.
+        n_processors (int, optional): Number of processors to use for VASP.
+        incar_kwargs (dict, optional): Dictionary of INCAR parameters for VASP.
     """
 
     def __init__(
@@ -103,7 +125,7 @@ class VASPHandler(RemoteAtomsHandler):
 
             # Store the path to the database for each batch, where the results will be saved
             json_config["DATABASE"] = f"dft.extxyz"
-
+            
             config_files.append(
                 tasks.DictJSON(json_config, "input_dft.json", self.remote_fs)
             )

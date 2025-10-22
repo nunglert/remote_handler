@@ -346,16 +346,18 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
         
         indices = [at.info["file_index"] for at in all_atoms]
         return regroup(all_atoms, indices)
+    
+    def redistribute(self, all_atoms_sets):
+        """
+        Redistribute the grouped Atoms objects back into their original
+        trajectory files, writing them to the local file system with the
+        specified tag prepended to the filenames."""
 
-    def collect_and_harvest(self):
-        """
-        Collect processed configurations from the remote machine and
-        redistribute them into their original trajectory files.
-        Raises an exception if any batch failed to process or if the
-        number of collected configurations is less than the total expected.
-        """
-        all_atoms, failed_indices = self.collect()
-        self.check_and_harvest(all_atoms, failed_indices)
+        for ats in all_atoms_sets:
+            # Get the original filename using the file_index from the info dict
+            fname = self.traj_files[int(ats[-1].info["file_index"])]
+            # Write the configurations to the local file system with the tag
+            self.local_fs.write_ase(front_tag(fname, self.tag), ats)
 
     def check_and_harvest(self, all_atoms, failed_indices):
         """
@@ -378,17 +380,15 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
         self.redistribute(all_atoms_sets)
         logger.info("Successfully harvested all processed configs!")
 
-    def redistribute(self, all_atoms_sets):
+    def collect_and_harvest(self):
         """
-        Redistribute the grouped Atoms objects back into their original
-        trajectory files, writing them to the local file system with the
-        specified tag prepended to the filenames."""
-
-        for ats in all_atoms_sets:
-            # Get the original filename using the file_index from the info dict
-            fname = self.traj_files[int(ats[-1].info["file_index"])]
-            # Write the configurations to the local file system with the tag
-            self.local_fs.write_ase(front_tag(fname, self.tag), ats)
+        Collect processed configurations from the remote machine and
+        redistribute them into their original trajectory files.
+        Raises an exception if any batch failed to process or if the
+        number of collected configurations is less than the total expected.
+        """
+        all_atoms, failed_indices = self.collect()
+        self.check_and_harvest(all_atoms, failed_indices)
 
     def recompute_failed(self):
         """
