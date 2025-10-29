@@ -45,7 +45,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         python_script_path (str, optional): Path to the python script that
             performs the optimization and Steinhardt calculation.
             Defaults to
-            "/home/aserafini/code/jaxnest_dev/scripts/utility/optimize_traj.py".
+            "/home/aserafini/code/jaxnest/scripts/utility/optimize_traj.py".
         stub (bool, optional): If True, run in stub mode. Defaults to False.
         pickle_file (str, optional): Path to the pickle file containing
             the NNFF model parameters. Required if optimization_backend is "NNFF".
@@ -86,9 +86,9 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         logfile: str = "opt.log",
         collect_only: bool = False,
         tag: str = "opt",
-        python_script_path: str = "/home/aserafini/code/jaxnest_dev/scripts/utility/optimize_traj.py",
+        python_script_path: str = "/home/aserafini/code/jaxnest/scripts/utility/optimize_traj.py",
         stub: bool = False,
-        pickle_file: str = "/home/nunglert/nnff_trainings/velo/si_bartok_gpu7/run11_r2scan_rerun/model_params_plain_ensemble_VELO_8E04F5B1.pkl",
+        pickle_file: None,  #str = "/home/nunglert/nnff_trainings/velo/si_bartok_gpu7/run11_r2scan_rerun/model_params_plain_ensemble_VELO_8E04F5B1.pkl",
         supercell_trafo: list[int] = [3, 3, 3],
         max_neighbors_list: list[int] = [20, 30, 40, 50, 60],
         max_neighbors_offset: int = 3,
@@ -121,7 +121,10 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
             slurm_header_add="module load openblas",
         )
 
+        # Set up logger
         self.logger = tasks.SimpleLogger(logfile)
+        
+        # Store parameters
         self.do_optimization = do_optimization
         self.pickle_file = pickle_file
 
@@ -164,11 +167,13 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
     def prepare_individual_data(self):
         config_files = []
         atoms_batches = []
-        for calc_idx in range(self.num_array_tasks):
-            json_config = deepcopy(self.json_args)
 
-            # TODO: this is dirty, properly solve this
+        # For each shard, create a config file and an atoms batch
+        for calc_idx in range(self.num_array_tasks):
+
+            json_config = deepcopy(self.json_args)
             json_config["DATABASE"] = f"opt.extxyz"
+
             pickle_file = f"{os.path.split(self.pickle_file)[1]}"
             json_config["calculator_args"]["pickle_file"] = (
                 (Path(self.savepath) / pickle_file).resolve().__str__()
@@ -185,22 +190,11 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
 
         del self.shards
 
+        # Assign to individual ressources the Writeable objects
         self.individual_ressources = [config_files, atoms_batches]
 
     def run(self):
-        self.allocate_data()
-        self.submit()
-        self.collect_and_harvest()
-        # self.collect_results()
+        self.allocate_data() # From ArrayScriptTask
+        self.submit() # From ArrayScriptTask
+        self.collect_and_harvest() # From RemoteAtomsHandler
 
-    # @property
-    # def shared_ressources(self):
-    #     return self._shared_ressources
-
-    # @property
-    # def individual_ressources(self):
-    #     return self._individual_ressources
-
-    # @property
-    # def python_script_file(self):
-    #     return self._python_script_file
