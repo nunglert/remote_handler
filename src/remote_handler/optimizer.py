@@ -88,7 +88,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         tag: str = "opt",
         python_script_path: str = "/home/aserafini/code/jaxnest/scripts/utility/optimize_traj.py",
         stub: bool = False,
-        pickle_file: None,  #str = "/home/nunglert/nnff_trainings/velo/si_bartok_gpu7/run11_r2scan_rerun/model_params_plain_ensemble_VELO_8E04F5B1.pkl",
+        pickle_file: str = None,  #= "/home/nunglert/nnff_trainings/velo/si_bartok_gpu7/run11_r2scan_rerun/model_params_plain_ensemble_VELO_8E04F5B1.pkl",
         supercell_trafo: list[int] = [3, 3, 3],
         max_neighbors_list: list[int] = [20, 30, 40, 50, 60],
         max_neighbors_offset: int = 3,
