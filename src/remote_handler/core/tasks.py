@@ -114,7 +114,7 @@ class RemoteTask(ABC):
                         )
                     )
                     
-                    working_dir, filename = os.path.split(savepath)
+                    working_dir, filename = os.path.split(self.savepath)
                     savetag = tag_path(
                         working_dir, filename, is_directory=True
                     )
