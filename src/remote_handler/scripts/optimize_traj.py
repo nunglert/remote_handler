@@ -56,11 +56,11 @@ if os.path.exists(processed_file):
     proc_ats = ase.io.read(processed_file, index=":")
     if not "shard_idx" in proc_ats[0].info.keys():
         print("No shard_idx, deleting existing file...")
-
-    for proc_at in proc_ats:
-        idx = proc_at.info["shard_idx"]
-        ats[idx] = proc_at
-    os.remove(processed_file)
+        os.remove(processed_file)
+    else:
+        for proc_at in proc_ats:
+            idx = proc_at.info["shard_idx"]
+            ats[idx] = proc_at
 
 path, filename = os.path.split(DATABASE)
 
@@ -85,7 +85,6 @@ for idx, at in enumerate(ats):
         if STUB:
             raise Exception("Skipping computations (stub) ...")
 
-        # TODO: do I want Steinhardt of optimized or non-optimized config?
         is_finished = False
         if do_steinhardt:
             sbackend = input_args["steinhardt_args"]["steinhardt_backend"]
@@ -95,15 +94,18 @@ for idx, at in enumerate(ats):
                 l_values = input_args["steinhardt_args"]["steinhardt_l_values"]
                 q4_label = f"q4_rcut{cutoff}"
                 q6_label = f"q6_rcut{cutoff}"
+
                 if not (
                     q4_label in at.arrays
                     and q6_label in at.arrays
                     and "rdf" in at.info
                 ):
                     print("... Computing Steinhardt")
+
                     qs, rdf, radii = properties.get_q(
                         at, cutoff, nbins, l_values=l_values
                     )
+
                     q4, q6 = qs
                     at.arrays[q4_label] = q4
                     at.arrays[q6_label] = q6
@@ -111,10 +113,12 @@ for idx, at in enumerate(ats):
                     at.info["rdf"] = rdf
                     at.info["nbins"] = nbins
                     at.info["rmax"] = cutoff
+
                 is_finished = True
+
             elif sbackend == "quip":
-                # calculation was already done above for all ats
                 is_finished = True
+
             else:
                 raise Exception
 
