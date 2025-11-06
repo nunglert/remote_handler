@@ -9,6 +9,13 @@ from jaxnest.postprocess import properties
 
 calcpath = Path(sys.argv[1])
 INPUTFILE = calcpath / "input_opt.json"
+
+if not os.path.exists(INPUTFILE):
+    raise Exception(
+        f"Could not find {INPUTFILE=}. Current location is {os.getcwd()}"
+    )
+
+
 input_args = json.load(open(INPUTFILE, "r"))
 
 TAG = input_args["tag"]
@@ -18,6 +25,11 @@ STUB = input_args["STUB"]
 do_optimization = input_args["do_optimization"]
 do_steinhardt = input_args["do_steinhardt"]
 
+
+if not os.path.exists(DATABASE):
+    raise Exception(
+        f"Could not find {DATABASE=}. Current location is {os.getcwd()}"
+    )
 
 def front_tag(filepath, tag):
     connector = "" if tag == "" else "_"
@@ -30,8 +42,14 @@ if do_optimization:
     if calc_args["optimization_backend"] == "NNFF":
         from jaxnest.postprocess import ensemble_ase_calculator
 
+        pickle_file = calc_args["pickle_file"]
+        if not os.path.exists(pickle_file):
+            raise Exception(
+                f"Could not find {pickle_file=}. Current location is {os.getcwd()}"
+            )
+
         calc = ensemble_ase_calculator.EnsembleASECalculator(
-            pickle_file=calc_args["pickle_file"],
+            pickle_file=pickle_file,
             supercell_trafo=calc_args["supercell_trafo"],
             max_neighbors_list=calc_args["max_neighbors_list"],
             max_neighbors_offset=calc_args["max_neighbors_offset"],
@@ -56,11 +74,11 @@ if os.path.exists(processed_file):
     proc_ats = ase.io.read(processed_file, index=":")
     if not "shard_idx" in proc_ats[0].info.keys():
         print("No shard_idx, deleting existing file...")
-        os.remove(processed_file)
-    else:
-        for proc_at in proc_ats:
-            idx = proc_at.info["shard_idx"]
-            ats[idx] = proc_at
+
+    for proc_at in proc_ats:
+        idx = proc_at.info["shard_idx"]
+        ats[idx] = proc_at
+    os.remove(processed_file)
 
 path, filename = os.path.split(DATABASE)
 
@@ -76,6 +94,16 @@ if (
         properties.get_q_quip_inplace(
             ats, input_args["steinhardt_args"]["cutoff"], path=path, l=l
         )
+    for at in ats:
+        rdf, r = properties.get_rdf(
+            at, 
+            input_args["steinhardt_args"]["cutoff"],
+            input_args["steinhardt_args"]["nbins"]
+        )
+        at.info["rdf"] = rdf
+        at.info["nbins"] = input_args["steinhardt_args"]["nbins"]
+        at.info["rmax"] = input_args["steinhardt_args"]["cutoff"]
+
 
 
 for idx, at in enumerate(ats):
@@ -85,6 +113,7 @@ for idx, at in enumerate(ats):
         if STUB:
             raise Exception("Skipping computations (stub) ...")
 
+        # TODO: do I want Steinhardt of optimized or non-optimized config?
         is_finished = False
         if do_steinhardt:
             sbackend = input_args["steinhardt_args"]["steinhardt_backend"]
@@ -94,18 +123,15 @@ for idx, at in enumerate(ats):
                 l_values = input_args["steinhardt_args"]["steinhardt_l_values"]
                 q4_label = f"q4_rcut{cutoff}"
                 q6_label = f"q6_rcut{cutoff}"
-
                 if not (
                     q4_label in at.arrays
                     and q6_label in at.arrays
                     and "rdf" in at.info
                 ):
                     print("... Computing Steinhardt")
-
                     qs, rdf, radii = properties.get_q(
                         at, cutoff, nbins, l_values=l_values
                     )
-
                     q4, q6 = qs
                     at.arrays[q4_label] = q4
                     at.arrays[q6_label] = q6
@@ -113,12 +139,10 @@ for idx, at in enumerate(ats):
                     at.info["rdf"] = rdf
                     at.info["nbins"] = nbins
                     at.info["rmax"] = cutoff
-
                 is_finished = True
-
             elif sbackend == "quip":
+                # calculation was already done above for all ats
                 is_finished = True
-
             else:
                 raise Exception
 
@@ -128,13 +152,13 @@ for idx, at in enumerate(ats):
                 at = properties.optimize(
                     at,
                     calc,
-                    pressure=None,
+                    # pressure=None,
                     # fmax=0.1,
                     trajectory_file=None,
                     # steps=100
                     **input_args["optimization_args"],
                 )
-            is_finished *= True
+            is_finished = True
 
         at.info["shard_idx"] = idx
         at.info["is_finished"] = is_finished

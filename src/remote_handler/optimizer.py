@@ -131,7 +131,6 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         self.json_args = {
             "STUB": stub,
             "tag": self.tag,
-            # "do_rdf": do_rdf,
             "do_optimization": do_optimization,
             "do_steinhardt": do_steinhardt,
             "calculator_args": dict(

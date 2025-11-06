@@ -286,8 +286,9 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
                 - A list of all collected Atoms objects.
                 - A list of indices of batches that failed to process
         """
-        result_filename = front_tag(f"{self.tag}.extxyz", self.tag)
+        result_filename = front_tag(f"opt.extxyz", self.tag)
         logger.info(f"Collecting results from: {str(result_filename)}")
+        print(f"Collecting results from: {str(result_filename)}")
         all_atoms = []
         failed_indices = []
         for idx in range(self.num_array_tasks):
