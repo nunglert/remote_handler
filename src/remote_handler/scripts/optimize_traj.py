@@ -37,32 +37,32 @@ def front_tag(filepath, tag):
     return Path(path) / f"{tag}{connector}{filename}"
 
 
-if do_optimization:
-    calc_args = input_args["calculator_args"]
-    if calc_args["optimization_backend"] == "NNFF":
-        from jaxnest.postprocess import ensemble_ase_calculator
+# if do_optimization:
+#     calc_args = input_args["calculator_args"]
+#     if calc_args["optimization_backend"] == "NNFF":
+#         from jaxnest.postprocess import ensemble_ase_calculator
 
-        pickle_file = calc_args["pickle_file"]
-        if not os.path.exists(pickle_file):
-            raise Exception(
-                f"Could not find {pickle_file=}. Current location is {os.getcwd()}"
-            )
+#         pickle_file = calc_args["pickle_file"]
+#         if not os.path.exists(pickle_file):
+#             raise Exception(
+#                 f"Could not find {pickle_file=}. Current location is {os.getcwd()}"
+#             )
 
-        calc = ensemble_ase_calculator.EnsembleASECalculator(
-            pickle_file=pickle_file,
-            supercell_trafo=calc_args["supercell_trafo"],
-            max_neighbors_list=calc_args["max_neighbors_list"],
-            max_neighbors_offset=calc_args["max_neighbors_offset"],
-            auto_sc=True,
-        )
+#         calc = ensemble_ase_calculator.EnsembleASECalculator(
+#             pickle_file=pickle_file,
+#             supercell_trafo=calc_args["supercell_trafo"],
+#             max_neighbors_list=calc_args["max_neighbors_list"],
+#             max_neighbors_offset=calc_args["max_neighbors_offset"],
+#             auto_sc=True,
+#         )
 
-    elif calc_args["optimization_backend"] == "LJ":
-        from ase.calculators.lj import LennardJones
+#     elif calc_args["optimization_backend"] == "LJ":
+#         from ase.calculators.lj import LennardJones
 
-        calc = LennardJones(sigma=1.0, epsilon=1.0, rc=3.0)
+#         calc = LennardJones(sigma=1.0, epsilon=1.0, rc=3.0)
 
-    else:
-        raise Exception("Unknown optimization backend!")
+#     else:
+#         raise Exception("Unknown optimization backend!")
 
 ats = ase.io.read(DATABASE, index=":")
 processed_file = front_tag(DATABASE, TAG)
@@ -146,19 +146,19 @@ for idx, at in enumerate(ats):
             else:
                 raise Exception
 
-        if do_optimization:
-            if not "is_converged" in at.info:
-                print("... Optimizing")
-                at = properties.optimize(
-                    at,
-                    calc,
-                    # pressure=None,
-                    # fmax=0.1,
-                    trajectory_file=None,
-                    # steps=100
-                    **input_args["optimization_args"],
-                )
-            is_finished = True
+        # if do_optimization:
+        #     if not "is_converged" in at.info:
+        #         print("... Optimizing")
+        #         at = properties.optimize(
+        #             at,
+        #             calc,
+        #             # pressure=None,
+        #             # fmax=0.1,
+        #             trajectory_file=None,
+        #             # steps=100
+        #             **input_args["optimization_args"],
+        #         )
+        #     is_finished = True
 
         at.info["shard_idx"] = idx
         at.info["is_finished"] = is_finished
