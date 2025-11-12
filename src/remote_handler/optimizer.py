@@ -74,6 +74,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         self,
         traj_files: str,
         remote_fs: file_handler.FileSystemHandlerBase,
+        n_processors: int,
         shard_size: int,
         savepath: str,
         num_parallel: int,
@@ -117,7 +118,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
             logfile,
             collect_only,
             tag,
-            2,  # n_processors
+            n_processors,  # n_processors
             slurm_header_add="module load openblas",
         )
 
