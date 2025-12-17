@@ -99,6 +99,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         nbins: int = 200,
         do_optimization: bool = True,
         do_steinhardt: bool = True,
+        do_rdf: bool = True,
         optimization_backend: str = "NNFF",
         steinhardt_backend: str = "quip",
         steinhardt_l_values: list[int] = [4, 6],
@@ -134,6 +135,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
             "tag": self.tag,
             "do_optimization": do_optimization,
             "do_steinhardt": do_steinhardt,
+            "do_rdf": do_rdf,
             "calculator_args": dict(
                 # pickle_file=str(self.moved_pickle_file),
                 supercell_trafo=supercell_trafo,
@@ -146,11 +148,13 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
                 steps=steps,
             ),
             "steinhardt_args": dict(
-                nbins=nbins,
-                cutoff=rmax,
                 steinhardt_backend=steinhardt_backend,
                 steinhardt_l_values=steinhardt_l_values,
             ),
+            "general_args": dict(
+                nbins=nbins,
+                cutoff=rmax,
+            )
         }
 
         # Since we did not initialize the python_script_file, shared_ressources
