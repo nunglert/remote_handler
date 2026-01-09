@@ -96,14 +96,23 @@ if do_steinhardt:
 if do_rdf:
     print("... Computing RDF ...")
     for at in ats:
-        rdf, r = properties.get_rdf(
-            at, 
+        r, rdf_dict = properties.get_rdf(
+            at,
             input_args["general_args"]["cutoff"],
             input_args["general_args"]["nbins"]
         )
-        at.info["rdf"] = rdf
-        at.info["nbins"] = input_args["general_args"]["nbins"]
-        at.info["rmax"] = input_args["general_args"]["cutoff"]
+
+        at.info["r_rdf"] = r.tolist()
+        for key in rdf_dict:
+            at.info[f"rdf_{key}"] = rdf_dict[key].tolist()
+        # rdf, r = properties.get_rdf(
+        #     at, 
+        #     input_args["general_args"]["cutoff"],
+        #     input_args["general_args"]["nbins"]
+        # )
+        # at.info["rdf"] = rdf
+        # at.info["nbins"] = input_args["general_args"]["nbins"]
+        # at.info["rmax"] = input_args["general_args"]["cutoff"]
 
 
 
