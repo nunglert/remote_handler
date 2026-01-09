@@ -123,7 +123,7 @@ for idx, at in enumerate(ats):
     try:
         is_finished = False
         
-        if do_rdf and "rdf" in at.info:
+        if do_rdf and "r_rdf" in at.info:
             is_finished = True
         if do_steinhardt:
             if np.all(
