@@ -88,10 +88,10 @@ path, filename = os.path.split(DATABASE)
 # computation the loop below
 if do_steinhardt:
     print("... Computing Steinhardt using QUIP ...")
-    for l in input_args["steinhardt_args"]["steinhardt_l_values"]:
-        properties.get_q_quip_inplace(
-            ats, input_args["general_args"]["cutoff"], path=path, l=l
-        )
+    l = input_args["steinhardt_args"]["steinhardt_l_value"]
+    properties.get_q_quip_inplace(
+        ats, input_args["general_args"]["cutoff"], path=path, l=l
+    )
 
 if do_rdf:
     print("... Computing RDF ...")
@@ -126,12 +126,8 @@ for idx, at in enumerate(ats):
         if do_rdf and "r_rdf" in at.info:
             is_finished = True
         if do_steinhardt:
-            if np.all(
-                [
-                    f"q{l}_rcut{input_args['general_args']['cutoff']}" in at.arrays
-                    for l in input_args["steinhardt_args"]["steinhardt_l_values"]
-                ]
-            ):
+            l = input_args["steinhardt_args"]["steinhardt_l_value"]
+            if f"q{l}_rcut{input_args['general_args']['cutoff']}" in at.arrays:
                 is_finished = True
 
         if do_optimization:

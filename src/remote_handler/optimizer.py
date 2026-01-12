@@ -102,7 +102,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         do_rdf: bool = True,
         optimization_backend: str = "NNFF",
         steinhardt_backend: str = "quip",
-        steinhardt_l_values: list[int] = [4, 6],
+        steinhardt_l_value: int = 4,
     ):
         super().__init__(
             traj_files,
@@ -149,7 +149,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
             ),
             "steinhardt_args": dict(
                 steinhardt_backend=steinhardt_backend,
-                steinhardt_l_values=steinhardt_l_values,
+                steinhardt_l_value=steinhardt_l_value,
             ),
             "general_args": dict(
                 nbins=nbins,
