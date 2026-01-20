@@ -767,6 +767,19 @@ class RemoteFileSystem(FileSystemHandlerBase):
         # Clean up temporary file
         os.remove(local_temp)
         return atoms
+    
+    @reconnect_on_failure
+    def read_str_from_file(self, filepath: os.PathLike) -> str:
+        """
+        Read a string from a file at the specified file path on the remote system.
+
+        Args:
+            filepath (str): The path of the file to read the string from.
+        """
+        filepath = str(filepath)
+        with self.sftp_client.file(filepath, "r") as f:
+            string = f.read().decode("utf-8")
+        return string
 
     @reconnect_on_failure
     def write_ase(self, filepath: os.PathLike, atoms_list, **kwargs) -> None:

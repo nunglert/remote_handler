@@ -156,7 +156,7 @@ class SlurmJobHandler(SlurmHandlerBase):
             loop_time,
         )
 
-    def write_jobfile(self, input_file, python_script_path):
+    def write_jobfile(self, input_file, python_script_path, exclude_nodes=None):
         """
         Write the slurm jobfile for a single job.
         Args:
@@ -174,6 +174,7 @@ class SlurmJobHandler(SlurmHandlerBase):
             self.template_file,
             self.job_type_template,
             self.slurm_header_add,
+            exclude_nodes,
         )
 
         self.remote_fs.write_str_to_file(

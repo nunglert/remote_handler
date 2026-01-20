@@ -246,6 +246,7 @@ def get_slurm_str(
     header_template="dirona.sh.j2",
     job_type_template="body_single.sh.j2",
     slurm_header_add="",
+    exclude_nodes: str = None,
 ): 
     """
     Get the SLURM script as a string.
@@ -262,6 +263,7 @@ def get_slurm_str(
         header_template (str, optional): Template file for the slurm header. Defaults to "lugus.sh.j2".
         job_type_template (str, optional): Template file for the job body. Defaults to "body_single.sh.j2".
         slurm_header_add (str, optional): Additional lines to add to the slurm header. Defaults to "".
+        exclude_nodes (str, optional): Comma-separated string of nodes to exclude. Defaults to None.
     Returns:
         str: The rendered SLURM script as a string.
     """
@@ -282,6 +284,7 @@ def get_slurm_str(
         conda_env=conda_env,
         slurm_header_add=slurm_header_add,
         job_type_template=job_type_template,
+        exclude_nodes=exclude_nodes,
     )
 
     return slurm_str

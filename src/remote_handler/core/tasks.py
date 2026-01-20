@@ -369,11 +369,38 @@ class SingleScriptTask(RemoteTask):
         calculation directory on the remote machine to confirm that the job
         has finished successfully."""
         return self.remote_fs.exists(self.calcdir / "is_finished.info")
+    
+    def node_problem(self):
+        """If the Node has the requested resources there should be a file called
+        'node_check.info' in the calculation directory on the remote machine."""
+        return self.remote_fs.exists(self.calcdir / "node_check.info")
 
     def run(self):
         """Run the entire workflow: allocate data, submit job, and collect results."""
+        exclude_node_list = []
         self.allocate_data()
-        self.submit()
+        while True:
+            self.submit()
+            if not self.node_problem():
+                break
+            else:
+                logger.warning(
+                    "The job did not run on a node with the requested resources. "
+                    "Resubmitting..."
+                )
+                
+                last_used_node = self.remote_fs.read_str_from_file(
+                    self.calcdir / "node_check.info"
+                ).strip()  
+                print(f"Excluding node: {last_used_node}")
+                
+                exclude_node_list.append(last_used_node)
+
+                self.slurm_handler.write_jobfile(
+                    self.input_file_remote,
+                    self.script_file,
+                    exclude_nodes=",".join(exclude_node_list)
+                )
         self.collect_results()
 
 
