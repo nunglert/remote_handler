@@ -11,10 +11,7 @@ from remote_handler import DEFAULT_TEMPLATE_DIR
 
 logger = logging.getLogger(__name__)
 
-CUSTOM_TEMPLATE_DIR = os.environ.get("REMOTE_HANDLER_SLURM_TEMPLATES")
 TEMPLATE_DIRS = []
-
-
 
 def submit_job(script_path, output_path, ssh_command=None, cwd=None) -> str:
     """

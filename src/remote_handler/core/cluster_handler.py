@@ -73,7 +73,10 @@ class SlurmHandlerBase(ABC):
         ), "Need slurm_config set in remote_fs!"
         # Get remote machine and ssh command
         remote_machine = remote_fs.slurm_config["remote_machine"]
-        self.ssh_command = f"ssh {remote_machine}"
+        if isinstance(remote_fs, file_handler.LocalFileSystem):
+            self.ssh_command = None
+        else:
+            self.ssh_command = f"ssh {remote_machine}"
         # Get template file for the slurm scripts
         self.template_file = remote_fs.slurm_config["template"]
 
