@@ -84,7 +84,6 @@ def default_params(filesystem, data_dir, dummy_trajectory):
 
     params = dict(
         traj_files=traj_files,
-        # savepath=remote_dir,
         savepath=filesystem.slurm_config["savepath"],
         num_parallel=5,
         python_script_path=python_script_path,
@@ -98,7 +97,7 @@ def default_params(filesystem, data_dir, dummy_trajectory):
         collect_only=False,
         local_savepath=local_results,
         tag="dft",
-        stub=False,
+        stub=True,
         incar_kwargs={
             # "istart": 0,
             # "icharg": 2,

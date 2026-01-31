@@ -14,6 +14,10 @@ def grep(path: str, expression: str, with_path: bool = True):
         expression: Regular expression pattern.
         with_path: Controls whether full paths to the files are returned or
             only filenames.
+    Returns: List of files matching the expression.
+    Example:
+        >>> grep("/home/user/dir", ".*\.out", with_path=True)
+        ['/home/user/dir/file1.out', '/home/user/dir/file2.out']
     """
     results = []
     for file in os.listdir(path):
@@ -26,6 +30,15 @@ def grep(path: str, expression: str, with_path: bool = True):
 
 
 def tag_path(part0, part1, is_directory=False):
+    """Provided a path to a file, this modifies the path by inserting a
+    timestamp in front of the file format.
+    Args:
+        part0: path to the directory
+        part1: filename (with extension)
+        is_directory: whether the path is a directory
+    Returns:
+        new path with timestamp inserted
+    """
     date_str = datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
     if not is_directory:
         file_parts = part1.split(".")
@@ -39,7 +52,7 @@ def tag_path(part0, part1, is_directory=False):
     return save_file
 
 
-def secure_path(save_file, is_directory=False):
+def secure_path(save_file, is_directory=False) -> str: 
     """Provided a path to a file, this checks whether such a file already
     exists. If not, it leaves the path unchanged. If there is already such a
     file in the specified path, this routine modifies the path by inserting a
@@ -51,6 +64,12 @@ def secure_path(save_file, is_directory=False):
 
     Examples:
         "/home/gerrit/kek.lel" -> "/home/gerrit/kek_2024-06-11_15_11_26.lel"
+
+    Args:
+        save_file: path to the file to be checked
+        is_directory: whether the path is a directory
+    Returns:
+        new path with timestamp inserted if the file existed already
     """
     if is_directory:  # delete trailing slash
         save_file = str(Path(save_file))
@@ -63,6 +82,17 @@ def secure_path(save_file, is_directory=False):
 
 
 class SimpleLogger:
+    """A simple logger that can print messages to the console or write them to a file.
+    If a log file is specified, messages will be appended to that file.
+    Otherwise, messages will be printed to the console.
+    
+    Args:
+        log_file: Optional path to a log file. If None, messages are printed to the
+            console.
+    Example:
+        logger = SimpleLogger(log_file="my_log.txt")
+        logger.print("This is a log message.")
+    """
     def __init__(self, log_file=None):
         self.log_file = log_file
 

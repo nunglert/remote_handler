@@ -73,7 +73,7 @@ def test_SingleScriptTask_simple(data_dir, filesystem):
     collected. This allows us to comfortably check the output files in case
     something crashed.
     """
-    os.environ["REMOTE_HANDLER_LOCAL"] = "datalab"
+    # os.environ["REMOTE_HANDLER_LOCAL"] = "datalab"
     relative_path = Path("SingleScriptTask") / "simple"
     assetpath = data_dir / "assets" / relative_path
     local_savepath = data_dir / "temp" / relative_path
@@ -126,7 +126,7 @@ def test_ArrayScriptTask_simple(data_dir, filesystem):
     collected. This allows us to comfortably check the output files in case
     something crashed.
     """
-    os.environ["REMOTE_HANDLER_LOCAL"] = "datalab"
+    # os.environ["REMOTE_HANDLER_LOCAL"] = "datalab"
     relative_path = Path("ArrayScriptTask") / "simple"
     assetpath = data_dir / "assets" / relative_path
     local_savepath = data_dir / "temp" / relative_path

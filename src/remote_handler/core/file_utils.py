@@ -5,6 +5,16 @@ from pathlib import Path
 
 
 def tag_path(part0, part1, is_directory=False):
+    """Provided a path to a file, this modifies the path by inserting a
+    timestamp in front of the file format.
+
+    Args:
+        part0: path to the directory
+        part1: filename (with extension)
+        is_directory: whether the path is a directory
+    Returns:
+        new path with timestamp inserted
+    """
     date_str = datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
     if not is_directory:
         file_parts = part1.split(".")
@@ -19,7 +29,8 @@ def tag_path(part0, part1, is_directory=False):
 
 
 def secure_path(save_file, is_directory=False):
-    """Provided a path to a file, this checks whether such a file already
+    """
+    Provided a path to a file, this checks whether such a file already
     exists. If not, it leaves the path unchanged. If there is already such a
     file in the specified path, this routine modifies the path by inserting a
     timestamp in front of the file format.
@@ -44,10 +55,17 @@ def secure_path(save_file, is_directory=False):
 def secure_declare_path(
     filename: str, move: bool = True, is_directory: bool = False
 ) -> str:
-    """Checks whether for a given `filename` a file exists already on the
+    """
+    Checks whether for a given `filename` a file exists already on the
     disk and in that case renames the existing file by adding a time tag such
     that `filename` can be safely used without overwriting or appending an
     existing file. If `move` is set to False, the existing file is overwritten.
+    Args:
+        filename: path to the file to be checked
+        move: whether to rename the existing file (True) or overwrite it (False)
+        is_directory: whether the path is a directory
+    Returns:
+        the original filename (which is now safe to use)
     """
     if os.path.exists(filename):
         if move:

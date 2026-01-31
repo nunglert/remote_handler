@@ -20,7 +20,8 @@ class Sampler(ABC):
     def update(
         self, calcdir: Path, sampler_input: Path | list[Path], **kwargs
     ) -> None:
-        """Function updating the sampling logic for the current
+        """
+        Function updating the sampling logic for the current
         iteration. This in general can include file/directory creation or
         movement, as well as changes to the logic of the sampling itself, like
         e.g. parameters for a nested sampling run.
@@ -236,9 +237,10 @@ class Schedule(ABC):
         self.check()
 
     def visualize(self, column_width: int = 20) -> None:
-        """Visualizes the parameter that change during the defined schedule.
+        """
+        Visualizes the parameter that change during the defined schedule.
         It is recommended to check this before actually starting an active
-        learning run to see whether you actually implemented what you wanted..
+        learning run to see whether you actually implemented what you wanted.
 
         Args:
             column_width: Width of the column in which parameter is printed to
@@ -254,6 +256,7 @@ class Schedule(ABC):
             300                 400                 2 4 6 8 10 12 14 16
             400                 600                 2 4 6 8 10 12 14 16
         """
+        # Get the parameters names
         params = self.get_kwargs(0)
         header_str = ""
         for k in params.keys():
@@ -261,6 +264,7 @@ class Schedule(ABC):
         logger.info(header_str)
 
         for i in range(self.num_iterations):
+            # Get the parameters values
             params = self.get_kwargs(i)
 
             iter_str = ""
@@ -269,7 +273,8 @@ class Schedule(ABC):
             logger.info(iter_str)
 
     def check(self) -> None:
-        """Checks whether at each iteration the returned parameters are the
+        """
+        Checks whether at each iteration the returned parameters are the
         same."""
         params = self.get_kwargs(0)
         for i in range(self.num_iterations):
@@ -281,6 +286,7 @@ class Schedule(ABC):
                     f"incorrect. Failed due to {e}"
                 )
 
+            # Check that the same parameters are returned at each iteration
             if kwargs.keys() != params.keys():
                 raise Exception(
                     "Schedule needs to return the same parameters for every "
@@ -484,9 +490,12 @@ class ActiveLearningHandler(ABC):
         trainer_output_extension: str = "pkl",
     ) -> None:
         super().__init__()
+        # Main objects of the AL loop
         self.sampler = sampler
         self.evaluator = evaluator
         self.trainer = trainer
+
+        # Schedules for the AL loop
         self.sampler_schedule = sampler_schedule
         self.evaluator_schedule = evaluator_schedule
         self.trainer_schedule = trainer_schedule
@@ -497,9 +506,11 @@ class ActiveLearningHandler(ABC):
         self.evaluator_output_extension = evaluator_output_extension
         self.trainer_output_extension = trainer_output_extension
 
+        # Maximum number of iterations
         self.num_iterations = num_iterations
         self.calchome = Path(calchome)
 
+        # Tracking of the progress of the AL loop
         self.progress_file = self.calchome / "AL_progress.json"
         self.sampler_in = []
         self.evaluator_in = []
@@ -507,6 +518,7 @@ class ActiveLearningHandler(ABC):
 
         self.get_rel = lambda x: Path(x).relative_to(self.calchome)
 
+        # Check whether we continue a crashed run or start from scratch
         if os.path.exists(self.progress_file):
             logger.info("Continuing crashed run...")
             with open(self.progress_file, "r") as f:
@@ -543,6 +555,7 @@ class ActiveLearningHandler(ABC):
                 assert len(self.trainer_in) > 0
 
         else:
+            #### Start from scratch
             logger.info(
                 f"Starting from scratch. Entry at {cycle_entry_point}..."
             )
@@ -551,6 +564,7 @@ class ActiveLearningHandler(ABC):
             self.progress = []
             self.iteration_idx = 0
 
+            # Entry point of the AL loop
             if cycle_entry_point == "sampler":
                 assert initial_trainer_out is not None
                 if not combine_trainer_outputs:
@@ -637,6 +651,7 @@ class ActiveLearningHandler(ABC):
             ]
             self.trainer_in.extend(initial_evaluator_out)
 
+        # Fill the remaining iterations with full cycles
         self.remaining_iterations = (
             self.num_iterations - len(self.progress) + 1
         )
@@ -653,6 +668,7 @@ class ActiveLearningHandler(ABC):
         ]:
             os.makedirs(path, exist_ok=True)
 
+        # Define how the last cycle should look like
         if cycle_exit_point == "sampler":
             self.last_cycle_steps = [1, 0, 0]
         elif cycle_exit_point == "evaluation":
@@ -794,7 +810,6 @@ class ActiveLearningHandler(ABC):
             input_arg,
             **kwargs,
         )
-
         results_model_file = self.trainer.get_trained_model()
         results_model_file = (
             [results_model_file]
@@ -816,6 +831,7 @@ class ActiveLearningHandler(ABC):
         else:
             self.sampler_in = new_paths
 
+        # Update the progress file
         self.progress[self.iteration_idx]["steps"] = [0, 0, 0]
         self.progress[self.iteration_idx]["trainer_output"] = [
             str(p) for p in new_paths
@@ -824,38 +840,46 @@ class ActiveLearningHandler(ABC):
 
     def single_iteration(self) -> None:
         """Runs a single active learning iteration. For each iteration it
-        creates a new calcdir in `calchome`. If provided, schedules are
-        applied to the individual actors.
+        creates a new calcdir in `calchome`.
+        If provided, schedules are applied to the individual actors.
         """
+        # Create a new directory for this iteration
         self.current_iter_dir = self.calchome / str(self.iteration_idx)
         os.makedirs(self.current_iter_dir, exist_ok=True)
 
+        # Determine which steps to perform this iteration
         (do_sample, do_eval, do_retrain) = self.progress[self.iteration_idx][
             "steps"
         ]
         if do_sample:
+            # Sample new configurations
             if self.sampler_schedule is None:
                 kwargs = {}
             else:
+                # Update kwargs according to the schedule
                 kwargs = self.sampler_schedule.get_kwargs(self.iteration_idx)
 
             self.sample(**kwargs)
 
         if do_eval:
+            # Evaluate the sampled configurations with DFT
             if self.evaluator_schedule is None:
                 kwargs = {}
             else:
+                # Update kwargs according to the schedule
                 kwargs = self.evaluator_schedule.get_kwargs(self.iteration_idx)
 
-            self.evaluate()
+            self.evaluate(**kwargs)
 
         if do_retrain:
+            # Retrain the MLFF model
             if self.trainer_schedule is None:
                 kwargs = {}
             else:
+                # Update kwargs according to the schedule
                 kwargs = self.trainer_schedule.get_kwargs(self.iteration_idx)
 
-            self.retrain()
+            self.retrain(**kwargs)
 
     def run(self) -> None:
         """Runs the active learning cycle. In case a crashed run is restarted,
@@ -866,9 +890,12 @@ class ActiveLearningHandler(ABC):
             self.iteration_idx += 1
 
             steps = [1, 1, 1]
+            # If this is the second last iteration, we might not want to
+            # run a full cycle, but look at self.last_cycle_steps
             if i == self.remaining_iterations - 2:
                 steps = self.last_cycle_steps
 
+            # Prepare for the next iteration
             self.progress.append({"steps": steps})
             print("_____________________________________________")
             sys.stdout.flush()
