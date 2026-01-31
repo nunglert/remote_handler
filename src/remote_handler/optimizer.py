@@ -90,6 +90,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
             collect_only,
             tag,
             2,  # n_processors
+            slurm_header_add="module load openblas",
         )
 
         self.logger = tasks.SimpleLogger(logfile)

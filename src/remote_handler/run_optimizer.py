@@ -340,13 +340,13 @@ def get_parser():
     )
     parser.add_argument(
         "--remote_machine",
-        default="lugus",
+        default="datalab",
         type=str,
         help="Name of remote machine",
     )
     parser.add_argument(
         "--local_machine",
-        default="datalab",
+        default="dirona",
         type=str,
         help="Name of local machine",
     )

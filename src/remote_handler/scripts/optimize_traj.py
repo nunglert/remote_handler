@@ -71,12 +71,11 @@ if (
     do_steinhardt
     and input_args["steinhardt_args"]["steinhardt_backend"] == "quip"
 ):
+    print("... Computing Steinhardt using QUIP ...")
     for l in input_args["steinhardt_args"]["steinhardt_l_values"]:
         properties.get_q_quip_inplace(
             ats, input_args["steinhardt_args"]["cutoff"], path=path, l=l
         )
-
-    do_steinhardt = False
 
 
 for idx, at in enumerate(ats):
@@ -84,33 +83,40 @@ for idx, at in enumerate(ats):
     at_pre.info["is_finished"] = False
     try:
         if STUB:
-            raise Exception("Skipping computations ...")
+            raise Exception("Skipping computations (stub) ...")
 
         # TODO: do I want Steinhardt of optimized or non-optimized config?
         is_finished = False
         if do_steinhardt:
-            cutoff = input_args["steinhardt_args"]["cutoff"]
-            nbins = input_args["steinhardt_args"]["nbins"]
-            l_values = input_args["steinhardt_args"]["steinhardt_l_values"]
-            q4_label = f"q4_rcut{cutoff}"
-            q6_label = f"q6_rcut{cutoff}"
-            if not (
-                q4_label in at.arrays
-                and q6_label in at.arrays
-                and "rdf" in at.info
-            ):
-                print("... Computing Steinhardt")
-                qs, rdf, radii = properties.get_q(
-                    at, cutoff, nbins, l_values=l_values
-                )
-                q4, q6 = qs
-                at.arrays[q4_label] = q4
-                at.arrays[q6_label] = q6
+            sbackend = input_args["steinhardt_args"]["steinhardt_backend"]
+            if sbackend == "pyscal":
+                cutoff = input_args["steinhardt_args"]["cutoff"]
+                nbins = input_args["steinhardt_args"]["nbins"]
+                l_values = input_args["steinhardt_args"]["steinhardt_l_values"]
+                q4_label = f"q4_rcut{cutoff}"
+                q6_label = f"q6_rcut{cutoff}"
+                if not (
+                    q4_label in at.arrays
+                    and q6_label in at.arrays
+                    and "rdf" in at.info
+                ):
+                    print("... Computing Steinhardt")
+                    qs, rdf, radii = properties.get_q(
+                        at, cutoff, nbins, l_values=l_values
+                    )
+                    q4, q6 = qs
+                    at.arrays[q4_label] = q4
+                    at.arrays[q6_label] = q6
 
-                at.info["rdf"] = rdf
-                at.info["nbins"] = nbins
-                at.info["rmax"] = cutoff
-            is_finished = True
+                    at.info["rdf"] = rdf
+                    at.info["nbins"] = nbins
+                    at.info["rmax"] = cutoff
+                is_finished = True
+            elif sbackend == "quip":
+                # calculation was already done above for all ats
+                is_finished = True
+            else:
+                raise Exception
 
         if do_optimization:
             if not "is_converged" in at.info:

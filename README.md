@@ -104,6 +104,7 @@ We define an interface for a task in `RemoteTask`. This is currently in progress
 - (Error handling: Each task may have individual logic to check whether it ran succesfully and also what could be done if not)
 
 Examples coming as soon as the implementation converges to sth sensible...
+Until then, refer to the tests in the `test` directory. They should be runnable once you installed the package and properly edited the config files for your environment (local and remote). `test_tasks.py` contains some very basic test tasks, whereas `test_dft_runner.py` and `test_optimizer.py` are already much more elaborate.
 
 ### Active learning workflows
 
@@ -154,7 +155,7 @@ class ModelTrainer(ABC):
     def get_trained_model(self) -> os.PathLike:
         pass
 ```
-Everything else is handled by the `ActiveLearningHandler` class. 
+Everything else is handled by the `ActiveLearningHandler` class. I recommend to run the tests in `test_active_learning.py` once, to get a feeling which changes are made on the filesystem. 
 
 #### Schedules
 Optionally, the user can also supply schedules for each actor to  adjust parameters throughout the active learning loop. Currently, only static schedules (completely fixed before the loop starts) are supported since they are much more robust than dynamically changing schedules.

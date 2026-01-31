@@ -4,12 +4,11 @@ import os
 import shutil
 import sys
 from abc import ABC, abstractmethod
-from json.encoder import ESCAPE_DCT
+from collections.abc import MutableMapping
+from pathlib import Path
 from typing import Callable, Literal, Optional
 
 import ase.io
-import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import numpy as np
 from ase import Atoms
 
@@ -19,7 +18,7 @@ logger = logging.getLogger(__name__)
 class Sampler(ABC):
     @abstractmethod
     def update(
-        self, calcdir: os.PathLike, model_file: os.PathLike, **kwargs
+        self, calcdir: Path, sampler_input: Path | list[Path], **kwargs
     ) -> None:
         """Function updating the sampling logic for the current
         iteration. This in general can include file/directory creation or
@@ -30,24 +29,25 @@ class Sampler(ABC):
             calcdir: The directory in `calchome` (see `ActiveLearningHandler`)
                 of the current iteration. This is passed here such that the
                 `Sampler` can eventually write into it.
-            collected_file: Path to a file containing parameters for a MLFF
-                model used by `Sampler`. These are usually pickle files.
+            sampler_input: Path or list of paths to files needed to run `Sampler`.
+                For example this could contain one or more paths to MLFF model-files
+                for the `Sampler` to run MD and/or perform ensemble evaluations with.
             **kwargs: Optional parameters returned from a schedule to modify
                 the sampling logic (see also `Schedule`)
         """
         pass
 
     @abstractmethod
-    def get_sampled_configs(self) -> list[Atoms]:
-        """Function must return a list of `ase.Atoms` objects which are
-        unlabelled."""
+    def get_sampled_configs(self) -> Path | list[Path]:
+        """Function returns a `JsonDict` object containing necessary information
+        for upcoming `GroundTruthEvaluator` step."""
         pass
 
 
 class GroundTruthEvaluator(ABC):
     @abstractmethod
     def update(
-        self, calcdir: os.PathLike, collected_file: os.PathLike, **kwargs
+        self, calcdir: Path, evaluator_input: Path | list[Path], **kwargs
     ) -> None:
         """Function updating the ground truth evaluation logic for the current
         iteration. This in general can include file/directory creation or
@@ -58,26 +58,26 @@ class GroundTruthEvaluator(ABC):
             calcdir: The directory in `calchome` (see `ActiveLearningHandler`)
                 of the current iteration. This is passed here such that the
                 `GroundTruthEvaluator` can eventually write into it.
-            collected_file: Path to a file containing unlabelled configurations
-                which shall be labelled.
+            evaluator_input: Path or list of Paths to files needed for running
+                `GroundTruthEvaluator`. For example this could point to one or
+                more .extxyz files with unlabelled configurations for the
+                `GroundTruthEvaluator` to run DFT on.
             **kwargs: Optional parameters returned from a schedule to modify
                 the labelling logic (see also `Schedule`)
         """
         pass
 
     @abstractmethod
-    def get_evaluated_configs(self) -> list[Atoms]:
-        """Function must return a list of `ase.Atoms` objects which are
-        labelled by a ground truth method like DFT. The miniumum requirement
-        is that a valid calculator is attached, such that
-        `get_potential_energy` and `get_forces` can be called."""
+    def get_evaluated_configs(self) -> Path | list[Path]:
+        """Function returns a `JsonDict` object containing necessary information
+        for upcoming `ModelTrainer` step."""
         pass
 
 
 class ModelTrainer(ABC):
     @abstractmethod
     def update(
-        self, calcdir: os.PathLike, db_files: list[os.PathLike], **kwargs
+        self, calcdir: Path, trainer_input: Path | list[Path], **kwargs
     ) -> None:
         """Function updating the training logic for the current iteration.
 
@@ -85,81 +85,138 @@ class ModelTrainer(ABC):
             calcdir: The directory in `calchome` (see `ActiveLearningHandler`)
                 of the current iteration. This is passed here such that the
                 `ModelTrainer` can eventually write into it.
-            db_files: List of paths to a files containing labelled
-                configurations which shall be used for training a MLFF model.
+            trainer_input: Path or list of Paths to files needed for running
+                `ModelTrainer`. For example this could point to one or more
+                .extxyz files with DFT-evaluated configurations to use for
+                the next training iteration.
             **kwargs: Optional parameters returned from a schedule to modify
                 the labelling logic (see also `Schedule`)
         """
         pass
 
     @abstractmethod
-    def get_trained_model(self) -> os.PathLike:
-        """Function must return a path to an existing model file."""
+    def get_trained_model(self) -> Path | list[Path]:
+        """Function returns a `JsonDict` object containing necessary information
+        for upcoming `Sampler` step"""
         pass
+
+
+def append_or_extend(item, append_list):
+    """Appends item to append_list if item is not a list. If item is a list,
+    appends each individual entry of item to append_list instead.
+    """
+    if isinstance(item, list):
+        append_list.extend(item)
+    else:
+        append_list.append(item)
 
 
 def process_progress(
     progress: list[dict],
     num_iterations: int,
-    db_files: list[os.PathLike],
+    combine_sampler_outputs: bool,
+    combine_evaluator_outputs: bool,
+    combine_trainer_outputs: bool,
 ) -> tuple[
     int,  # iteration_idx
-    os.PathLike,  # collected_file
-    list[os.PathLike],  # db_files
-    os.PathLike,  # model_file
-    dict,  # progress
+    list[Path],  # evaluator input
+    list[Path],  # trainer input
+    list[Path],  # sampler input
+    list[dict],  # progress
 ]:
     """Parses the contents of a dumped `AL_progress.json` file and returns
     the quantities necessary for resuming a active learning loop with
     `ActiveLearningHandler`.
     """
+    # TODO: Unsure what happens when restarting in final generation with exit point that is not training
+    # TODO: This appends the wrong steps if current steps are [0,0,0] and next gen is final one with steps != [1,1,1]
     keys = range(len(progress))
-    # collect all config dbs from the previous iterations because they
-    # are all needed for retraining.
     assert len(keys) <= num_iterations
 
-    idx = 0
-    # pickle_file = db_files[0]
-    model_file = None
-    collected_file = None
-    if len(keys) > 1:
-        for key in keys[:-1]:
-            db_file = progress[key].get("db_file")
-            if db_file is not None:
-                db_files.append(db_file)
-            idx += 1
-        model_file = progress[key]["model_file"]
+    evaluator_in = []
+    trainer_in = []
+    sampler_in = []
+    if combine_sampler_outputs:
+        if len(keys) > 1:
+            for key in keys[:-1]:
+                append_or_extend(
+                    progress[key].get("sampler_output"), evaluator_in
+                )
+
+    if combine_evaluator_outputs:
+        if len(keys) > 1:
+            for key in keys[:-1]:
+                append_or_extend(
+                    progress[key].get("evaluator_output"), trainer_in
+                )
+
+    if combine_trainer_outputs:
+        if len(keys) > 1:
+            for key in keys[:-1]:
+                append_or_extend(
+                    progress[key].get("trainer_output"), sampler_in
+                )
 
     last_iteration_key = keys[-1]
     last_iter_keys = progress[last_iteration_key].keys()
     if "steps" in last_iter_keys:
         steps = progress[last_iteration_key]["steps"]
+        iteration_idx = last_iteration_key
 
-        remaining_steps = np.sum(steps)
-        if remaining_steps > 0:
-            # last loaded iteration is incomplete, proceed with missing
-            iteration_idx = idx
-            # if configs from NS were already collected
-            if steps == [1, 1, 1]:
-                model_file = progress[last_iteration_key]["model_file"]
-            elif steps == [0, 1, 1]:
-                collected_file = progress[last_iteration_key]["collected_file"]
-            # if dft was already run, collect db_file
-            if not steps[1]:
-                db_files.append(progress[last_iteration_key]["db_file"])
+        if steps in [[1, 1, 1], [1, 1, 0], [1, 0, 0]]:
+            if not combine_trainer_outputs and last_iteration_key is not 0:
+                # not needed if combine is true since the previous generation
+                # trainer_output would have already been added above
+                append_or_extend(
+                    progress[last_iteration_key - 1]["trainer_output"],
+                    sampler_in,
+                )
+
+        # if configs from sampling were already collected
+        elif steps in [[0, 1, 1] or [0, 1, 0]]:
+            append_or_extend(
+                progress[last_iteration_key]["sampler_output"], evaluator_in
+            )
+
+        # if dft was already run, collect sampler_out as well as evaluator_out
+        elif steps == [0, 0, 1]:
+            if combine_sampler_outputs:
+                append_or_extend(
+                    progress[last_iteration_key]["sampler_output"],
+                    evaluator_in,
+                )
+
+            append_or_extend(
+                progress[last_iteration_key]["evaluator_output"], trainer_in
+            )
 
         else:
+            # if steps are [0,0,0], all combinable outputs need to be appended
+            # even if combine_trainer_output=False, trainer_output is needed for
+            # the next generation's sampling
+            if combine_sampler_outputs:
+                append_or_extend(
+                    progress[last_iteration_key]["sampler_output"],
+                    evaluator_in,
+                )
+            if combine_evaluator_outputs:
+                append_or_extend(
+                    progress[last_iteration_key]["evaluator_output"],
+                    trainer_in,
+                )
+            append_or_extend(
+                progress[last_iteration_key]["trainer_output"], sampler_in
+            )
+
             # last loaded iteration is complete, proceed with next iter
-            iteration_idx = idx + 1
-            collected_file = None
-            sampler_todo, evaluation_todo, training_todo = steps
-            db_file = progress[last_iteration_key].get("db_file")
-            if db_file is not None:
-                db_files.append(db_file)
-            model_file = progress[last_iteration_key]["model_file"]
+            iteration_idx = last_iteration_key + 1
             progress.append({"steps": [1, 1, 1]})
 
-    return iteration_idx, collected_file, db_files, model_file, progress
+    evaluator_in = [Path(p) for p in evaluator_in]
+    trainer_in = [Path(p) for p in trainer_in]
+    sampler_in = [Path(p) for p in sampler_in]
+
+    return iteration_idx, evaluator_in, trainer_in, sampler_in, progress
 
 
 class Schedule(ABC):
@@ -201,7 +258,7 @@ class Schedule(ABC):
         header_str = ""
         for k in params.keys():
             header_str += f"{k:<{column_width}}"
-        print(header_str)
+        logger.info(header_str)
 
         for i in range(self.num_iterations):
             params = self.get_kwargs(i)
@@ -209,7 +266,7 @@ class Schedule(ABC):
             iter_str = ""
             for v in params.values():
                 iter_str += f"{v:<{column_width}}"
-            print(iter_str)
+            logger.info(iter_str)
 
     def check(self) -> None:
         """Checks whether at each iteration the returned parameters are the
@@ -283,22 +340,8 @@ class Schedule(ABC):
 
 
 class ActiveLearningHandler(ABC):
-    sampler: Sampler
-    evaluator: GroundTruthEvaluator
-    trainer: ModelTrainer
-
-    sampler_schedule: Schedule
-    evaluator_schedule: Schedule
-    trainer_schedule: Schedule
-
-    model_file: os.PathLike
-    collected_file: os.PathLike
-    db_files: list[os.PathLike]
-
-    iteration_idx: int
-
     """Implementation of the core functionality of an active learning loop
-    consisting of three actors: A sampler, a ground truth evaluator and a 
+    consisting of three actors: A sampler, a ground truth evaluator and a
     model trainer. `ActiveLearningHandler` handles the bookkeeping of created
     files and passes required files to the corresponding actors. It offers
     functionality to resume broken runs by caching the current progress and
@@ -314,28 +357,56 @@ class ActiveLearningHandler(ABC):
             be 'sampler', 'evaluation' or 'training'
         cycle_exit_point: Defines the actor where your loop ends. Can either
             be 'sampler', 'evaluation' or 'training'
-        initial_model_file: An initial model file (usually .pickle) containing
-            the parameters for your MLFF model, which is required by `Sampler`.
-            This is only required if you start from scratch and enter the loop 
-            with cycle_entry_point='sampler'
-        initial_sample_file: An initial file of unlabeled configurations. This
-            is only required if you start from scratch and enter the loop with
-            cycle_entry_point='evaluator'
-        initial_db_file: An initial file of labeled configurations. This
-            is only required if you start from scratch and enter the loop with
-            cycle_entry_point='training'
-        sampler_schedule: A `Schedule` instance encoding a schedule for the 
+        initial_trainer_out: Any input similar to the outputs of the used
+            `ModelTrainer` which should be used by the `Sampler`. May for example
+            be the path(s) to one or several model files that should be used in
+            the sampling step. Required when starting from scratch with
+            cycle_entry_point='sampler', however will also be used if
+            combine_trainer_outputs=True.
+        initial_sampler_out: Any input similar to the outputs of the used
+            `Sampler` which should be used by the `GroundTruthEvaluator`.
+            May for example be the path(s) to one or several .extxyz files
+            that should be evaluated in the evaluation step. Required when
+            starting from scratch with cycle_entry_point='evaluation', however
+            will also be used if combine_sampler_outputs=True.
+        initial_evaluator_out: Any input similar to the outputs of the used
+            `GroundTruthEvaluator` which should be used by the `ModelTrainer`.
+            May for example be the path(s) to one or several .extxyz files
+            that should be used in the training step. Required when starting
+            from scratch with cycle_entry_point='training', however will also
+            be used if combine_evaluator_outputs=True.
+        sampler_schedule: A `Schedule` instance encoding a schedule for the
             sampler
-        evaluator_schedule: A `Schedule` instance encoding a schedule for the 
+        evaluator_schedule: A `Schedule` instance encoding a schedule for the
             evaluator
-        trainer_schedule: A `Schedule` instance encoding a schedule for the 
+        trainer_schedule: A `Schedule` instance encoding a schedule for the
             trainer
+        combine_sampler_outputs: If true, the outputs of all previous sampling
+            steps (as well as initial_sampler_out) will be passed to the
+            evaluator. Otherwise only the outputs of the most recent sampling step
+            (or initial_sampler_out if starting from scratch at the evaluation
+            step) will be passed.
+        combine_evaluator_outputs: If true, the outputs of all previous evaluation
+            steps (as well as initial_evaluator_out) will be passed to the
+            trainer. Otherwise only the outputs of the most recent evaluation step
+            (or initial_evaluator_out if starting from scratch at the training
+            step) will be passed.
+        combine_trainer_outputs: If true, the outputs of all previous training
+            steps (as well as initial_trainer_out) will be passed to the
+            sampler. Otherwise only the outputs of the most recent training step
+            (or initial_trainer_out if starting from scratch at the training
+            step) will be passed.
+        sampler_output_extension: File extension for the `Sampler`'s output files.
+        evaluator_output_extension: File extension for the `GroundTruthEvaluator`'s
+            output files.
+        trainer_output_extension: File extension for the `ModelTrainer`'s output
+            files.
 
     Examples:
-        In general `ActiveLearningHandler` will create a folder structure like 
+        In general `ActiveLearningHandler` will create a folder structure like
         the following:
 
-            calchome 
+            calchome
             ├── 0
             │   ├── sampler
             │   ├── dft
@@ -360,26 +431,26 @@ class ActiveLearningHandler(ABC):
             ├── AL_progress.json
             └── al_loop.py
 
-        Here, `AL_progress.json` contains the bookkeeping. During each 
-        iteration, it updates a dictionary that contains information on the 
-        progress of the loop. Once a full loop is finished, it could look like 
+        Here, `AL_progress.json` contains the bookkeeping. During each
+        iteration, it updates a dictionary that contains information on the
+        progress of the loop. Once a full loop is finished, it could look like
         this:
 
         {
             'steps': [0, 0, 0],
-            'collected_file': PATH_TO_COLLECTED,
-            'db_file': PATH_TO_DB,
-            'model_file': PATH_TO_MODEL
+            'sampler_output': [PATH_TO_SAMPLES],
+            'evaluator_output': [PATH_TO_DB],
+            'trainer_output': [PATH_TO_MODEL1, PATH_TO_MODEL2, ...]
         }
 
         where 'steps' indicate which actor still needs to be run (hence its 0
-        if it was already successfully run). Hence, if e.g. only the sampler 
-        finished successfully so far, the entry for the current iteration in 
+        if it was already successfully run). Hence, if e.g. only the sampler
+        finished successfully so far, the entry for the current iteration in
         `AL_progress.json` would look like this:
-        
+
         {
             'steps': [0, 1, 1],
-            'collected_file': PATH_TO_COLLECTED,
+            'sampler_output': [PATH_TO_SAMPLES],
         }
 
         This logic allows the `ActiveLearningHandler` to easily resume runs
@@ -399,12 +470,18 @@ class ActiveLearningHandler(ABC):
         cycle_exit_point: Literal[
             "sampler", "evaluation", "training"
         ] = "sampler",
-        initial_model_file: Optional[os.PathLike] = None,
-        initial_sample_file: Optional[os.PathLike] = None,
-        initial_db_file: Optional[os.PathLike] = None,
+        initial_trainer_out: Optional[Path | list[Path]] = None,
+        initial_sampler_out: Optional[Path | list[Path]] = None,
+        initial_evaluator_out: Optional[Path | list[Path]] = None,
         sampler_schedule: Optional[Schedule] = None,
         evaluator_schedule: Optional[Schedule] = None,
         trainer_schedule: Optional[Schedule] = None,
+        combine_sampler_outputs: bool = False,
+        combine_evaluator_outputs: bool = True,
+        combine_trainer_outputs: bool = False,
+        sampler_output_extension: str = "extxyz",
+        evaluator_output_extension: str = "extxyz",
+        trainer_output_extension: str = "pkl",
     ) -> None:
         super().__init__()
         self.sampler = sampler
@@ -413,13 +490,23 @@ class ActiveLearningHandler(ABC):
         self.sampler_schedule = sampler_schedule
         self.evaluator_schedule = evaluator_schedule
         self.trainer_schedule = trainer_schedule
+        self.combine_sampler_outputs = combine_sampler_outputs
+        self.combine_evaluator_outputs = combine_evaluator_outputs
+        self.combine_trainer_outputs = combine_trainer_outputs
+        self.sampler_output_extension = sampler_output_extension
+        self.evaluator_output_extension = evaluator_output_extension
+        self.trainer_output_extension = trainer_output_extension
 
         self.num_iterations = num_iterations
-        self.calchome = calchome
+        self.calchome = Path(calchome)
 
         self.progress_file = self.calchome / "AL_progress.json"
+        self.sampler_in = []
+        self.evaluator_in = []
+        self.trainer_in = []
 
-        self.db_files = []
+        self.get_rel = lambda x: Path(x).relative_to(self.calchome)
+
         if os.path.exists(self.progress_file):
             logger.info("Continuing crashed run...")
             with open(self.progress_file, "r") as f:
@@ -427,54 +514,128 @@ class ActiveLearningHandler(ABC):
 
             (
                 self.iteration_idx,
-                self.collected_file,
-                self.db_files,
-                self.model_file,
+                self.evaluator_in,
+                self.trainer_in,
+                self.sampler_in,
                 self.progress,
             ) = process_progress(
-                self.progress, self.num_iterations, self.db_files
+                self.progress,
+                self.num_iterations,
+                self.combine_sampler_outputs,
+                self.combine_evaluator_outputs,
+                self.combine_trainer_outputs,
             )
 
-            steps = self.progress[self.iteration_idx]["steps"]
-            if steps == [1, 1, 1]:
-                assert self.model_file is not None
-            if steps == [0, 1, 1]:
-                assert self.collected_file is not None
-            if steps == [0, 0, 1]:
-                assert len(self.db_files) > 0
+            if self.iteration_idx + 1 == self.num_iterations and self.progress[
+                self.iteration_idx
+            ]["steps"] == [1, 1, 1]:
+                if cycle_exit_point == "sampler":
+                    self.progress[self.iteration_idx]["steps"] = [1, 0, 0]
+                elif cycle_exit_point == "evaluator":
+                    self.progress[self.iteration_idx]["steps"] = [1, 1, 0]
 
-            if len(self.db_files) > self.iteration_idx + 1:
-                logger.warning(
-                    "Usually each AL iteration adds one db_file. Take care.."
-                )
+            steps = self.progress[self.iteration_idx]["steps"]
+            if steps in [[1, 1, 1], [1, 1, 0], [1, 0, 0]]:
+                assert len(self.sampler_in) > 0
+            if steps in [[0, 1, 1], [0, 1, 0]]:
+                assert len(self.evaluator_in) > 0
+            if steps == [0, 0, 1]:
+                assert len(self.trainer_in) > 0
+
         else:
             logger.info(
                 f"Starting from scratch. Entry at {cycle_entry_point}..."
             )
 
+            # self.db_files = []
             self.progress = []
             self.iteration_idx = 0
 
             if cycle_entry_point == "sampler":
-                assert initial_model_file is not None
-                self.model_file = initial_model_file
+                assert initial_trainer_out is not None
+                if not combine_trainer_outputs:
+                    initial_trainer_out = (
+                        [self.move_file_to_home(initial_trainer_out)]
+                        if isinstance(initial_trainer_out, Path)
+                        else [
+                            self.move_file_to_home(p)
+                            for p in initial_trainer_out
+                        ]
+                    )
+                    initial_trainer_out = [
+                        self.get_rel(p) for p in initial_trainer_out
+                    ]
+                    self.sampler_in = initial_trainer_out
                 self.progress.append({"steps": [1, 1, 1]})
 
             elif cycle_entry_point == "evaluation":
-                assert initial_sample_file is not None
-                self.collected_file = initial_sample_file
+                assert initial_sampler_out is not None
+                if not combine_sampler_outputs:
+                    initial_sampler_out = (
+                        [self.move_file_to_home(initial_sampler_out)]
+                        if isinstance(initial_sampler_out, Path)
+                        else [
+                            self.move_file_to_home(p)
+                            for p in initial_sampler_out
+                        ]
+                    )
+                    initial_sampler_out = [
+                        self.get_rel(p) for p in initial_sampler_out
+                    ]
+                    self.evaluator_in = initial_sampler_out
                 self.progress.append({"steps": [0, 1, 1]})
 
             elif cycle_entry_point == "training":
-                assert initial_db_file is not None
-                self.db_files.append(initial_db_file)
+                assert initial_evaluator_out is not None
+                if not combine_evaluator_outputs:
+                    initial_evaluator_out = (
+                        [self.move_file_to_home(initial_evaluator_out)]
+                        if isinstance(initial_evaluator_out, Path)
+                        else [
+                            self.move_file_to_home(p)
+                            for p in initial_evaluator_out
+                        ]
+                    )
+                    initial_evaluator_out = [
+                        self.get_rel(p) for p in initial_evaluator_out
+                    ]
+                    self.trainer_in = initial_evaluator_out
                 self.progress.append({"steps": [0, 0, 1]})
 
-            else:
-                raise Exception(
-                    "Unknown cycle_entry_point. "
-                    "Use either sampler, evaluation or training"
-                )
+        # make sure that initial inputs are always part of lists if corresponding
+        # combine parameter is set
+        if initial_trainer_out is not None and combine_trainer_outputs:
+            initial_trainer_out = (
+                [self.move_file_to_home(initial_trainer_out)]
+                if isinstance(initial_trainer_out, Path)
+                else [self.move_file_to_home(p) for p in initial_trainer_out]
+            )
+            initial_trainer_out = [
+                self.get_rel(p) for p in initial_trainer_out
+            ]
+            self.sampler_in.extend(initial_trainer_out)
+
+        if initial_sampler_out is not None and combine_sampler_outputs:
+            initial_sampler_out = (
+                [self.move_file_to_home(initial_sampler_out)]
+                if isinstance(initial_sampler_out, Path)
+                else [self.move_file_to_home(p) for p in initial_sampler_out]
+            )
+            initial_sampler_out = [
+                self.get_rel(p) for p in initial_sampler_out
+            ]
+            self.evaluator_in.extend(initial_sampler_out)
+
+        if initial_evaluator_out is not None and combine_evaluator_outputs:
+            initial_evaluator_out = (
+                [self.move_file_to_home(initial_evaluator_out)]
+                if isinstance(initial_evaluator_out, Path)
+                else [self.move_file_to_home(p) for p in initial_evaluator_out]
+            )
+            initial_evaluator_out = [
+                self.get_rel(p) for p in initial_evaluator_out
+            ]
+            self.trainer_in.extend(initial_evaluator_out)
 
         self.remaining_iterations = (
             self.num_iterations - len(self.progress) + 1
@@ -482,13 +643,13 @@ class ActiveLearningHandler(ABC):
         if self.remaining_iterations <= 0:
             raise Exception("No iterations left, increase num_iterations!")
 
-        self.sampled_configs_dir = self.calchome / "sampled_configs"
-        self.evaluated_configs_dir = self.calchome / "evaluated_configs"
-        self.trained_models_dir = self.calchome / "trained_models"
+        self.sampler_output_dir = self.calchome / "sampler_output"
+        self.evaluator_output_dir = self.calchome / "evaluator_output"
+        self.trainer_output_dir = self.calchome / "trainer_output"
         for path in [
-            self.sampled_configs_dir,
-            self.evaluated_configs_dir,
-            self.trained_models_dir,
+            self.sampler_output_dir,
+            self.evaluator_output_dir,
+            self.trainer_output_dir,
         ]:
             os.makedirs(path, exist_ok=True)
 
@@ -509,70 +670,156 @@ class ActiveLearningHandler(ABC):
             "iterations."
         )
 
+    def move_file_to_home(self, file: Path):
+        """Moves a file from an external path into the AL home directory
+
+        Args:
+            file: path of file which should be moved to AL home
+
+        Returns:
+            Path to moved file
+        """
+        if not file.is_relative_to(self.calchome):
+            file_home = self.calchome / os.path.split(file)[1]
+            shutil.copy(file, file_home)
+            file = file_home
+        return file
+
     def update_progress_file(self) -> None:
         """Updates the `AL_progress.json` file."""
         with open(self.progress_file, "w") as f:
             json.dump(self.progress, f, indent=2)
 
     def sample(self, **kwargs) -> None:
-        """Runs the Sampler, requiring `self.model_file` and updating
-        `self.collected_file`
+        """Runs the Sampler, requiring `self.sampler_in` and updating
+        `self.evaluator_in`
 
         Args:
             **kwargs: kwargs passed to the `update` function of `sampler`.
         """
-        assert self.model_file is not None
-        self.sampler.update(self.current_iter_dir, self.model_file, **kwargs)
+        assert self.sampler_in is not None and len(self.sampler_in) > 0
+        logger.info("SAMPLING...")
+        input_arg = (
+            self.calchome / self.sampler_in[0]
+            if len(self.sampler_in) == 1
+            else [self.calchome / p for p in self.sampler_in]
+        )
+        self.sampler.update(self.current_iter_dir, input_arg, **kwargs)
         sampled_configs = self.sampler.get_sampled_configs()
-        self.collected_file = (
-            self.sampled_configs_dir / f"samples_{self.iteration_idx}.extxyz"
+        sampled_configs = (
+            [sampled_configs]
+            if isinstance(sampled_configs, Path)
+            else sampled_configs
         )
-        ase.io.write(self.collected_file, sampled_configs)
+
+        new_paths = []
+        for i, p in enumerate(sampled_configs):
+            path = self.get_rel(
+                self.sampler_output_dir
+                / f"sampler_it{self.iteration_idx}_{i}.{self.sampler_output_extension}"
+            )
+            shutil.copy(p, self.calchome / path)
+            new_paths.append(path)
+
+        if self.combine_sampler_outputs:
+            self.evaluator_in.extend(new_paths)
+        else:
+            self.evaluator_in = new_paths
+
         self.progress[self.iteration_idx]["steps"] = [0, 1, 1]
-        self.progress[self.iteration_idx]["collected_file"] = str(
-            self.collected_file
-        )
+        self.progress[self.iteration_idx]["sampler_output"] = [
+            str(p) for p in new_paths
+        ]
         self.update_progress_file()
 
     def evaluate(self, **kwargs) -> None:
-        """Runs the GroundTruthEvaluator, requiring `self.model_file` and
-        updating `self.db_files`
+        """Runs the GroundTruthEvaluator, requiring `self.evaluator_in` and
+        updating `self.trainer_in`
 
         Args:
             **kwargs: kwargs passed to the `update` function of `evaluator`.
         """
-        assert self.collected_file is not None
-        self.evaluator.update(
-            self.current_iter_dir, self.collected_file, **kwargs
+        assert self.evaluator_in is not None and len(self.evaluator_in) > 0
+        logger.info("EVALUATING GROUND TRUTH...")
+        input_arg = (
+            self.calchome / self.evaluator_in[0]
+            if len(self.evaluator_in) == 1
+            else [self.calchome / p for p in self.evaluator_in]
         )
+
+        self.evaluator.update(self.current_iter_dir, input_arg, **kwargs)
         evaluated_configs = self.evaluator.get_evaluated_configs()
-        evaluated_file = (
-            self.evaluated_configs_dir
-            / f"evaluated_{self.iteration_idx}.extxyz"
+        evaluated_configs = (
+            [evaluated_configs]
+            if isinstance(evaluated_configs, Path)
+            else evaluated_configs
         )
-        ase.io.write(evaluated_file, evaluated_configs)
-        self.db_files.append(evaluated_file)
-        self.progress[self.iteration_idx]["db_file"] = str(evaluated_file)
+
+        new_paths = []
+        for i, p in enumerate(evaluated_configs):
+            path = self.get_rel(
+                self.evaluator_output_dir
+                / f"evaluator_it{self.iteration_idx}_{i}.{self.evaluator_output_extension}"
+            )
+            shutil.copy(p, self.calchome / path)
+            new_paths.append(path)
+
+        if self.combine_evaluator_outputs:
+            self.trainer_in.extend(new_paths)
+        else:
+            self.trainer_in = new_paths
+
         self.progress[self.iteration_idx]["steps"] = [0, 0, 1]
+        self.progress[self.iteration_idx]["evaluator_output"] = [
+            str(p) for p in new_paths
+        ]
         self.update_progress_file()
 
     def retrain(self, **kwargs) -> None:
-        """Runs the ModelTrainer, requiring `self.db_files` and updating
-        `self.model_file`
+        """Runs the ModelTrainer, requiring `self.trainer_in` and updating
+        `self.sampler_in`
 
         Args:
             **kwargs: kwargs passed to the `update` function of `trainer`.
         """
-        assert self.db_files
-        self.trainer.update(self.current_iter_dir, self.db_files, **kwargs)
-        results_model_file = self.trainer.get_trained_model()
-        self.model_file = (
-            self.trained_models_dir / f"model_{self.iteration_idx}.pkl"
+        assert self.trainer_in is not None and len(self.trainer_in) > 0
+        logger.info("RETRAINING MODEL...")
+        input_arg = (
+            self.calchome / self.trainer_in[0]
+            if len(self.trainer_in) == 1
+            else [self.calchome / p for p in self.trainer_in]
         )
-        shutil.copy(results_model_file, self.model_file)
+        self.trainer.update(
+            self.current_iter_dir,
+            input_arg,
+            **kwargs,
+        )
+
+        results_model_file = self.trainer.get_trained_model()
+        results_model_file = (
+            [results_model_file]
+            if isinstance(results_model_file, Path)
+            else results_model_file
+        )
+
+        new_paths = []
+        for i, p in enumerate(results_model_file):
+            path = self.get_rel(
+                self.trainer_output_dir
+                / f"trainer_it{self.iteration_idx}_{i}.{self.trainer_output_extension}"
+            )
+            shutil.copy(p, self.calchome / path)
+            new_paths.append(path)
+
+        if self.combine_trainer_outputs:
+            self.sampler_in.extend(new_paths)
+        else:
+            self.sampler_in = new_paths
 
         self.progress[self.iteration_idx]["steps"] = [0, 0, 0]
-        self.progress[self.iteration_idx]["model_file"] = str(self.model_file)
+        self.progress[self.iteration_idx]["trainer_output"] = [
+            str(p) for p in new_paths
+        ]
         self.update_progress_file()
 
     def single_iteration(self) -> None:

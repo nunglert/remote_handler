@@ -95,7 +95,7 @@ def test_SingleScriptTask_simple(data_dir, filesystem):
         input_file=input_file,
         local_savepath=local_results_path,
         remote_fs=filesystem,
-        logfile=local_savepath / "test_SingleScriptTask.log",
+        logfile="test_SingleScriptTask.log",
         loop_time=1,
         remote_savepath=None,  # fall back to savepath in config
     )
@@ -155,7 +155,7 @@ def test_ArrayScriptTask_simple(data_dir, filesystem):
         script_path,
         individual_ressources,
         shared_ressources=[],
-        logfile=local_savepath / "test_ArrayScriptTask.log",
+        logfile="test_ArrayScriptTask.log",
         loop_time=1,
         remote_savepath=None,  # fall back to savepath in config
     )

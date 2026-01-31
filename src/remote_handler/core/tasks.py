@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any, Optional, Union
 from xml.etree.ElementPath import prepare_star
 
-from remote_handler.core import cluster_handler, file_handler, slurm_utils
+from remote_handler.core import (
+    cluster_handler,
+    file_handler,
+    file_utils,
+    slurm_utils,
+)
 from remote_handler.core.file_handler import (
     FileSystemHandlerBase,
     LocalFileSystem,
@@ -64,7 +69,7 @@ class RemoteTask(ABC):
             parent, child = os.path.split(savepath)
             if not self.remote_fs.exists(parent):
                 raise Exception(
-                    "The parent of savepath must already exist on the remote system!"
+                    f"The parent of {savepath=} must already exist on the remote system!"
                 )
 
             if self.remote_fs.exists(savepath):
@@ -90,6 +95,7 @@ class RemoteTask(ABC):
                         )
                         + random_string
                     )
+                    logger.info(f"results saved to: {self.savepath}")
                     self.remote_fs.makedirs(self.savepath, exist_ok=True)
 
             else:
@@ -271,6 +277,9 @@ class SingleScriptTask(RemoteTask):
         self.slurm_handler.wait_until_finished()
 
     def collect_results(self):
+        file_utils.secure_declare_path(
+            self.local_savepath, move=True, is_directory=True
+        )
         self.remote_fs.get_dir(self.calcdir, self.local_savepath)
 
     def finish_check(self):
@@ -431,7 +440,7 @@ class ArrayScriptTask(RemoteTask):
         ), "Need self.python_script_file"
         assert os.path.exists(
             self.python_script_file
-        ), "Did not find python script!"
+        ), f"Did not find python script at {self.python_script_file}!"
         assert (
             len(self.individual_ressources) > 0
         ), "Specify some inputs for your script!"
@@ -465,6 +474,9 @@ class ArrayScriptTask(RemoteTask):
         self.slurm_handler.wait_until_finished()
 
     def collect_results(self):
+        file_utils.secure_declare_path(
+            self.local_savepath, move=True, is_directory=True
+        )
         self.remote_fs.get_dir(self.rootpath, self.local_savepath)
 
     def finish_check(self):

@@ -16,7 +16,7 @@ TEMPLATE_DIRS = []
 if CUSTOM_TEMPLATE_DIR is not None:
     TEMPLATE_DIRS.append(CUSTOM_TEMPLATE_DIR)
     # for template_path in CUSTOM_TEMPLATE_DIR:
-TEMPLATE_DIRS.append(DEFAULT_TEMPLATE_DIR)
+# TEMPLATE_DIRS.append(DEFAULT_TEMPLATE_DIR)
 
 
 def submit_job(script_path, output_path, ssh_command=None, cwd=None):
@@ -116,6 +116,13 @@ def check_job_status_squeue(job_id, ssh_command="ssh lugus"):
         return True
 
 
+class LoggingFileSystemLoader(FileSystemLoader):
+    def get_source(self, environment, template):
+        source, filename, uptodate = super().get_source(environment, template)
+        logger.info(f"{template} (resolved to {filename})")
+        return source, filename, uptodate
+
+
 def get_array_slurm_str(
     calcdir,
     python_script_path,
@@ -136,7 +143,7 @@ def get_array_slurm_str(
     if map_indices is None:
         map_indices = np.arange(num_array_tasks)
 
-    env = Environment(loader=FileSystemLoader(TEMPLATE_DIRS))
+    env = Environment(loader=LoggingFileSystemLoader(TEMPLATE_DIRS))
     template = env.get_template(header_template)
 
     slurm_str = template.render(
@@ -168,7 +175,7 @@ def get_slurm_str(
     job_type_template="body_single.sh.j2",
     slurm_header_add="",
 ):
-    env = Environment(loader=FileSystemLoader(TEMPLATE_DIRS))
+    env = Environment(loader=LoggingFileSystemLoader(TEMPLATE_DIRS))
     template = env.get_template(header_template)
 
     slurm_str = template.render(

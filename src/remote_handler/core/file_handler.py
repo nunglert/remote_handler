@@ -362,14 +362,53 @@ class RemoteFileSystem(FileSystemHandlerBase):
             0
         ]  # Get the first IdentityFile if available
 
-        self.ssh_client = paramiko.SSHClient()
-        self.ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        proxyjump = host_config.get("proxyjump")
 
-        self.ssh_client.connect(
-            hostname,
-            username=username,
-            key_filename=identityfile,
-        )
+        if proxyjump:
+            # Step 1: Connect to jump host
+            jump_config = ssh_config.lookup(proxyjump)
+            jump_host = jump_config.get("hostname")
+            jump_user = jump_config.get("user")
+            jump_key = jump_config.get("identityfile", [None])[0]
+
+            jump_client = paramiko.SSHClient()
+            jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            jump_client.connect(
+                jump_host,
+                username=jump_user,
+                key_filename=jump_key,
+            )
+
+            # Step 2: Create a tunnel from jump host to target
+            jump_transport = jump_client.get_transport()
+            dest_addr = (hostname, 22)
+            local_addr = ("localhost", 0)
+            channel = jump_transport.open_channel(
+                "direct-tcpip", dest_addr, local_addr
+            )
+
+            # Step 3: Connect final client using this channel as a socket
+            self.ssh_client = paramiko.SSHClient()
+            self.ssh_client.set_missing_host_key_policy(
+                paramiko.AutoAddPolicy()
+            )
+            self.ssh_client.connect(
+                hostname,
+                username=username,
+                key_filename=identityfile,
+                sock=channel,
+            )
+        else:
+            # Direct connection
+            self.ssh_client = paramiko.SSHClient()
+            self.ssh_client.set_missing_host_key_policy(
+                paramiko.AutoAddPolicy()
+            )
+            self.ssh_client.connect(
+                hostname,
+                username=username,
+                key_filename=identityfile,
+            )
         self.sftp_client = self.ssh_client.open_sftp()
 
     def _disconnect(self) -> None:
