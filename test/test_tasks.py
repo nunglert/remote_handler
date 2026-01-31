@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -73,7 +74,7 @@ def test_SingleScriptTask_simple(data_dir, filesystem):
     collected. This allows us to comfortably check the output files in case
     something crashed.
     """
-    os.environ["REMOTE_HANDLER_LOCAL"] = "datalab"
+    # os.environ["REMOTE_HANDLER_LOCAL"] = "datalab"
     relative_path = Path("SingleScriptTask") / "simple"
     assetpath = data_dir / "assets" / relative_path
     local_savepath = data_dir / "temp" / relative_path
@@ -95,7 +96,7 @@ def test_SingleScriptTask_simple(data_dir, filesystem):
         input_file=input_file,
         local_savepath=local_results_path,
         remote_fs=filesystem,
-        logfile=local_savepath / "test_SingleScriptTask.log",
+        logfile="test_SingleScriptTask.log",
         loop_time=1,
         remote_savepath=None,  # fall back to savepath in config
     )
@@ -105,9 +106,14 @@ def test_SingleScriptTask_simple(data_dir, filesystem):
     task.collect_results()
 
     if not task.finish_check():
-        slurm_err = local_results_path / "slurm.err"
-        with open(slurm_err, "r") as f:
-            raise Exception(f.read())
+        # slurm_err = local_results_path / "slurm.err"
+        # with open(slurm_err, "r") as f:
+        #     raise Exception(f.read())
+        raise Exception(
+            "Run not finished? Only found these files: \n"
+            f"{os.listdir(local_results_path)} \n"
+            f"at {local_results_path}"
+        )
 
 
 def test_ArrayScriptTask_simple(data_dir, filesystem):
@@ -126,7 +132,7 @@ def test_ArrayScriptTask_simple(data_dir, filesystem):
     collected. This allows us to comfortably check the output files in case
     something crashed.
     """
-    os.environ["REMOTE_HANDLER_LOCAL"] = "datalab"
+    # os.environ["REMOTE_HANDLER_LOCAL"] = "datalab"
     relative_path = Path("ArrayScriptTask") / "simple"
     assetpath = data_dir / "assets" / relative_path
     local_savepath = data_dir / "temp" / relative_path
@@ -155,7 +161,7 @@ def test_ArrayScriptTask_simple(data_dir, filesystem):
         script_path,
         individual_ressources,
         shared_ressources=[],
-        logfile=local_savepath / "test_ArrayScriptTask.log",
+        logfile="test_ArrayScriptTask.log",
         loop_time=1,
         remote_savepath=None,  # fall back to savepath in config
     )

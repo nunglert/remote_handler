@@ -18,6 +18,7 @@ from pytest_lazyfixture import lazy_fixture
 # want to run the tests, then you could run the tests for another machine2
 # (e.g. datalab) by copying your config for machine1 to `remote.json`
 # (e.g. cp datalab.json remote.json)
+
 if os.environ.get("REMOTE_HANDLER_CONFIG_DIR") is None:
     # os.environ["REMOTE_HANDLER_CONFIG_DIR"] = "/home/nico.unglert/code/jaxnest_dev/experiments/remote_handler/examples/config_files"
     raise Exception(
@@ -28,16 +29,6 @@ if os.environ.get("REMOTE_HANDLER_CONFIG_DIR") is None:
     ] = "/home/nunglert/code/remote_handler/experiments/config_files"
 
 from remote_handler.core import file_handler
-
-# def pytest_collection_modifyitems(config, items):
-#     if config.getoption("-m"):
-#         # If marker explicitly provided, don't interfere.
-#         return
-
-#     remote = pytest.mark.skip(reason="Skipping remote tests by default.")
-#     for item in items:
-#         if "remote" in item.keywords:
-#             item.add_marker(remote)
 
 
 @pytest.fixture(scope="session")

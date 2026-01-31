@@ -79,7 +79,7 @@ def default_params(filesystem, data_dir, dummy_trajectory):
     python_script_path = asset_dir / "simple_at_processor.py"
     # python_script_path = asset_dir / "optimize_traj.py"
 
-    logfile = temp_dir / "test_slurm.log"
+    logfile = "test_slurm.log"
 
     for path in [local_dir, local_results]:
         if path is not None:
@@ -165,6 +165,7 @@ def test_allocate_data(instance):
         )
 
 
+@pytest.mark.heavy
 def test_submit(instance):
     handler, params = instance
 
@@ -215,6 +216,7 @@ def test_collect_and_redistribute(instance):
         assert handler.local_fs.exists(opt_tfile)
 
 
+@pytest.mark.heavy
 def test_full_run(instance):
     handler, params = instance
     handler.allocate_data()
@@ -225,6 +227,7 @@ def test_full_run(instance):
     handler.collect_results()
 
 
+@pytest.mark.heavy
 def test_failure_incomplete(instance):
     """Tests if an error is raised if one of the processed trajectories does
     not have the expected length. Can happen e.g. when the python kernel
@@ -245,6 +248,7 @@ def test_failure_incomplete(instance):
     handler.collect_results()
 
 
+@pytest.mark.heavy
 def test_failure_is_finished(instance):
     """Tests if an error is raised if the computations for one config crashed
     leading to an is_finished=False entry in the atoms info dict.
@@ -266,6 +270,7 @@ def test_failure_is_finished(instance):
     handler.collect_results()
 
 
+@pytest.mark.heavy
 def test_recompute_failed(instance):
     handler, params = instance
     handler.allocate_data()
@@ -327,7 +332,7 @@ def test_run_optimizer_parse_logger(
     temp_dir = data_dir / "temp/run_optimizer/logger"
     if not os.path.exists(temp_dir):
         os.makedirs(temp_dir, exist_ok=True)
-    log_file = temp_dir / "opt.log"
+    log_file = "opt.log"
 
     arg_list = [
         "--files",
@@ -361,7 +366,7 @@ class ScratchDir:
                     shutil.rmtree(path)
         os.makedirs(self.local_dir, exist_ok=False)
 
-        self.logfile = str(self.temp_dir / "opt.log")
+        self.logfile = "opt.log"
         if os.path.exists(self.logfile):
             os.remove(self.logfile)
 
@@ -432,7 +437,14 @@ def test_setup_optimizer_case3(argparser, data_dir, dummy_trajectory):
 
     # now we try to parse from it
     args = argparser.parse_args(
-        ["--read_out", str(data.temp_dir / "opt.log"), "--every", "2"]
+        [
+            "--read_out",
+            str(data.temp_dir / "opt.log"),
+            "--every",
+            "2",
+            "--logfile",
+            data.logfile,
+        ]
     )
     args1 = run_optimizer.process_args(args, argparser)
     assert args1.every == 2, "log params are not overwritten by passed arg!"

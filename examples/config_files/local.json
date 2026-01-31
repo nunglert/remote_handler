@@ -1,0 +1,10 @@
+{
+    "remote_machine": "dirona",
+    "partition": "normal",
+    "savepath": "/home/aserafini/code/some_stupid_test",
+    "conda_env": "jaxnest",
+    "n_processors": 1,
+    "slurm_header_add": "",
+    "jobfile_name": "run_slurm.sh",
+    "template": "dirona.sh.j2"
+}

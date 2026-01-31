@@ -12,42 +12,44 @@ from remote_handler.core.active_learning_base import (
     GroundTruthEvaluator,
     ModelTrainer,
     Sampler,
+    process_progress,
 )
 
 
-def get_dummy_configs():
-    np.random.seed(0)
-    n_configs = 10
-    at0 = Atoms("Si3", cell=np.eye(3) * 7, pbc=True)
-    ats = []
-    for idx in range(n_configs):
-        at = at0.copy()
-        at.set_positions(np.random.random(size=(3, 3)) * 7)
-        at.set_cell(at.cell[...] * np.random.random(size=(3, 3)))
-        at.info["shard_idx"] = idx
-        ats.append(at)
-    return ats
-
-
-dummy_configs = get_dummy_configs()
-
-
 class SamplerMock(Sampler):
-    def update(self, calcdir, model_file):
-        assert os.path.exists(model_file)
+    def __init__(self, path):
+        self.sample_file = Path(path) / "sample.xyz"
+        with open(self.sample_file, "w") as f:
+            f.write("test")
+
+    def update(self, calcdir, sampler_input, **kwargs):
+        if isinstance(sampler_input, Path):
+            assert os.path.exists(sampler_input.absolute())
+        else:
+            for p in sampler_input:
+                assert os.path.exists(p.absolute())
         os.makedirs(Path(calcdir) / "sampler_dir")
 
     def get_sampled_configs(self):
-        return dummy_configs
+        return self.sample_file
 
 
 class EvaluatorMock(GroundTruthEvaluator):
-    def update(self, calcdir, collected_file):
-        assert os.path.exists(collected_file)
+    def __init__(self, path):
+        self.db_file = Path(path) / "db.xyz"
+        with open(self.db_file, "w") as f:
+            f.write("test")
+
+    def update(self, calcdir, evaluator_input, **kwargs):
+        if isinstance(evaluator_input, Path):
+            assert os.path.exists(evaluator_input.absolute())
+        else:
+            for p in evaluator_input:
+                assert os.path.exists(p.absolute())
         os.makedirs(Path(calcdir) / "evaluator_dir")
 
     def get_evaluated_configs(self):
-        return dummy_configs
+        return self.db_file
 
 
 class TrainerMock(ModelTrainer):
@@ -56,9 +58,12 @@ class TrainerMock(ModelTrainer):
         with open(self.model_file, "w") as f:
             f.write("keklelsos")
 
-    def update(self, calcdir, db_files):
-        for file in db_files:
-            assert os.path.exists(file)
+    def update(self, calcdir, trainer_input, **kwargs):
+        if isinstance(trainer_input, Path):
+            assert os.path.exists(trainer_input.absolute())
+        else:
+            for p in trainer_input:
+                assert os.path.exists(p.absolute())
         os.makedirs(Path(calcdir) / "trainer_dir")
 
     def get_trained_model(self):
@@ -81,19 +86,19 @@ def test_ActiveLearningHandler(data_dir, cycle_entry_point):
                 shutil.rmtree(path)
     os.makedirs(local_dir, exist_ok=False)
 
-    sampler = SamplerMock()
-    evaluator = EvaluatorMock()
+    sampler = SamplerMock(temp_dir)
+    evaluator = EvaluatorMock(temp_dir)
     trainer = TrainerMock(temp_dir)
 
-    initial_model_file = temp_dir / "model.pkl"
+    initial_model_file = local_dir / "model.pkl"
     with open(initial_model_file, "w") as f:
         f.write("keklelsos")
 
-    initial_db_file = temp_dir / "initial_db.extxyz"
+    initial_db_file = local_dir / "initial_db.extxyz"
     with open(initial_db_file, "w") as f:
         f.write("keklelsos")
 
-    initial_sample_file = temp_dir / "initial_sample.extxyz"
+    initial_sample_file = local_dir / "initial_sample.extxyz"
     with open(initial_sample_file, "w") as f:
         f.write("keklelsos")
 
@@ -101,10 +106,10 @@ def test_ActiveLearningHandler(data_dir, cycle_entry_point):
         sampler,
         evaluator,
         trainer,
-        calcdir=local_dir,
-        initial_model_file=initial_model_file,
-        initial_db_file=initial_db_file,
-        initial_sample_file=initial_sample_file,
+        calchome=local_dir,
+        initial_trainer_out=initial_model_file,
+        initial_sampler_out=initial_sample_file,
+        initial_evaluator_out=initial_db_file,
         num_iterations=5,
         cycle_entry_point=cycle_entry_point,
     )
@@ -128,8 +133,8 @@ def test_restart_ActiveLearningHandler(data_dir, cycle_exit_point):
                 shutil.rmtree(path)
     os.makedirs(local_dir, exist_ok=False)
 
-    sampler = SamplerMock()
-    evaluator = EvaluatorMock()
+    sampler = SamplerMock(temp_dir)
+    evaluator = EvaluatorMock(temp_dir)
     trainer = TrainerMock(temp_dir)
 
     initial_model_file = temp_dir / "model.pkl"
@@ -140,7 +145,7 @@ def test_restart_ActiveLearningHandler(data_dir, cycle_exit_point):
     with open(initial_db_file, "w") as f:
         f.write("keklelsos")
 
-    initial_sample_file = temp_dir / "initial_sample.extxyz"
+    initial_sample_file = local_dir / "initial_sample.extxyz"
     with open(initial_sample_file, "w") as f:
         f.write("keklelsos")
 
@@ -148,10 +153,10 @@ def test_restart_ActiveLearningHandler(data_dir, cycle_exit_point):
         sampler,
         evaluator,
         trainer,
-        calcdir=local_dir,
-        initial_model_file=initial_model_file,
-        initial_db_file=initial_db_file,
-        initial_sample_file=initial_sample_file,
+        calchome=local_dir,
+        initial_trainer_out=initial_model_file,
+        initial_evaluator_out=initial_db_file,
+        initial_sampler_out=initial_sample_file,
         num_iterations=5,
         cycle_exit_point=cycle_exit_point,
     )
@@ -162,13 +167,187 @@ def test_restart_ActiveLearningHandler(data_dir, cycle_exit_point):
         sampler,
         evaluator,
         trainer,
-        calcdir=local_dir,
-        initial_model_file=initial_model_file,
-        initial_db_file=initial_db_file,
-        initial_sample_file=initial_sample_file,
+        calchome=local_dir,
+        initial_trainer_out=initial_model_file,
+        initial_evaluator_out=initial_db_file,
+        initial_sampler_out=initial_sample_file,
         num_iterations=10,
         cycle_entry_point="sampler",  # This will be ignored!
         cycle_exit_point="sampler",
     )
 
     al_handler.run()
+
+
+class Test_process_progress:
+    def test_fully_completed(self):
+        progress = [
+            dict(
+                steps=[0, 0, 0],
+                sampler_output=["collected_0"],
+                evaluator_output=["db_00", "db_01"],
+                trainer_output=["model_00", "model_01"],
+            ),
+            dict(
+                steps=[0, 0, 0],
+                sampler_output=["collected_1"],
+                evaluator_output=["db_10"],
+                trainer_output=["model_10"],
+            ),
+        ]
+
+        (
+            iteration_idx,
+            evaluator_input,
+            trainer_input,
+            sampler_input,
+            progress,
+        ) = process_progress(progress, 10, False, True, False)
+
+        assert iteration_idx == 2
+        assert len(evaluator_input) == 0
+        assert len(trainer_input) == 3
+        assert sampler_input == [Path("model_10")]
+        assert len(progress) == 3
+        assert list(progress[-1].keys()) == ["steps"]
+
+    def test_sampler_completed(self):
+        progress = [
+            dict(
+                steps=[0, 0, 0],
+                sampler_output=["collected_0"],
+                evaluator_output=["db_0"],
+                trainer_output=["pickle_0"],
+            ),
+            dict(
+                steps=[0, 1, 1],
+                sampler_output=["collected_1"],
+            ),
+        ]
+        (
+            iteration_idx,
+            evaluator_input,
+            trainer_input,
+            sampler_input,
+            progress,
+        ) = process_progress(progress, 10, False, False, False)
+
+        assert iteration_idx == 1
+        assert evaluator_input == [Path("collected_1")]
+        assert len(trainer_input) == 0
+        assert len(sampler_input) == 0
+        assert len(progress) == 2
+        assert list(progress[-1].keys()) == ["steps", "sampler_output"]
+
+    def test_sampler_evaluator_completed(self):
+        progress = [
+            dict(
+                steps=[0, 0, 0],
+                sampler_output=["collected_0"],
+                evaluator_output=["db_0"],
+                trainer_output=["pickle_0"],
+            ),
+            dict(
+                steps=[0, 0, 1],
+                trainer_output=["collected_1"],
+                evaluator_output=["db_1"],
+            ),
+        ]
+
+        (
+            iteration_idx,
+            evaluator_input,
+            trainer_input,
+            sampler_input,
+            progress,
+        ) = process_progress(progress, 10, False, False, True)
+
+        assert iteration_idx == 1
+        assert len(evaluator_input) == 0
+        assert trainer_input == [Path("db_1")]
+        assert sampler_input == [Path("pickle_0")]
+        assert len(progress) == 2
+        assert list(progress[-1].keys()) == [
+            "steps",
+            "trainer_output",
+            "evaluator_output",
+        ]
+
+    def test_none_completed(self):
+        progress = [
+            dict(
+                steps=[0, 0, 0],
+                sampler_output=["collected_0"],
+                evaluator_output=["db_0"],
+                trainer_output=["pickle_0"],
+            ),
+            dict(
+                steps=[1, 1, 1],
+            ),
+        ]
+
+        (
+            iteration_idx,
+            evaluator_input,
+            trainer_input,
+            sampler_input,
+            progress,
+        ) = process_progress(progress, 10, False, False, False)
+
+        assert iteration_idx == 1
+        assert sampler_input == [Path("pickle_0")]
+        assert len(evaluator_input) == 0
+        assert len(trainer_input) == 0
+        assert len(progress) == 2
+        assert list(progress[-1].keys()) == ["steps"]
+
+    def test_single_sampler_completed(self):
+        progress = [
+            dict(
+                steps=[0, 1, 1],
+                sampler_output=["collected_0"],
+            ),
+        ]
+
+        (
+            iteration_idx,
+            evaluator_input,
+            trainer_input,
+            sampler_input,
+            progress,
+        ) = process_progress(progress, 10, False, False, False)
+
+        assert iteration_idx == 0
+        assert evaluator_input == [Path("collected_0")]
+        assert len(trainer_input) == 0
+        assert len(sampler_input) == 0
+        assert len(progress) == 1
+        assert list(progress[-1].keys()) == ["steps", "sampler_output"]
+
+    def test_single_sampler_evaluator_completed(self):
+        progress = [
+            dict(
+                steps=[0, 0, 1],
+                sampler_output=["collected_0"],
+                evaluator_output=["db_0"],
+            ),
+        ]
+
+        (
+            iteration_idx,
+            evaluator_input,
+            trainer_input,
+            sampler_input,
+            progress,
+        ) = process_progress(progress, 10, True, False, False)
+
+        assert iteration_idx == 0
+        assert evaluator_input == [Path("collected_0")]
+        assert trainer_input == [Path("db_0")]
+        assert sampler_input == []
+        assert len(progress) == 1
+        assert list(progress[-1].keys()) == [
+            "steps",
+            "sampler_output",
+            "evaluator_output",
+        ]

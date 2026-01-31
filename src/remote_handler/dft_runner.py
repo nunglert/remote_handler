@@ -13,14 +13,41 @@ logger = logging.getLogger(__name__)
 
 
 class VASPHandler(RemoteAtomsHandler):
+    """
+    Handler to run single point DFT calculations with VASP on a remote cluster.
+    Inherits from RemoteAtomsHandler to manage remote file operations and job submissions.
+
+    Args:
+        traj_files (list[Union[str, os.PathLike]]): List of paths to trajectory files.
+        remote_fs (file_handler.FileSystemHandlerBase): Remote file system handler.
+        savepath (str): Path to save the results on the remote system.
+        num_parallel (int): Number of parallel jobs to run, i.e. length of the job array.
+        loop_time (float, optional): Time in minutes between each loop iteration.
+        jobname (str, optional): Name of the SLURM job.
+        every (Optional[int], optional): Interval for selecting frames from trajectory files.
+        start (Optional[int], optional): Starting frame index for selection.
+        end (Optional[int], optional): Ending frame index for selection.
+        local_savepath (Optional[os.PathLike], optional): Local path to save results.
+        logfile (str, optional): Path to the log file.
+        collect_only (bool, optional): If True, only collect results without submitting jobs.
+        tag (str, optional): Tag for the job.
+        python_script_path (str, optional): Path to the Python script to run on the remote system.
+        stub (bool, optional): If True, use a stub version of the VASP
+        launcher (str, optional): Command to launch VASP
+        slurm_header_add (str, optional): Additional SLURM header lines.
+        vasp_binary (str, optional): Name of the VASP binary to execute.
+        n_processors (int, optional): Number of processors to use for VASP.
+        incar_kwargs (dict, optional): Dictionary of INCAR parameters for VASP.
+    """
+
     def __init__(
         self,
-        traj_files: str,
+        traj_files: list[Union[str, os.PathLike]],
         remote_fs: file_handler.FileSystemHandlerBase,
         savepath: str,
         num_parallel: int,
         loop_time: float = 30,
-        jobname: str = "opt",
+        jobname: str = "DFT_Eval",
         every: Optional[int] = None,
         start: Optional[int] = None,
         end: Optional[int] = None,
@@ -53,15 +80,10 @@ class VASPHandler(RemoteAtomsHandler):
             "kspacing": 0.3,
         },
     ):
-        #         slurm_header_add = """#SBATCH --time=0-02:00:00
-        # module load vasp/6.4.2_intel
-        # source /opt/intel/oneapi/setvars.sh --force
-        # export VASP_PP_PATH=/home/nunglert/cellar/vasp/paw
-        # """
         super().__init__(
             traj_files,
             remote_fs,
-            1,  # shard_size
+            1,  # Shard size of 1 since we want to run one structure per job task
             savepath,
             num_parallel,
             loop_time,
@@ -90,6 +112,7 @@ class VASPHandler(RemoteAtomsHandler):
 
         self.shared_ressources = []
 
+        # Prepare the individual resources if not in collect only mode
         if not collect_only:
             self.prepare_individual_data()
 
@@ -99,7 +122,7 @@ class VASPHandler(RemoteAtomsHandler):
         for calc_idx in range(self.num_array_tasks):
             json_config = deepcopy(self.json_args)
 
-            # TODO: this is dirty, properly solve this
+            # Store the path to the database for each batch, where the results will be saved
             json_config["DATABASE"] = f"dft.extxyz"
 
             config_files.append(
@@ -115,12 +138,20 @@ class VASPHandler(RemoteAtomsHandler):
 
         del self.shards
 
+        # The writable object needed for the submission: shape (num_obj, num_tasks)
         self.individual_ressources = [config_files, atoms_batches]
 
     def finish_check(self, required_fraction: float = 0.8):
+        """
+        Check if the VASP calculations have finished successfully by looking for
+        'is_finished.info' files in the calculation directories.
+        """
+
         assert self.all_calcpaths, "There are no calcpaths to check!"
 
+        # Count how many calculations have finished
         num_converged = 0
+        # Iterate over all task calcpaths
         for calcpath in self.all_calcpaths:
             if self.remote_fs.exists(Path(calcpath) / "is_finished.info"):
                 num_converged += 1
@@ -128,7 +159,7 @@ class VASPHandler(RemoteAtomsHandler):
         finished_fraction = num_converged / len(self.all_calcpaths)
         if finished_fraction < 0.5:
             logger.warning("More than 50% of the submitted runs failed..")
-        return finished_fraction > required_fraction
+        return finished_fraction >= required_fraction
 
     def run(self):
         self.allocate_data()

@@ -49,6 +49,36 @@ In case `remote_handler` is supposed to be used for running batch jobs via the S
 
 This will probably undergo a few changes in the close future to make it more general for different systems. The idea at the moment is, to generate the required queuing scripts using `jinja2` templates. You may also want to specify a `REMOTE_HANDLER_SLURM_TEMPLATES` env variable, for more info see below.
 
+#### An example setup
+Either before running a script using `remote_handler` or in your .bashrc set the two environment variables
+```bash
+export REMOTE_HANDLER_CONFIG_DIR=/path/to/config_files/
+export REMOTE_HANDLER_SLURM_TEMPLATES=/path/to/custom_templates/
+```
+The contents of directory `/path/to/config_files/` could look like the following:
+```bash
+config_files/
+├── datalab.json
+└── dirona.json
+```
+Note, that if you want to run serious tests that run not only locally, you must additionally provide 
+```bash
+├── local.json
+└── remote.json
+```
+in `/path/to/config_files`. Otherwise the test functions do not know, which is the local machine and which the remote machine.
+
+The contents of `/path/to/custom_templates/` could be
+```bash
+custom_templates/
+├── body_array.sh.j2
+├── body_single.sh.j2
+├── datalab.sh.j2
+└── dirona.sh.j2
+```
+
+
+
 ### Manipulating files on remote machines
 
 `FileSystemHandlerBase` defines an interface for manipulating files on a file system, like you are used to from manipulating files in a shell environment. Examples are 
@@ -104,12 +134,13 @@ We define an interface for a task in `RemoteTask`. This is currently in progress
 - (Error handling: Each task may have individual logic to check whether it ran succesfully and also what could be done if not)
 
 Examples coming as soon as the implementation converges to sth sensible...
+Until then, refer to the tests in the `test` directory. They should be runnable once you installed the package and properly edited the config files for your environment (local and remote). `test_tasks.py` contains some very basic test tasks, whereas `test_dft_runner.py` and `test_optimizer.py` are already much more elaborate.
 
 ### Active learning workflows
 
 `remote_handler` is designed for automating active learning workflows. For this purpose we provide an interface that can handle workflows of the following form, consisting of three actors (Sampler, Evaluator, Trainer):
 
-![Image description](examples/al_loop.png)
+![Image description](examples/remote_handler_al.png)
 
 
 #### Basic setup
@@ -154,7 +185,7 @@ class ModelTrainer(ABC):
     def get_trained_model(self) -> os.PathLike:
         pass
 ```
-Everything else is handled by the `ActiveLearningHandler` class. 
+Everything else is handled by the `ActiveLearningHandler` class. I recommend to run the tests in `test_active_learning.py` once, to get a feeling which changes are made on the filesystem. 
 
 #### Schedules
 Optionally, the user can also supply schedules for each actor to  adjust parameters throughout the active learning loop. Currently, only static schedules (completely fixed before the loop starts) are supported since they are much more robust than dynamically changing schedules.

@@ -72,7 +72,6 @@ class TestFileSystem:
         fs.get(target_dir / filename2, local_dir / filename2)
 
         assert os.path.exists(local_dir / filename2)
-        # os.remove(local_dir / filename2)
 
     def test_put_dir(self, instance, local_dir):
         fs, target_dir = instance
@@ -94,7 +93,6 @@ class TestFileSystem:
         fs.get_dir(target_dir / dirname2, local_dir / dirname2)
 
         assert os.path.exists(local_dir / dirname2)
-        # shutil.rmtree(local_dir / dirname2)
 
     def test_create_tempdir(self, instance):
         fs, target_dir = instance
