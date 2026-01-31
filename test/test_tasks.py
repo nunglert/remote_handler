@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -105,9 +106,14 @@ def test_SingleScriptTask_simple(data_dir, filesystem):
     task.collect_results()
 
     if not task.finish_check():
-        slurm_err = local_results_path / "slurm.err"
-        with open(slurm_err, "r") as f:
-            raise Exception(f.read())
+        # slurm_err = local_results_path / "slurm.err"
+        # with open(slurm_err, "r") as f:
+        #     raise Exception(f.read())
+        raise Exception(
+            "Run not finished? Only found these files: \n"
+            f"{os.listdir(local_results_path)} \n"
+            f"at {local_results_path}"
+        )
 
 
 def test_ArrayScriptTask_simple(data_dir, filesystem):

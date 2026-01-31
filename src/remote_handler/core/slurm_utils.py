@@ -11,24 +11,25 @@ from remote_handler import DEFAULT_TEMPLATE_DIR
 
 logger = logging.getLogger(__name__)
 
-TEMPLATE_DIRS = []
+TEMPLATE_DIRS = [DEFAULT_TEMPLATE_DIR]
+
 
 def submit_job(script_path, output_path, ssh_command=None, cwd=None) -> str:
     """
-        Submit a slurm job.
+    Submit a slurm job.
 
-        Args:
-            script_path (os.PathLike): Path to the slurm script to be submitted.
-            output_path (os.PathLike): Path to the directory where slurm output and error files
-                will be written.
-            ssh_command (Optional[str], optional): SSH command to be used for remote submission.
-                Defaults to None.
-            cwd (Optional[os.PathLike], optional): If provided, the command will be executed
-                in this directory. Defaults to None.
-        Returns:
-            str: The job ID of the submitted job.
-    """  
-    
+    Args:
+        script_path (os.PathLike): Path to the slurm script to be submitted.
+        output_path (os.PathLike): Path to the directory where slurm output and error files
+            will be written.
+        ssh_command (Optional[str], optional): SSH command to be used for remote submission.
+            Defaults to None.
+        cwd (Optional[os.PathLike], optional): If provided, the command will be executed
+            in this directory. Defaults to None.
+    Returns:
+        str: The job ID of the submitted job.
+    """
+
     command = ""
     # Change to the specified directory if provided
     if cwd is not None:
@@ -95,7 +96,7 @@ def submit_job_array(
     result = subprocess.run(
         submit_cmd, shell=True, capture_output=True, text=True
     )
-    
+
     # Extract and return the job ID from the output
     pid = re.search(r"(\d+)", result.stdout).groups()[0]
     return pid
@@ -164,6 +165,7 @@ def check_job_status_squeue(job_id, ssh_command="ssh lugus"):
 
 class LoggingFileSystemLoader(FileSystemLoader):
     """Custom Jinja2 file system loader that logs which template files are loaded."""
+
     def get_source(self, environment, template):
         """Override the get_source method to add logging."""
         source, filename, uptodate = super().get_source(environment, template)
@@ -244,12 +246,12 @@ def get_slurm_str(
     job_type_template="body_single.sh.j2",
     slurm_header_add="",
     exclude_nodes: str = None,
-): 
+):
     """
     Get the SLURM script as a string.
     The directories contained in TEMPLATE_DIRS will be scanned in order
     until the first succesful hit of a `header_template` file.
-    
+
     Args:
         input_file (os.PathLike): Path to the input file for the python script.
         python_script_path (os.PathLike): Path to the python script to be executed.
