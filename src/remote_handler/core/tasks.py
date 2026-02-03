@@ -391,8 +391,8 @@ class SingleScriptTask(RemoteTask):
                 
                 last_used_node = self.remote_fs.read_str_from_file(
                     self.calcdir / "node_check.info"
-                ).strip()  
-                print(f"Excluding node: {last_used_node}")
+                ).strip().split(".")[0]  
+                logger.warning(f"Excluding node: {last_used_node}")
                 
                 exclude_node_list.append(last_used_node)
 
