@@ -349,9 +349,11 @@ class SingleScriptTask(RemoteTask):
             self.input_file_remote, self.script_file_remote
         )
 
-    def submit(self):
+    def submit(self, only_start=False):
         """Submit the slurm job and wait until it is finished."""
         self.slurm_handler.submit()
+        if only_start:
+            return
         self.slurm_handler.wait_until_finished()
 
     def collect_results(self):
@@ -375,14 +377,18 @@ class SingleScriptTask(RemoteTask):
         'node_check.info' in the calculation directory on the remote machine."""
         return self.remote_fs.exists(self.calcdir / "node_check.info")
 
-    def run(self):
+    def run(self, only_start=False):
         """Run the entire workflow: allocate data, submit job, and collect results."""
         exclude_node_list = []
         self.allocate_data()
         while True:
-            self.submit()
+            self.submit(only_start=only_start)
+            if only_start:
+                break
+
             if not self.node_problem():
                 break
+            
             else:
                 logger.warning(
                     "The job did not run on a node with the requested resources. "
@@ -401,6 +407,10 @@ class SingleScriptTask(RemoteTask):
                     self.script_file,
                     exclude_nodes=",".join(exclude_node_list)
                 )
+        
+        if only_start:
+            return
+        
         self.collect_results()
 
 

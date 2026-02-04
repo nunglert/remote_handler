@@ -124,7 +124,10 @@ def check_job_status_sacct(job_ids, ssh_command="ssh lugus"):
             pid_str += str(a) + ","
         pid_str += str(job_ids[-1])
 
-        status_cmd = f"{ssh_command} 'sacct -j {pid_str} --format=JobID,State'"
+        if ssh_command is None:
+            status_cmd = f"sacct -j {pid_str} --format=JobID,State"
+        else:
+            status_cmd = f"{ssh_command} 'sacct -j {pid_str} --format=JobID,State'"
         result = subprocess.run(
             status_cmd, shell=True, capture_output=True, text=True
         )
@@ -152,7 +155,10 @@ def check_job_status_squeue(job_id, ssh_command="ssh lugus"):
         bool: True if the job is still running, False if it has finished.
     """
     pid_str = str(job_id)
-    status_cmd = f"{ssh_command} 'squeue -j {pid_str}'"
+    if ssh_command is None:
+        status_cmd = f"squeue -j {pid_str}"
+    else:
+        status_cmd = f"{ssh_command} 'squeue -j {pid_str}'"
     result = subprocess.run(
         status_cmd, shell=True, capture_output=True, text=True
     )
