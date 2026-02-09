@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import subprocess
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -11,7 +12,22 @@ from remote_handler import DEFAULT_TEMPLATE_DIR
 
 logger = logging.getLogger(__name__)
 
-TEMPLATE_DIRS = [DEFAULT_TEMPLATE_DIR]
+# Build template search path
+# Custom templates from environment variable take precedence over defaults
+TEMPLATE_DIRS = []
+custom_template_dir = os.environ.get("REMOTE_HANDLER_SLURM_TEMPLATES")
+if custom_template_dir:
+    custom_path = Path(custom_template_dir)
+    if custom_path.exists() and custom_path.is_dir():
+        TEMPLATE_DIRS.append(custom_path)
+        logger.info(f"Using custom SLURM templates from: {custom_path}")
+    else:
+        logger.warning(
+            f"REMOTE_HANDLER_SLURM_TEMPLATES is set to '{custom_template_dir}' "
+            "but path does not exist or is not a directory. Ignoring."
+        )
+# Always include the default template directory as fallback
+TEMPLATE_DIRS.append(DEFAULT_TEMPLATE_DIR)
 
 
 def submit_job(script_path, output_path, ssh_command=None, cwd=None) -> str:
@@ -45,7 +61,7 @@ def submit_job(script_path, output_path, ssh_command=None, cwd=None) -> str:
 
     # Execute the submission command and capture the output
     result = subprocess.run(
-        submit_cmd, shell=True, capture_output=True, text=True
+        submit_cmd, shell=True, capture_output=True, text=True, check=True
     )
     # In the stdout, we expect to find the job ID
     match = re.search("(\d+)", result.stdout)
@@ -94,7 +110,7 @@ def submit_job_array(
 
     # Execute the submission command and capture the output
     result = subprocess.run(
-        submit_cmd, shell=True, capture_output=True, text=True
+        submit_cmd, shell=True, capture_output=True, text=True, check=True
     )
 
     # Extract and return the job ID from the output
@@ -124,9 +140,10 @@ def check_job_status_sacct(job_ids, ssh_command="ssh lugus"):
             pid_str += str(a) + ","
         pid_str += str(job_ids[-1])
 
+        # TODO: Also handle ssh_command is None
         status_cmd = f"{ssh_command} 'sacct -j {pid_str} --format=JobID,State'"
         result = subprocess.run(
-            status_cmd, shell=True, capture_output=True, text=True
+            status_cmd, shell=True, capture_output=True, text=True, check=True
         )
         logger.debug(result["stderr"])
         status = [s.split()[-1] for s in result.stdout.split("\n")[2:-1]]
@@ -149,12 +166,18 @@ def check_job_status_squeue(job_id, ssh_command="ssh lugus"):
         ssh_command (str, optional): SSH command to be used for remote checking.
             Defaults to "ssh lugus".
     Returns:
-        bool: True if the job is still running, False if it has finished.
+        bool: False if the job is still running, True if it has finished.
     """
     pid_str = str(job_id)
-    status_cmd = f"{ssh_command} 'squeue -j {pid_str}'"
+    status_cmd = f"squeue -j {pid_str}"
+    # If an ssh_command is provided, submit the job via SSH
+    if ssh_command is not None:
+        cmd = f"{ssh_command} '{status_cmd}'"
+    else:
+        cmd = status_cmd
+
     result = subprocess.run(
-        status_cmd, shell=True, capture_output=True, text=True
+        cmd, shell=True, capture_output=True, text=True, check=True
     )
     res = result.stdout.split("\n")
     if len(res) > 2:

@@ -29,6 +29,7 @@ if os.environ.get("REMOTE_HANDLER_CONFIG_DIR") is None:
     ] = "/home/nunglert/code/remote_handler/experiments/config_files"
 
 from remote_handler.core import file_handler
+from remote_handler.core.cluster_config import ClusterConfig
 
 
 @pytest.fixture(scope="session")
@@ -50,29 +51,67 @@ def data_dir():
 
 
 @pytest.fixture()
-def remote_fs():
-    slurm_config_file = "remote.json"
-    return file_handler.RemoteFileSystem(slurm_config_file=slurm_config_file)
+def remote_cluster_config():
+    """Cluster configuration for remote testing."""
+    return ClusterConfig.from_file("remote.json")
+
+
+@pytest.fixture()
+def local_cluster_config():
+    """Cluster configuration for local testing."""
+    return ClusterConfig.from_file("local.json")
+
+
+@pytest.fixture()
+def remote_fs(remote_cluster_config):
+    """Remote filesystem using the remote cluster configuration."""
+    return file_handler.RemoteFileSystem(
+        remote_alias=remote_cluster_config.remote_machine
+    )
 
 
 @pytest.fixture()
 def local_fs():
-    slurm_config_file = "local.json"
-    return file_handler.LocalFileSystem(slurm_config_file=slurm_config_file)
+    """Local filesystem (no cluster config needed)."""
+    return file_handler.LocalFileSystem()
 
 
 @pytest.fixture(
     scope="module",
     params=[
         pytest.param(
-            lazy_fixture("remote_fs"),
+            (
+                "remote",
+                lazy_fixture("remote_fs"),
+                lazy_fixture("remote_cluster_config"),
+            ),
             marks=[pytest.mark.remote],
+            id="remote",
         ),
         pytest.param(
-            lazy_fixture("local_fs"),
+            (
+                "local",
+                lazy_fixture("local_fs"),
+                lazy_fixture("local_cluster_config"),
+            ),
             marks=[pytest.mark.local],
+            id="local",
         ),
     ],
 )
-def filesystem(request):
-    return request.param
+def test_environment(request):
+    """Provides paired filesystem and cluster_config to avoid invalid combinations."""
+    env_type, fs, config = request.param
+    return {"type": env_type, "filesystem": fs, "cluster_config": config}
+
+
+@pytest.fixture(scope="module")
+def filesystem(test_environment):
+    """Extract filesystem from the paired test environment."""
+    return test_environment["filesystem"]
+
+
+@pytest.fixture(scope="module")
+def cluster_config(test_environment):
+    """Extract cluster_config from the paired test environment."""
+    return test_environment["cluster_config"]

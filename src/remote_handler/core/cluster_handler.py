@@ -13,6 +13,7 @@ import numpy as np
 from jinja2 import Environment, FileSystemLoader
 
 from remote_handler.core import file_handler, slurm_utils
+from remote_handler.core.cluster_config import ClusterConfig
 from remote_handler.core.file_handler import FileSystemHandlerBase
 
 logger = logging.getLogger(__name__)
@@ -31,18 +32,16 @@ class SlurmHandlerBase(ABC):
 
     Args:
         jobname: Name of the job used in slurm.
-        partition: Name of the partition on the HPC setup.
+        cluster_config: ClusterConfig instance containing cluster-specific settings
+            (partition, conda_env, template, remote_machine).
         savepath: Root path wherein computations are saved on remote directory.
-        conda_env: Conda environment that you want to use on the remote machine
-            in your slurm batch job.
         n_processors: Number of processors that are requested per job. For CPU
             this refers to n_tasks, where as for GPU on datalab this refers to
             the number of GPU devices requested on a single node.
         slurm_header_add: This allows for adding additional header lines to the
             slurm file. You may also consider creating you own jinja templates
             instead. An example would be '# SBATCH --nodelist=SOME_NODE'
-        remote_fs: A FileSystemHandlerBase derived object loaded with a valid
-            `slurm_config`.
+        remote_fs: A FileSystemHandlerBase derived object for file operations.
         loop_time: The time interval which is used to check whether the job is
             completed.
     """
@@ -50,35 +49,31 @@ class SlurmHandlerBase(ABC):
     def __init__(
         self,
         jobname: str,
-        partition: str,
+        cluster_config: ClusterConfig,
         savepath: os.PathLike,
-        conda_env: str,
         n_processors: int,
         slurm_header_add: str,
         remote_fs: file_handler.FileSystemHandlerBase,
         loop_time: float = 30.0,
     ):
         self.jobname = jobname
-        self.partition = partition
+        self.cluster_config = cluster_config
+        self.partition = cluster_config.partition
         self.savepath = savepath
-        self.conda_env = conda_env
+        self.conda_env = cluster_config.conda_env
         self.n_processors = n_processors
         self.slurm_header_add = slurm_header_add
         self.remote_fs = remote_fs
         self.loop_time = loop_time
 
-        # Check if the remote handler has a valid slurm_config
-        assert (
-            remote_fs.slurm_config is not None
-        ), "Need slurm_config set in remote_fs!"
-        # Get remote machine and ssh command
-        remote_machine = remote_fs.slurm_config["remote_machine"]
+        # Determine SSH command based on filesystem type
         if isinstance(remote_fs, file_handler.LocalFileSystem):
             self.ssh_command = None
         else:
-            self.ssh_command = f"ssh {remote_machine}"
+            self.ssh_command = f"ssh {cluster_config.remote_machine}"
+
         # Get template file for the slurm scripts
-        self.template_file = remote_fs.slurm_config["template"]
+        self.template_file = cluster_config.template
 
         self.is_written = False
         self.is_submitted = False
@@ -121,9 +116,8 @@ class SlurmJobHandler(SlurmHandlerBase):
     def __init__(
         self,
         jobname: str,
-        partition: str,
+        cluster_config: ClusterConfig,
         savepath: str,
-        conda_env: str,
         n_processors: int,
         slurm_header_add: str,
         remote_fs: file_handler.FileSystemHandlerBase,
@@ -131,7 +125,6 @@ class SlurmJobHandler(SlurmHandlerBase):
         loop_time: float = 10.0,
         job_type_template: str = "body_single.sh.j2",
     ):
-        
         # Name of the jobfile that will be created
         self.jobfile_name = jobfile_name
         # Template for single jobs
@@ -150,16 +143,17 @@ class SlurmJobHandler(SlurmHandlerBase):
 
         super().__init__(
             jobname,
-            partition,
+            cluster_config,
             savepath,
-            conda_env,
             n_processors,
             slurm_header_add,
             remote_fs,
             loop_time,
         )
 
-    def write_jobfile(self, input_file, python_script_path, exclude_nodes=None):
+    def write_jobfile(
+        self, input_file, python_script_path, exclude_nodes=None
+    ):
         """
         Write the slurm jobfile for a single job.
         Args:
@@ -219,18 +213,15 @@ class SlurmJobHandler(SlurmHandlerBase):
 class SlurmArrayHandler(SlurmHandlerBase):
     """
     Class to handle job arrays via slurm on a remote HPC cluster.
-    
+
     Args:
         jobname: Name of the job used in slurm.
-        partition: Name of the partition on the HPC setup.
+        cluster_config: ClusterConfig instance containing cluster-specific settings.
         savepath: Root path wherein computations are saved on remote directory.
-        conda_env: Conda environment that you want to use on the remote machine
-            in your slurm batch job.
         n_processors: Number of processors that are requested per job. For CPU
             this refers to n_tasks, where as for GPU on datalab this refers to
             the number of GPU devices requested on a single node.
-        remote_fs: A FileSystemHandlerBase derived object loaded with a valid
-            `slurm_config`.
+        remote_fs: A FileSystemHandlerBase derived object for file operations.
         slurm_header_add: This allows for adding additional header lines to the
             slurm file. You may also consider creating you own jinja templates
             instead. An example would be '# SBATCH --nodelist=SOME_NODE'
@@ -243,14 +234,14 @@ class SlurmArrayHandler(SlurmHandlerBase):
         map_indices: Optional list of indices that are used to map the array
             job indices to specific tasks. For example if you have 100 tasks
             but only want to run tasks 0, 2, 5, you can set map_indices=[0, 2, 5].
-        
+
     """
+
     def __init__(
         self,
         jobname: str,
-        partition: str,
+        cluster_config: ClusterConfig,
         savepath: str,
-        conda_env: str,
         n_processors: int,
         remote_fs: file_handler.FileSystemHandlerBase,
         slurm_header_add: str = "",
@@ -260,7 +251,6 @@ class SlurmArrayHandler(SlurmHandlerBase):
         num_parallel: int = 10,
         map_indices: Optional[list[int]] = None,
     ):
-        
         self.jobfile_name = jobfile_name
         self.job_type_template = job_type_template
         self.num_parallel = num_parallel
@@ -280,9 +270,8 @@ class SlurmArrayHandler(SlurmHandlerBase):
 
         super().__init__(
             jobname,
-            partition,
+            cluster_config,
             savepath,
-            conda_env,
             n_processors,
             slurm_header_add,
             remote_fs,

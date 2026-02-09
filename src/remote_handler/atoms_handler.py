@@ -17,6 +17,7 @@ import numpy as np
 from ase import Atoms
 
 from remote_handler.core import cluster_handler, file_handler, tasks
+from remote_handler.core.cluster_config import ClusterConfig
 
 logger = logging.getLogger(__name__)
 
@@ -109,13 +110,14 @@ def front_tag(filepath, tag):
 
 class RemoteAtomsHandler(tasks.ArrayScriptTask):
     """
-    This is a Utility subclass of tasks.ArrayScriptTask for dealing with 
-    ase.Atoms trajectories. It can parse a list of `extxyz` files and 
+    This is a Utility subclass of tasks.ArrayScriptTask for dealing with
+    ase.Atoms trajectories. It can parse a list of `extxyz` files and
     split them in appropriate chunks that can conveniently be processed
     by a python script.
 
     Args:
         traj_files: List of extxyz files containing atomic configurations.
+        cluster_config: ClusterConfig instance containing cluster-specific settings.
         remote_fs: Instance of a RemoteFileSystem or LocalFileSystem
             (in case of running on a local machine with SLURM).
         shard_size: Number of configurations per task.
@@ -140,7 +142,7 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
             trajectory files when they are written to the local file system.
         n_processors: Number of processors to request per job.
         slurm_header_add: Additional lines to add to the SLURM header.
-        
+
     Example:
         Given a set of 3 trajectory files, containing 50 configs per file,
         with a shard_size of 20, this will shard the configs in 8 batches
@@ -165,6 +167,7 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
     def __init__(
         self,
         traj_files: list[str],
+        cluster_config: ClusterConfig,
         remote_fs: file_handler.FileSystemHandlerBase,
         shard_size: int,
         remote_savepath: str,
@@ -183,6 +186,7 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
     ):
         super().__init__(
             local_savepath,
+            cluster_config,
             remote_fs,
             individual_ressources=[],
             shared_ressources=[],
@@ -209,12 +213,7 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
         # Read and shard the trajectories
         self.read_configs()
 
-    def combine_trajs(
-        self,
-        traj_files,
-        indices
-        
-    ):
+    def combine_trajs(self, traj_files, indices):
         """
         Combines configurations from all provided trajectories into a single
         list of Atoms objects.
@@ -237,11 +236,13 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
         for file_idx, file in enumerate(traj_files):
             # Read the configurations from the trajectory file
             ats = self.local_fs.read_ase(file, index=indices)
-            
+
             for iteration_idx, at in enumerate(ats):
-                at.info["file_index"] = file_idx # Save run index
-                at.info["iteration_index"] = iteration_idx * indices.step # Save sample index
-                
+                at.info["file_index"] = file_idx  # Save run index
+                at.info["iteration_index"] = (
+                    iteration_idx * indices.step
+                )  # Save sample index
+
             all_atoms.extend(ats)
         return all_atoms
 
@@ -277,7 +278,7 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
         Scan temporary directories for extxyz files containing processed
         Atoms objects. The tag must be the same as the one assigned in the
         optimization driver script `optimize_traj.py`
-        
+
         Args:
             only_finished: If True, only collect configurations that have
                 the `is_finished` flag set to True in their info dict.
@@ -308,7 +309,7 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
                 failed_indices.append(calc_idx)
             else:
                 ats = self.remote_fs.read_ase(database_path, index=":")
-                
+
                 all_finished = True
                 if only_finished:
                     # Check if all configurations in this batch are marked as finished
@@ -317,7 +318,7 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
                     )
 
                 # Verify that the number of collected configurations matches
-                size_preserved = (len(ats) == self.all_shard_sizes[calc_idx])
+                size_preserved = len(ats) == self.all_shard_sizes[calc_idx]
                 if not size_preserved or not all_finished:
                     logger.warning(
                         f"Shard {calc_idx} failed with {size_preserved=} "
@@ -335,7 +336,7 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
         Regroup a flat list of Atoms objects into a list of lists, where each
         sublist corresponds to the configurations from a single original
         trajectory file.
-        
+
         Args:
             all_atoms: A flat list of Atoms objects, each with an info dict
                 containing a 'file_index' key that indicates the original
@@ -344,10 +345,10 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
             A list of lists, where each sublist contains Atoms objects from
             the same original trajectory file.
         """
-        
+
         indices = [at.info["file_index"] for at in all_atoms]
         return regroup(all_atoms, indices)
-    
+
     def redistribute(self, all_atoms_sets):
         """
         Redistribute the grouped Atoms objects back into their original
@@ -362,7 +363,7 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
 
     def check_and_harvest(self, all_atoms, failed_indices):
         """
-        Check for failed batches and redistribute collected configurations 
+        Check for failed batches and redistribute collected configurations
         into their original trajectory files.
         """
         if failed_indices:
@@ -376,7 +377,7 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
             raise Exception(
                 "Collected number of configurations < num_total_configs!"
             )
-        
+
         all_atoms_sets = self.regroup(all_atoms)
         self.redistribute(all_atoms_sets)
         logger.info("Successfully harvested all processed configs!")
@@ -414,7 +415,7 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
             self.slurm_handler.map_indices = failed_indices
             # Avoid redistributing already collected configurations
             # and the creations of directories
-            self.allocate_data(slurm_only=True) 
+            self.allocate_data(slurm_only=True)
             self.submit()
 
             # Collect the results again after resubmission

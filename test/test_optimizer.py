@@ -58,7 +58,7 @@ def traj_files(local_dir, dummy_trajectory):
 
 
 @pytest.fixture
-def default_params(filesystem, data_dir, dummy_trajectory):
+def default_params(filesystem, cluster_config, data_dir, dummy_trajectory):
     """
     Variables:
         asset_dir: Path with static files required for test
@@ -99,9 +99,10 @@ def default_params(filesystem, data_dir, dummy_trajectory):
 
     params = dict(
         traj_files=traj_files,
+        cluster_config=cluster_config,
         shard_size=10,
         # savepath=remote_dir,
-        savepath=filesystem.slurm_config["savepath"],
+        savepath=cluster_config.savepath,
         num_parallel=5,
         stub=False,
         python_script_path=python_script_path,

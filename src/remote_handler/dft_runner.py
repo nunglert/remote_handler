@@ -8,6 +8,7 @@ from typing import Any, Optional, Union
 
 from remote_handler.atoms_handler import RemoteAtomsHandler
 from remote_handler.core import cluster_handler, file_handler, tasks
+from remote_handler.core.cluster_config import ClusterConfig
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ class VASPHandler(RemoteAtomsHandler):
 
     Args:
         traj_files (list[Union[str, os.PathLike]]): List of paths to trajectory files.
+        cluster_config (ClusterConfig): ClusterConfig instance containing cluster-specific settings.
         remote_fs (file_handler.FileSystemHandlerBase): Remote file system handler.
         savepath (str): Path to save the results on the remote system.
         num_parallel (int): Number of parallel jobs to run, i.e. length of the job array.
@@ -43,6 +45,7 @@ class VASPHandler(RemoteAtomsHandler):
     def __init__(
         self,
         traj_files: list[Union[str, os.PathLike]],
+        cluster_config: ClusterConfig,
         remote_fs: file_handler.FileSystemHandlerBase,
         savepath: str,
         num_parallel: int,
@@ -82,6 +85,7 @@ class VASPHandler(RemoteAtomsHandler):
     ):
         super().__init__(
             traj_files,
+            cluster_config,
             remote_fs,
             1,  # Shard size of 1 since we want to run one structure per job task
             savepath,

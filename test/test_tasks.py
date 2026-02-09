@@ -21,7 +21,7 @@ with open(file, "r") as f:
 
 print(data["A"] + data["B"])
 
-time.sleep(5)
+time.sleep(1)
 
 with open("is_finished.info", "w") as f:
     f.write("I'm finished af")
@@ -46,10 +46,11 @@ with open(CONFIG_FILE, "r") as f:
 
 print(data["A"] + data["B"])
 
-time.sleep(5)
+time.sleep(1)
 
 with open(calcpath / "is_finished.info", "w") as f:
     f.write("I'm finished af")
+
 """
 
 
@@ -59,7 +60,7 @@ def write_json(A, B, filename):
         json.dump(content, f)
 
 
-def test_SingleScriptTask_simple(data_dir, filesystem):
+def test_SingleScriptTask_simple(data_dir, filesystem, cluster_config):
     """This test runs a SingleScriptTask. It generates the required python
     script and a corresponding input file on-the-fly.
 
@@ -95,6 +96,7 @@ def test_SingleScriptTask_simple(data_dir, filesystem):
         script_file=script_path,
         input_file=input_file,
         local_savepath=local_results_path,
+        cluster_config=cluster_config,
         remote_fs=filesystem,
         logfile="test_SingleScriptTask.log",
         loop_time=1,
@@ -116,7 +118,7 @@ def test_SingleScriptTask_simple(data_dir, filesystem):
         )
 
 
-def test_ArrayScriptTask_simple(data_dir, filesystem):
+def test_ArrayScriptTask_simple(data_dir, filesystem, cluster_config):
     """This test runs a ArrayScriptTask. It generates the required python
     script on-the-fly and sets up the directories on the remote machine with
     input and config files.
@@ -157,6 +159,7 @@ def test_ArrayScriptTask_simple(data_dir, filesystem):
 
     task = tasks.ArrayScriptTask(
         local_results_path,
+        cluster_config,
         filesystem,
         script_path,
         individual_ressources,

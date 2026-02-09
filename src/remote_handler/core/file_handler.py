@@ -11,14 +11,11 @@ import tempfile
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
-
 from pathlib import Path
-
 from stat import S_ISDIR
 from typing import Optional
 
 import ase.io
-
 import paramiko
 from ase import Atoms
 
@@ -42,7 +39,7 @@ def tag_path(part0: str, part1: str, is_directory: bool = False):
     """
     # Get the current date and time
     date_str = datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
-    
+
     if not is_directory:
         file_parts = part1.split(".")
         # If there's an extension, insert the date before it
@@ -61,13 +58,10 @@ class FileSystemHandlerBase(ABC):
     """
     Interface for handling file operations and directory management on a
     file system.
-    Args:
-        slurm_config_file (str, optional): Path to a SLURM configuration file.
-            If provided, the configuration will be loaded and stored in the
-            `slurm_config` attribute. Defaults to None.
-    Attributes:
-        slurm_config (dict or None): The loaded SLURM configuration if a
-            configuration file is provided, otherwise None.
+
+    This class provides an abstract interface for common file operations
+    that can work with both local and remote file systems.
+
     Methods:
         get(remote, local): Abstract method to copy a file from a remote
             machine to the local machine.
@@ -76,37 +70,10 @@ class FileSystemHandlerBase(ABC):
         makedirs(path, exist_ok=False): Abstract method to create a directory
             at the specified path, including any necessary parent directories.
         mkdir(path): Abstract method to create a directory at the specified
-            path.       
+            path.
     """
 
-    def __init__(self, slurm_config_file: Optional[str] = None):
-        self.slurm_config = None
-
-        if slurm_config_file is not None:
-            if os.path.isabs(slurm_config_file):
-                if not os.path.exists(slurm_config_file):
-                    raise Exception(
-                        f"{slurm_config_file} does not exist!"
-                    )
-                slurm_config_path = slurm_config_file
-            
-            else:
-                if CONFIG_DIR is None:
-                    raise Exception(
-                        "If slurm_config_file is not an absolute path, "
-                        "Set REMOTE_HANDLER_CONFIG_DIR environment variable, "
-                        "where config files for different clusters are stored."
-                    )
-                slurm_config_path = CONFIG_DIR / slurm_config_file
-                if not os.path.exists(slurm_config_path):
-                    raise Exception(
-                        f"{slurm_config_file} does not exist in your "
-                        f"REMOTE_HANDLER_CONFIG_DIR={CONFIG_DIR}"
-                    )
-
-            with open(slurm_config_path, "r") as f:
-                self.slurm_config = json.load(f)
-
+    def __init__(self):
         super().__init__()
 
     @abstractmethod
@@ -127,7 +94,7 @@ class FileSystemHandlerBase(ABC):
 
         Args:
             local (str): The path of the file or directory to copy.
-            remote (str): The path where the file or directory should be copied to. 
+            remote (str): The path where the file or directory should be copied to.
         """
         pass
 
@@ -240,13 +207,13 @@ class FileSystemHandlerBase(ABC):
         Parameters:
             savepath (str): The full path where the file or directory is located.
         Returns:
-            str: The new path with the random string appended to the filename or directory name.    
+            str: The new path with the random string appended to the filename or directory name.
         """
 
         # Generate a random string of fixed length
         random_string = "".join(
             random.choices(string.ascii_letters + string.digits, k=10)
-        ) 
+        )
         # Append a timestamp to ensure uniqueness
         working_dir, filename = os.path.split(savepath)
         savetag = tag_path(working_dir, filename, is_directory=True)
@@ -266,7 +233,7 @@ class FileSystemHandlerBase(ABC):
             str: A unique file or directory path.
         """
         # Delete the last slash if present if is_directory is True
-        if is_directory:  
+        if is_directory:
             path = str(Path(path))
 
         parentpath, childname = os.path.split(path)
@@ -281,14 +248,10 @@ class LocalFileSystem(FileSystemHandlerBase):
     """
     LocalFileSystem is a concrete implementation of FileSystemHandlerBase for
     handling file operations on the local filesystem.
-    Args:
-        slurm_config_file (str, optional): Path to a SLURM configuration file.
-            If provided, the configuration will be loaded and stored in the
-            `slurm_config` attribute. Defaults to None.
     """
 
-    def __init__(self, slurm_config_file=None):
-        super().__init__(slurm_config_file)
+    def __init__(self):
+        super().__init__()
 
     def copy(self, source: os.PathLike, destination: os.PathLike) -> None:
         """
@@ -426,6 +389,7 @@ class LocalFileSystem(FileSystemHandlerBase):
         """
         os.remove(path)
 
+
 def reconnect_on_failure(func):
     """
     Decorator to reconnect if SSH/SFTP operation fails.
@@ -458,31 +422,17 @@ class RemoteFileSystem(FileSystemHandlerBase):
             temporary files.
         local_temp_path (str, optional): Path on the local system to use for
             temporary files.
-        slurm_config_file (str, optional): Path to a SLURM configuration file.
-            If provided, the configuration will be loaded and stored in the
-            `slurm_config` attribute. 
     """
 
     def __init__(
         self,
-        remote_alias: Optional[str] = None,
+        remote_alias: str,
         remote_temp_path: Optional[str] = None,
         local_temp_path: Optional[str] = None,
-        slurm_config_file: Optional[str] = None,
     ):
-        super().__init__(slurm_config_file)
+        super().__init__()
 
-        if slurm_config_file is None:
-            if remote_alias is None:
-                raise Exception(
-                    "Need either slurm_config_file or remote_alias!"
-                )
-            # Get remote alias from argument
-            self.remote_alias = remote_alias
-        else:
-            # Get remote alias from slurm config file
-            self.remote_alias = self.slurm_config["remote_machine"]
-
+        self.remote_alias = remote_alias
         self.ssh_client = None
         self.sftp_client = None
 
@@ -522,7 +472,11 @@ class RemoteFileSystem(FileSystemHandlerBase):
         # Get the first IdentityFile if available, else None
         identityfiles = host_config.get("identityfile", [None])
         if len(identityfiles) > 1:
-            print("Warning: Found more than 1 key, using the first one: {}.".format(identityfiles[0]))
+            print(
+                "Warning: Found more than 1 key, using the first one: {}.".format(
+                    identityfiles[0]
+                )
+            )
         identityfile = identityfiles[0]
         proxyjump = host_config.get("proxyjump")
 
@@ -539,7 +493,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
 
             # Automatically add the jump host's SSH key if missing
             jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            
+
             # Connect to jump host
             jump_client.connect(
                 jump_host,
@@ -583,7 +537,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
                 username=username,
                 key_filename=identityfile,
             )
-        
+
         # Open an SFTP client session on the SSH server
         self.sftp_client = self.ssh_client.open_sftp()
 
@@ -604,7 +558,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
         """SFTP put with automatic reconnect on failure.
         Args:
             local (str): The path of the file or directory to copy.
-            remote (str): The path where the file or directory should be copied to. 
+            remote (str): The path where the file or directory should be copied to.
         """
         local, remote = str(local), str(remote)
         self.sftp_client.put(local, remote)
@@ -614,7 +568,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
         """SFTP get with automatic reconnect on failure.
         Args:
             remote (str): The path of the file or directory to copy.
-            local (str): The path where the file or directory should be copied to. 
+            local (str): The path where the file or directory should be copied to.
         """
         remote, local = str(remote), str(local)
         self.sftp_client.get(remote, local)
@@ -636,7 +590,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
     @reconnect_on_failure
     def mkdir(self, path: os.PathLike) -> None:
         """SFTP mkdir with automatic reconnect on failure.
-        
+
         Args:
             path (str): The directory path to create."""
         path = str(path)
@@ -645,7 +599,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
     @reconnect_on_failure
     def rmtree(self, remotepath: os.PathLike, level=0) -> None:
         """Recursively delete a directory on the remote system via SFTP.
-        
+
         Args:
             remotepath (str): The path of the directory to delete.
             level (int, optional): The current recursion level (used for
@@ -754,7 +708,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
     @reconnect_on_failure
     def read_ase(self, filepath: os.PathLike, **kwargs) -> list[Atoms]:
         """
-        Read an ASE file from the specified file path on the remote system by 
+        Read an ASE file from the specified file path on the remote system by
         temporarily downloading it to the local system.
         Args:
             filepath (str): The path of the ASE file to read.
@@ -767,7 +721,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
         # Clean up temporary file
         os.remove(local_temp)
         return atoms
-    
+
     @reconnect_on_failure
     def read_str_from_file(self, filepath: os.PathLike) -> str:
         """

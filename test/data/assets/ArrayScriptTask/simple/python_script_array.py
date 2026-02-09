@@ -1,7 +1,6 @@
-
+import json
 import sys
 import time
-import json
 from pathlib import Path
 
 calcpath = Path(sys.argv[1])
@@ -17,7 +16,7 @@ with open(CONFIG_FILE, "r") as f:
 
 print(data["A"] + data["B"])
 
-time.sleep(5)
+time.sleep(1)
 
 with open(calcpath / "is_finished.info", "w") as f:
     f.write("I'm finished af")
