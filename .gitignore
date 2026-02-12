@@ -9,3 +9,7 @@ pyrightconfig.json
 examples/calculations
 __pycache__
 .qodo
+
+# Sphinx documentation
+docs/build/
+docs/source/_autosummary/

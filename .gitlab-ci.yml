@@ -1,0 +1,52 @@
+stages:
+  - test
+  - deploy
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  paths:
+    - .cache/pip
+
+# Run tests
+test:
+  stage: test
+  image: python:3.10
+  before_script:
+    - pip install --upgrade pip
+    - pip install -e ".[dev]"
+  script:
+    - pytest -v --tb=short
+  coverage: '/(?i)total.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
+  artifacts:
+    reports:
+      junit: test-results.xml
+    when: always
+  only:
+    - main
+    - merge_requests
+
+# Build and deploy documentation to GitLab Pages
+pages:
+  stage: deploy
+  image: python:3.10
+  before_script:
+    - pip install --upgrade pip
+    - pip install -e ".[docs]"
+  script:
+    # Build the Sphinx documentation
+    - cd docs
+    - make html
+    - cd ..
+    # GitLab Pages expects output in 'public' directory
+    - mv docs/build/html public
+    # Create a simple redirect from root to docs
+    - echo '<meta http-equiv="refresh" content="0; url=./index.html" />' > public/index.html
+  artifacts:
+    paths:
+      - public
+    expire_in: 1 week
+  # only:
+  #   - main  # Only deploy docs from main branch
+  dependencies: []

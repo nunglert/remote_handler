@@ -1,0 +1,108 @@
+API Reference
+=============
+
+This section contains the complete API reference for remote_handler.
+
+.. toctree::
+   :maxdepth: 2
+
+   core
+   handlers
+   workflows
+
+Core Modules
+------------
+
+Cluster Configuration
+~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: remote_handler.core.cluster_handler
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+File System Handlers
+~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: remote_handler.core.file_handler
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Task Management
+~~~~~~~~~~~~~~~
+
+.. automodule:: remote_handler.core.tasks
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+SLURM Utilities
+~~~~~~~~~~~~~~~
+
+.. automodule:: remote_handler.core.slurm_utils
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Handlers
+--------
+
+Atoms Handler
+~~~~~~~~~~~~~
+
+.. automodule:: remote_handler.atoms_handler
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Optimization Handler
+~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: remote_handler.optimizer
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+DFT Runner
+~~~~~~~~~~
+
+.. automodule:: remote_handler.dft_runner
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Workflows
+---------
+
+Active Learning
+~~~~~~~~~~~~~~~
+
+.. automodule:: remote_handler.workflows
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Evaluators
+~~~~~~~~~~
+
+.. automodule:: remote_handler.workflows.evaluators
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Samplers
+~~~~~~~~
+
+.. automodule:: remote_handler.workflows.samplers
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Trainers
+~~~~~~~~
+
+.. automodule:: remote_handler.workflows.trainers
+   :members:
+   :undoc-members:
+   :show-inheritance:
