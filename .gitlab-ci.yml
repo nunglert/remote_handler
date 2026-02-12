@@ -13,6 +13,8 @@ cache:
 test:
   stage: test
   image: python:3.10
+  tags:
+    - shared
   before_script:
     - pip install --upgrade pip
     - pip install -e ".[dev]"
@@ -31,6 +33,8 @@ test:
 pages:
   stage: deploy
   image: python:3.10
+  tags:
+    - shared
   before_script:
     - pip install --upgrade pip
     - pip install -e ".[docs]"
@@ -41,8 +45,6 @@ pages:
     - cd ..
     # GitLab Pages expects output in 'public' directory
     - mv docs/build/html public
-    # Create a simple redirect from root to docs
-    - echo '<meta http-equiv="refresh" content="0; url=./index.html" />' > public/index.html
   artifacts:
     paths:
       - public
