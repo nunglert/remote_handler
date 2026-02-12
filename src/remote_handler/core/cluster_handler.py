@@ -74,10 +74,47 @@ class SlurmHandlerBase(ABC):
 
         # Get template file for the slurm scripts
         self.template_file = cluster_config.template
+        self.conda_source = cluster_config.conda_source
 
         self.is_written = False
         self.is_submitted = False
         super().__init__()
+
+        self._validate_conda()
+        self._validate_savepath()
+
+    def _validate_savepath(self):
+        if not self.remote_fs.exists(self.savepath):
+            raise Exception(
+                f"Your provided {self.savepath=} does not exist on the "
+                f"{self.cluster_config.remote_machine} filesystem!"
+            )
+
+    def _validate_conda(self):
+        if self.conda_source.strip().endswith("miniconda3"):
+            miniconda_home = Path(self.conda_source)
+            self.conda_source = Path(self.conda_source) / "bin/activate"
+        elif "bin/activate" in self.conda_source:
+            miniconda_home = Path(self.conda_source).parents[1]
+            self.conda_source = Path(self.conda_source)
+        else:
+            raise Exception(
+                "I can not recognize your supplied conda_source "
+                f"{self.conda_source}. Try sth like "
+                "conda_source=/home/user/miniconda3/. Note that we only "
+                "support miniconda3 at the moment."
+            )
+
+        if not self.remote_fs.exists(self.conda_source):
+            raise Exception(
+                f"{self.conda_source=} does not exist on the filesystem "
+                f"{self.cluster_config.remote_machine}!"
+            )
+        if not self.remote_fs.exists(miniconda_home / "envs" / self.conda_env):
+            raise Exception(
+                f"The conda environment {self.conda_env} does not exist on the"
+                f" {self.cluster_config.remote_machine} filesystem!"
+            )
 
     @abstractmethod
     def submit(self):
@@ -168,6 +205,7 @@ class SlurmJobHandler(SlurmHandlerBase):
             self.partition,
             self.n_processors,
             self.conda_env,
+            self.conda_source,
             self.template_file,
             self.job_type_template,
             self.slurm_header_add,
@@ -297,6 +335,7 @@ class SlurmArrayHandler(SlurmHandlerBase):
             partition=self.partition,
             n_processors=self.n_processors,
             conda_env=self.conda_env,
+            conda_source=self.conda_source,
             map_indices=self.map_indices,
             header_template=self.template_file,
             job_type_template=self.job_type_template,

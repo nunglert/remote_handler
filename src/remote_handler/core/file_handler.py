@@ -10,6 +10,7 @@ import string
 import tempfile
 import time
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from stat import S_ISDIR
@@ -19,11 +20,30 @@ import ase.io
 import paramiko
 from ase import Atoms
 
-# Create a logger with the module name
 logger = logging.getLogger(__name__)
 
 # Load directory where config files for slurm are stored from environment variable
 CONFIG_DIR = Path(os.environ.get("REMOTE_HANDLER_CONFIG_DIR"))
+
+# @contextmanager
+# def paramiko_debug_to_logger(target_logger):
+#     p_logger = logging.getLogger("paramiko")
+#     old_level = p_logger.level
+#     old_handlers = p_logger.handlers[:]
+
+#     handler = logging.StreamHandler()
+#     handler.setFormatter(logging.Formatter(
+#         "[PARAMIKO] %(levelname)s: %(message)s"
+#     ))
+
+#     p_logger.handlers = [handler]
+#     p_logger.setLevel(logging.DEBUG)
+
+#     try:
+#         yield
+#     finally:
+#         p_logger.handlers = old_handlers
+#         p_logger.setLevel(old_level)
 
 
 def tag_path(part0: str, part1: str, is_directory: bool = False):
@@ -427,16 +447,24 @@ class RemoteFileSystem(FileSystemHandlerBase):
     def __init__(
         self,
         remote_alias: str,
+        identityfile: Optional[str] = None,
         remote_temp_path: Optional[str] = None,
         local_temp_path: Optional[str] = None,
     ):
         super().__init__()
 
         self.remote_alias = remote_alias
+        self.identityfile = identityfile
         self.ssh_client = None
         self.sftp_client = None
 
-        self._connect()
+        try:
+            self._connect()
+        except Exception as e:
+            logger.warning(
+                "Failed connecting SSH client. Try providing the key file explicitly. Assure it does not have a passphrase!"
+            )
+            raise e
 
         if remote_temp_path is None:
             self.remote_tempdir = Path("/tmp")
@@ -470,7 +498,11 @@ class RemoteFileSystem(FileSystemHandlerBase):
         hostname = host_config.get("hostname")
         username = host_config.get("user")
         # Get the first IdentityFile if available, else None
-        identityfiles = host_config.get("identityfile", [None])
+        if self.identityfile is None:
+            identityfiles = host_config.get("identityfile", [None])
+        else:
+            identityfiles = [self.identityfile]
+
         if len(identityfiles) > 1:
             print(
                 "Warning: Found more than 1 key, using the first one: {}.".format(
@@ -478,6 +510,19 @@ class RemoteFileSystem(FileSystemHandlerBase):
                 )
             )
         identityfile = identityfiles[0]
+
+        if identityfile:
+            logger.info(
+                "SSH (%s): using identity file %s",
+                self.remote_alias,
+                os.path.expanduser(identityfile),
+            )
+        else:
+            logger.info(
+                "SSH (%s): no identity file specified (agent / default keys)",
+                self.remote_alias,
+            )
+
         proxyjump = host_config.get("proxyjump")
 
         if proxyjump:
@@ -532,14 +577,31 @@ class RemoteFileSystem(FileSystemHandlerBase):
             self.ssh_client.set_missing_host_key_policy(
                 paramiko.AutoAddPolicy()
             )
+
             self.ssh_client.connect(
                 hostname,
                 username=username,
                 key_filename=identityfile,
             )
+            self.func(username)
 
         # Open an SFTP client session on the SSH server
         self.sftp_client = self.ssh_client.open_sftp()
+
+    def func(self, username):
+        from binascii import hexlify
+
+        for key in self.ssh_client._agent.get_keys():
+            try:
+                id_ = hexlify(key.get_fingerprint())
+                # for 2-factor auth a successfully auth'd key password
+                # will return an allowed 2fac auth method
+                allowed_types = set(
+                    self.ssh_client._transport.auth_publickey(username, key)
+                )
+                logger.warning(f"{key}, {allowed_types}")
+            except:
+                logger.warning("sdasdsadsadsa")
 
     def _disconnect(self) -> None:
         """Close the SSH and SFTP connections."""

@@ -3,7 +3,7 @@
 import json
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Optional
 
@@ -37,6 +37,7 @@ class ClusterConfig:
     remote_machine: str
     partition: str
     conda_env: str
+    conda_source: str
     savepath: str
     template: str
 
@@ -85,7 +86,9 @@ class ClusterConfig:
         with open(config_path, "r") as f:
             config_dict = json.load(f)
 
-        return cls(**config_dict)
+        known = cls.get_known(config_dict)
+
+        return cls(**known)
 
     @classmethod
     def from_dict(cls, config_dict: dict) -> "ClusterConfig":
@@ -107,4 +110,25 @@ class ClusterConfig:
             ...     "template": "slurm_template.sh.j2"
             ... })
         """
-        return cls(**config_dict)
+        known = cls.get_known(config_dict)
+        return cls(**known)
+
+    @classmethod
+    def get_known(cls, args_dict):
+        field_names = {f.name for f in fields(cls)}
+
+        # Split known / unknown keys
+        known = {}
+        unknown = {}
+        for k, v in args_dict.items():
+            if k in field_names:
+                known[k] = v
+            else:
+                unknown[k] = v
+
+        if unknown:
+            logger.warning(
+                f"Ignoring unknown ClusterConfig keys: {list(unknown.keys())}"
+            )
+
+        return known

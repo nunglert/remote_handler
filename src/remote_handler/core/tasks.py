@@ -12,8 +12,8 @@ from xml.etree.ElementPath import prepare_star
 from remote_handler.core import (
     cluster_handler,
     file_handler,
-    file_utils,
     slurm_utils,
+    task_components,
 )
 from remote_handler.core.cluster_config import ClusterConfig
 from remote_handler.core.file_handler import (
@@ -312,6 +312,14 @@ class SingleScriptTask(RemoteTask):
             job_type_template=job_type_template,
         )
 
+        # Create composable components for file allocation and result collection
+        self.file_allocator = task_components.FileAllocator(
+            remote_fs=remote_fs, rootpath=self.calcdir
+        )
+        self.result_collector = task_components.ResultCollector(
+            remote_fs=remote_fs, local_fs=self.local_fs
+        )
+
         logger.info(f"SingleScriptTask")
         logger.info(f"calcdir: {str(self.calcdir)}")
 
@@ -323,11 +331,7 @@ class SingleScriptTask(RemoteTask):
         Returns:
             The path to the file on the remote machine.
         """
-        # Combine the remote calculation directory with the filename
-        moved_path = self.calcdir / os.path.split(local_path)[-1]
-        # Copy the file to the remote machine
-        self.remote_fs.put(local_path, moved_path)
-        return moved_path
+        return self.file_allocator.copy_file(local_path)
 
     def allocate_data(self):
         """Allocate the script and input file on the remote machine and
@@ -352,13 +356,10 @@ class SingleScriptTask(RemoteTask):
 
     def collect_results(self):
         """Copy the entire calculation directory from the remote machine to
-        the local machine."""
-        file_utils.secure_declare_path(
-            self.local_savepath, move=True, is_directory=True
+        the local machine using ResultCollector."""
+        self.result_collector.collect_directory(
+            self.calcdir, self.local_savepath, move=True
         )
-        # Copy the content of the remote calculation directory inside the
-        # local_savepath directory
-        self.remote_fs.get_dir(self.calcdir, self.local_savepath)
 
     def finish_check(self):
         """Check for the presence of the 'is_finished.info' file in the
@@ -369,6 +370,9 @@ class SingleScriptTask(RemoteTask):
     def node_problem(self):
         """If the Node has the requested resources there should be a file called
         'node_check.info' in the calculation directory on the remote machine.
+
+        Returns:
+            False, no problem on node. True, problem on node.
         """
         return self.remote_fs.exists(self.calcdir / "node_check.info")
 
@@ -378,8 +382,10 @@ class SingleScriptTask(RemoteTask):
         self.allocate_data()
         while True:
             self.submit()
+
             if not self.node_problem():
                 break
+
             else:
                 logger.warning(
                     "The job did not run on a node with the requested resources. "
@@ -552,8 +558,125 @@ class ArrayScriptTask(RemoteTask):
 
         self.calcdir = self.slurm_handler.calcdir
 
+        # Create composable components for file allocation and result collection
+        self.file_allocator = task_components.FileAllocator(
+            remote_fs=remote_fs, rootpath=self.rootpath
+        )
+        self.result_collector = task_components.ResultCollector(
+            remote_fs=remote_fs, local_fs=self.local_fs
+        )
+
         logger.info(f"ArrayScriptTask")
         logger.info(f"rootpath: {str(self.rootpath)}")
+
+        # Validate resources early if not in collect_only mode
+        if not collect_only:
+            self._validate_resources()
+
+    def _validate_resources(self):
+        """Validate python script and resources before allocation.
+
+        Performs early validation to catch common errors before attempting
+        to allocate resources on the remote machine.
+
+        Raises:
+            ValueError: If validation fails with descriptive error message
+        """
+        # 1. Validate python script
+        if self.python_script_file is not None:
+            if not os.path.exists(self.python_script_file):
+                raise ValueError(
+                    f"Python script not found: {self.python_script_file}"
+                )
+            if not str(self.python_script_file).endswith(".py"):
+                logger.warning(
+                    f"Python script does not have .py extension: "
+                    f"{self.python_script_file}"
+                )
+            if not os.access(self.python_script_file, os.R_OK):
+                raise ValueError(
+                    f"Python script is not readable: {self.python_script_file}"
+                )
+
+        # 2. Validate shared resources
+        if self.shared_ressources:
+            shared_filenames = set()
+            for resource in self.shared_ressources:
+                # Check file exists
+                if not os.path.exists(resource):
+                    raise ValueError(f"Shared resource not found: {resource}")
+
+                # Check for duplicate filenames
+                filename = os.path.basename(resource)
+                if filename in shared_filenames:
+                    raise ValueError(
+                        f"Duplicate shared resource filename: {filename}"
+                    )
+                shared_filenames.add(filename)
+
+                # Warn about large files (> 100MB)
+                file_size = os.path.getsize(resource)
+                if file_size > 100 * 1024 * 1024:  # 100MB
+                    logger.warning(
+                        f"Large shared resource ({file_size / 1024 / 1024:.1f}MB): "
+                        f"{filename}"
+                    )
+
+        # 3. Validate individual resources
+        if self.individual_ressources:
+            # Check that all sublists have same length
+            lengths = [len(content) for content in self.individual_ressources]
+            if len(set(lengths)) > 1:
+                raise ValueError(
+                    f"Individual resources have inconsistent lengths: {lengths}"
+                )
+
+            # Check that each item is a Writeable instance
+            for i, content_list in enumerate(self.individual_ressources):
+                for j, item in enumerate(content_list):
+                    if not isinstance(item, Writeable):
+                        raise TypeError(
+                            f"Individual resource [{i}][{j}] is not a Writeable "
+                            f"instance: {type(item)}. Currently there are "
+                            "DictJSON and AtomsBatch, anything else needs a"
+                            "(very simple) custom implementation."
+                        )
+
+                    # Validate Writeable attributes
+                    if not hasattr(item, "filename") or not item.filename:
+                        raise ValueError(
+                            f"Individual resource [{i}][{j}] missing filename"
+                        )
+                    if not hasattr(item, "content"):
+                        raise ValueError(
+                            f"Individual resource [{i}][{j}] missing content"
+                        )
+
+            # Check for filename conflicts within each calcdir
+            if self.individual_ressources:
+                num_tasks = len(self.individual_ressources[0])
+                for task_idx in range(num_tasks):
+                    filenames = set()
+                    for content_list in self.individual_ressources:
+                        filename = content_list[task_idx].filename
+                        if filename in filenames:
+                            raise ValueError(
+                                f"Duplicate filename in task {task_idx}: {filename}"
+                            )
+                        filenames.add(filename)
+
+                        # Check for conflicts with shared resources
+                        if self.shared_ressources:
+                            for resource in self.shared_ressources:
+                                shared_name = os.path.basename(resource)
+                                if filename == shared_name:
+                                    logger.warning(
+                                        f"Task {task_idx} has individual resource "
+                                        f"'{filename}' that conflicts with shared "
+                                        f"resource name"
+                                    )
+
+        logger.debug("Resource validation passed")
 
     def copy_file(self, local_path):
         """Copies a local file to the remote rootpath directory.
@@ -562,30 +685,15 @@ class ArrayScriptTask(RemoteTask):
         Returns:
             The path to the file on the remote machine.
         """
-        moved_path = self.rootpath / os.path.split(local_path)[-1]
-        self.remote_fs.put(local_path, moved_path)
-        return moved_path
+        return self.file_allocator.copy_file(local_path)
 
-    def allocate_data(self, slurm_only=False):
+    def allocate_data(self, slurm_only: bool = False):
         """Allocate the script and input files on the remote machine and
         prepare the slurm job script.
+
+        Args:
+            slurm_only: Write only the SLURM file, don't allocate ressources.
         """
-        assert (
-            self.python_script_file is not None
-        ), "Need self.python_script_file"
-
-        assert os.path.exists(
-            self.python_script_file
-        ), f"Did not find python script at {self.python_script_file}!"
-
-        assert (
-            len(self.individual_ressources) > 0
-        ), "Specify some inputs for your script!"
-
-        for content in self.individual_ressources:
-            assert len(content) == len(
-                self.individual_ressources[0]
-            ), "args need to have same length!"
         # Copy the python script to the calculation directory on the remote machine
         self.script_file_remote = self.copy_file(self.python_script_file)
         # Write the slurm job script on the remote machine
@@ -595,24 +703,15 @@ class ArrayScriptTask(RemoteTask):
 
         if not slurm_only:
             if self.shared_ressources:
-                for ressource in self.shared_ressources:
-                    # Copy each shared resource to the remote calculation directory
-                    self.copy_file(ressource)
+                self.file_allocator.allocate_shared_resources(
+                    self.shared_ressources
+                )
 
-            self.all_calcpaths = []
-            for idx, data_at_idx in enumerate(
-                zip(*self.individual_ressources)
-            ):
-                # Create a directory for each job in the array
-                calcpath = self.calcdir / f"{idx}"
-                self.remote_fs.makedirs(calcpath)
-
-                # For each Writeable object, call its write method to write its content
-                # to the respective calculation directory
-                for data in data_at_idx:
-                    data.write(calcpath)
-                # Store the path to the calculation directory of this job
-                self.all_calcpaths.append(calcpath)
+            self.all_calcpaths = (
+                self.file_allocator.allocate_individual_resources(
+                    self.individual_ressources, self.calcdir
+                )
+            )
 
     def submit(self):
         # Submit the slurm job and wait until it is finished.
@@ -620,12 +719,11 @@ class ArrayScriptTask(RemoteTask):
         self.slurm_handler.wait_until_finished()
 
     def collect_results(self):
-        # Copy the entire rootpath directory from the remote machine to
-        # the local machine.
-        file_utils.secure_declare_path(
-            self.local_savepath, move=True, is_directory=True
+        """Copy the entire rootpath directory from the remote machine to
+        the local machine using ResultCollector."""
+        self.result_collector.collect_directory(
+            self.rootpath, self.local_savepath, move=True
         )
-        self.remote_fs.get_dir(self.rootpath, self.local_savepath)
 
     def finish_check(self):
         """Check for the presence of the 'is_finished.info' file in each

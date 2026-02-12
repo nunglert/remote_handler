@@ -285,6 +285,9 @@ pre-commit install
 
 which should install the hooks for you.
 
+## Issues during configuration
+- SSH key pair is protected by a passphrase -> Create new pair without
+
 
 ## TODOs
 
@@ -295,3 +298,4 @@ which should install the hooks for you.
 - potentially extend functionality of FileHandler to also execute arbitray shell commands via subprocess
 - While I like the overall class hierarchy and abstraction, the specific implementation is not very clean. Member variables are not handled with great care, leaving room for many potential failures if handled incorrectly. Needs some further thought, probably from someone who is good at OOP :v)
 - Need more documentation
+- clean this README
