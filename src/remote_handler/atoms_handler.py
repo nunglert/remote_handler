@@ -17,7 +17,7 @@ import numpy as np
 from ase import Atoms
 
 from remote_handler.core import cluster_handler, file_handler, tasks
-from remote_handler.core.cluster_config import ClusterConfig
+from remote_handler.core.cluster_handler import ClusterConfig
 
 logger = logging.getLogger(__name__)
 
@@ -108,12 +108,279 @@ def front_tag(filepath, tag):
     return Path(path) / f"{tag}{connector}{filename}"
 
 
+class AtomsShardManager:
+    """
+    Manages sharding and collection of ASE Atoms trajectories.
+
+    This class contains pure domain logic for handling atomic trajectory files:
+    reading, sharding, collection, regrouping, and redistribution. It has no
+    dependencies on SLURM or cluster infrastructure.
+
+    Args:
+        traj_files: List of extxyz files containing atomic configurations.
+        shard_size: Number of configurations per shard.
+        indices: Slice object specifying which configurations to read (start:end:step).
+    """
+
+    def __init__(
+        self,
+        traj_files: list[str],
+        shard_size: int,
+        indices: slice,
+    ):
+        self.traj_files = traj_files
+        self.shard_size = shard_size
+        self.indices = indices
+
+        # State populated by read_and_shard
+        self.shards = None
+        self.num_configs_total = None
+        self.num_array_tasks = None
+        self.all_shard_sizes = None
+
+    def combine_trajs(
+        self,
+        traj_files: list[str],
+        indices: slice,
+        local_fs: file_handler.FileSystemHandlerBase,
+    ) -> list[Atoms]:
+        """
+        Combines configurations from all provided trajectories into a single
+        list of Atoms objects.
+
+        Args:
+            traj_files: List of extxyz files containing atomic configurations.
+            indices: Slice object specifying which configurations to read
+                from each trajectory file.
+            local_fs: Filesystem handler for reading trajectory files.
+
+        Returns:
+            List of Atoms objects. Two attributes are stored as entries in the info
+            dict:
+                file_index: The index of the trajectory file from which the
+                    configuration was taken.
+                iteration_index: The index of the configuration in its
+                    original file.
+            This makes each Atoms object unambiguously attributable to its origin.
+        """
+        all_atoms = []
+        for file_idx, file in enumerate(traj_files):
+            # Read the configurations from the trajectory file
+            ats = local_fs.read_ase(file, index=indices)
+
+            for iteration_idx, at in enumerate(ats):
+                at.info["file_index"] = file_idx  # Save run index
+                at.info["iteration_index"] = (
+                    iteration_idx * indices.step
+                )  # Save sample index
+
+            all_atoms.extend(ats)
+        return all_atoms
+
+    def read_and_shard(
+        self, local_fs: file_handler.FileSystemHandlerBase
+    ) -> list[list[Atoms]]:
+        """
+        Reads all configurations from the provided trajectory files and
+        shards them into batches of size `shard_size`.
+
+        Args:
+            local_fs: Filesystem handler for reading trajectory files.
+
+        Returns:
+            List of sharded Atoms lists.
+        """
+        # Combine all configurations from the trajectory files
+        all_atoms = self.combine_trajs(self.traj_files, self.indices, local_fs)
+
+        # Determine the total number of configurations and the number of batches
+        self.num_configs_total = len(all_atoms)
+        self.num_array_tasks = math.ceil(
+            self.num_configs_total / self.shard_size
+        )
+        logger.info(
+            f"Collected {self.num_configs_total} configs for processing"
+        )
+        logger.info(f"Processing in {self.num_array_tasks} batches")
+        assert (
+            self.num_array_tasks <= 1000
+        ), "Max size for slurm array jobs is 1000!"
+
+        # Split the configurations into batches
+        self.shards = split_list(all_atoms, self.shard_size)
+        # Store the size of each batch for later verification
+        self.all_shard_sizes = [len(shard) for shard in self.shards]
+
+        return self.shards
+
+    def collect(
+        self,
+        calcdir: Path,
+        remote_fs: file_handler.FileSystemHandlerBase,
+        num_array_tasks: int,
+        map_indices: Optional[list[int]],
+        tag: str,
+        only_finished: bool = True,
+    ) -> tuple[list[Atoms], list[int]]:
+        """
+        Scan calculation directories for extxyz files containing processed
+        Atoms objects.
+
+        Args:
+            calcdir: Base calculation directory containing subdirectories 0, 1, 2, ...
+            remote_fs: Filesystem handler for accessing remote files.
+            num_array_tasks: Number of array tasks to collect from.
+            map_indices: Optional mapping of task indices (for recompute scenarios).
+            tag: Tag used to identify result files.
+            only_finished: If True, only collect configurations that have
+                the `is_finished` flag set to True in their info dict.
+
+        Returns:
+            A tuple containing:
+                - A list of all collected Atoms objects.
+                - A list of indices of batches that failed to process.
+        """
+        result_filename = front_tag(f"opt.extxyz", tag)
+        logger.info(f"Collecting results from: {str(result_filename)}")
+        print(f"Collecting results from: {str(result_filename)}")
+
+        all_atoms = []
+        failed_indices = []
+
+        for idx in range(num_array_tasks):
+            # Determine the actual batch index
+            if map_indices is None:
+                calc_idx = idx
+            else:
+                calc_idx = map_indices[idx]
+            # Determine the calculation path for this batch
+            calcpath = calcdir / str(calc_idx)
+
+            database_path = calcpath / result_filename
+            if not remote_fs.exists(database_path):
+                # Log a warning if the processed trajectory is missing meaning
+                # the job likely failed
+                logger.warning(f"Processed traj missing for shard {calc_idx}!")
+                failed_indices.append(calc_idx)
+            else:
+                ats = remote_fs.read_ase(database_path, index=":")
+
+                all_finished = True
+                if only_finished:
+                    # Check if all configurations in this batch are marked as finished
+                    all_finished = bool(
+                        np.all([at.info["is_finished"] for at in ats])
+                    )
+
+                # Verify that the number of collected configurations matches
+                size_preserved = len(ats) == self.all_shard_sizes[calc_idx]
+                if not size_preserved or not all_finished:
+                    logger.warning(
+                        f"Shard {calc_idx} failed with {size_preserved=} "
+                        f"and {all_finished=}"
+                    )
+                    failed_indices.append(calc_idx)
+
+                # Collect the configurations from this batch
+                all_atoms.extend(ats)
+
+        return all_atoms, failed_indices
+
+    def regroup(self, all_atoms: list[Atoms]) -> list[list[Atoms]]:
+        """
+        Regroup a flat list of Atoms objects into a list of lists, where each
+        sublist corresponds to the configurations from a single original
+        trajectory file.
+
+        Args:
+            all_atoms: A flat list of Atoms objects, each with an info dict
+                containing a 'file_index' key that indicates the original
+                trajectory file index.
+
+        Returns:
+            A list of lists, where each sublist contains Atoms objects from
+            the same original trajectory file.
+        """
+        indices = [at.info["file_index"] for at in all_atoms]
+        return regroup(all_atoms, indices)
+
+    def redistribute(
+        self,
+        all_atoms_sets: list[list[Atoms]],
+        local_fs: file_handler.FileSystemHandlerBase,
+        tag: str,
+    ):
+        """
+        Redistribute the grouped Atoms objects back into their original
+        trajectory files, writing them to the local file system with the
+        specified tag prepended to the filenames.
+
+        Args:
+            all_atoms_sets: List of lists, where each sublist contains Atoms
+                from the same original trajectory file.
+            local_fs: Filesystem handler for writing trajectory files.
+            tag: Tag to prepend to output filenames.
+        """
+        for ats in all_atoms_sets:
+            # Get the original filename using the file_index from the info dict
+            fname = self.traj_files[int(ats[-1].info["file_index"])]
+            # Write the configurations to the local file system with the tag
+            local_fs.write_ase(front_tag(fname, tag), ats)
+
+    def check_and_harvest(
+        self,
+        all_atoms: list[Atoms],
+        failed_indices: list[int],
+        local_fs: file_handler.FileSystemHandlerBase,
+        tag: str,
+        savepath: Path,
+    ):
+        """
+        Check for failed batches and redistribute collected configurations
+        into their original trajectory files.
+
+        Args:
+            all_atoms: All collected Atoms objects.
+            failed_indices: Indices of batches that failed.
+            local_fs: Filesystem handler for writing results.
+            tag: Tag to prepend to output filenames.
+            savepath: Path to check for SLURM output (for error messages).
+
+        Raises:
+            Exception: If any batches failed or if collected count is insufficient.
+        """
+        if failed_indices:
+            raise Exception(
+                f"Something went wrong during processing. Check slurm "
+                f"output at {savepath / 'slurm_output'}\n"
+                f"{failed_indices=}"
+            )
+
+        if len(all_atoms) < self.num_configs_total:
+            raise Exception(
+                "Collected number of configurations < num_total_configs!"
+            )
+
+        all_atoms_sets = self.regroup(all_atoms)
+        self.redistribute(all_atoms_sets, local_fs, tag)
+        logger.info("Successfully harvested all processed configs!")
+
+
 class RemoteAtomsHandler(tasks.ArrayScriptTask):
     """
-    This is a Utility subclass of tasks.ArrayScriptTask for dealing with
-    ase.Atoms trajectories. It can parse a list of `extxyz` files and
-    split them in appropriate chunks that can conveniently be processed
-    by a python script.
+    Coordinates SLURM array job execution for processing ASE Atoms trajectories.
+
+    This class combines ArrayScriptTask (for SLURM infrastructure) with
+    AtomsShardManager (for trajectory handling) using composition. It manages
+    the full workflow: reading trajectory files, sharding them into batches,
+    submitting array jobs, collecting results, and redistributing them back
+    into the original file structure.
+
+    Architecture:
+        - Inherits from ArrayScriptTask for SLURM job submission infrastructure
+        - Composes AtomsShardManager for domain-specific Atoms handling logic
+        - Delegates trajectory operations to shard_manager
+        - Orchestrates the overall workflow
 
     Args:
         traj_files: List of extxyz files containing atomic configurations.
@@ -203,133 +470,76 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
 
         # Initialize instance variables
         self.loop_time = loop_time
-        self.traj_files = traj_files
-        self.shard_size = shard_size
         self.map_indices = None
-        self.indices = slice(start, end, every)
-
         self.tag = tag
 
-        # Read and shard the trajectories
-        self.read_configs()
+        # Create the shard manager for domain logic
+        self.shard_manager = AtomsShardManager(
+            traj_files=traj_files,
+            shard_size=shard_size,
+            indices=slice(start, end, every),
+        )
+
+        # Read and shard the trajectories using the shard manager
+        self.shards = self.shard_manager.read_and_shard(self.local_fs)
+
+        # Expose properties for backwards compatibility with subclasses
+        self.traj_files = self.shard_manager.traj_files
+        self.shard_size = self.shard_manager.shard_size
+        self.indices = self.shard_manager.indices
+        self.num_configs_total = self.shard_manager.num_configs_total
+        self.num_array_tasks = self.shard_manager.num_array_tasks
+        self.all_shard_sizes = self.shard_manager.all_shard_sizes
 
     def combine_trajs(self, traj_files, indices):
         """
         Combines configurations from all provided trajectories into a single
         list of Atoms objects.
 
-        Args:
-            traj_files: List of extxyz files containing atomic configurations.
-            indices: Slice object specifying which configurations to read
-                from each trajectory file.
-
-        Returns:
-            List of Atoms objects. Two attributes are stored as entries in the info
-            dict:
-                file_index: The index of the trajectory file from which the
-                    configuration was taken.
-                iteration_index: The index of the configuration in its
-                    original file.
-            This makes each Atoms object unambiguously attributable to its origin.
+        Deprecated: This method is kept for backwards compatibility.
+        Use shard_manager.combine_trajs() directly instead.
         """
-        all_atoms = []
-        for file_idx, file in enumerate(traj_files):
-            # Read the configurations from the trajectory file
-            ats = self.local_fs.read_ase(file, index=indices)
-
-            for iteration_idx, at in enumerate(ats):
-                at.info["file_index"] = file_idx  # Save run index
-                at.info["iteration_index"] = (
-                    iteration_idx * indices.step
-                )  # Save sample index
-
-            all_atoms.extend(ats)
-        return all_atoms
+        return self.shard_manager.combine_trajs(
+            traj_files, indices, self.local_fs
+        )
 
     def read_configs(self):
         """
         Reads all configurations from the provided trajectory files and
         shards them into batches of size `shard_size`.
-        """
-        # Combine all configurations from the trajectory files
-        all_atoms = self.combine_trajs(self.traj_files, self.indices)
-        # Determine the total number of configurations and the number of batches
-        self.num_configs_total = len(all_atoms)
-        self.num_array_tasks = math.ceil(
-            self.num_configs_total / self.shard_size
-        )
-        logger.info(
-            f"Collected {self.num_configs_total} configs for processing"
-        )
-        logger.info(f"Processing in {self.num_array_tasks} batches")
-        assert (
-            self.num_array_tasks <= 1000
-        ), "Max size for slurm array jobs is 1000!"
 
-        # Split the configurations into batches
-        self.shards = split_list(all_atoms, self.shard_size)
-        # Store the size of each batch for later verification
-        self.all_shard_sizes = [len(shard) for shard in self.shards]
+        Deprecated: This method is kept for backwards compatibility.
+        Sharding now happens automatically in __init__ via shard_manager.
+        """
+        self.shards = self.shard_manager.read_and_shard(self.local_fs)
+        self.num_configs_total = self.shard_manager.num_configs_total
+        self.num_array_tasks = self.shard_manager.num_array_tasks
+        self.all_shard_sizes = self.shard_manager.all_shard_sizes
 
     def collect(
         self, only_finished: bool = True
     ) -> tuple[list[Atoms], list[int]]:
         """
         Scan temporary directories for extxyz files containing processed
-        Atoms objects. The tag must be the same as the one assigned in the
-        optimization driver script `optimize_traj.py`
+        Atoms objects.
 
         Args:
             only_finished: If True, only collect configurations that have
                 the `is_finished` flag set to True in their info dict.
+
         Returns:
             A tuple containing:
                 - A list of all collected Atoms objects.
-                - A list of indices of batches that failed to process
+                - A list of indices of batches that failed to process.
         """
-        result_filename = front_tag(f"opt.extxyz", self.tag)
-        logger.info(f"Collecting results from: {str(result_filename)}")
-        print(f"Collecting results from: {str(result_filename)}")
-        all_atoms = []
-        failed_indices = []
-        for idx in range(self.num_array_tasks):
-            # Determine the actual batch index
-            if self.map_indices is None:
-                calc_idx = idx
-            else:
-                calc_idx = self.map_indices[idx]
-            # Determine the calculation path for this batch
-            calcpath = self.calcdir / str(calc_idx)
-
-            database_path = calcpath / result_filename
-            if not self.remote_fs.exists(database_path):
-                # Log a warning if the processed trajectory is missing meaning
-                # the job likely failed
-                logger.warning(f"Processed traj missing for shard {calc_idx}!")
-                failed_indices.append(calc_idx)
-            else:
-                ats = self.remote_fs.read_ase(database_path, index=":")
-
-                all_finished = True
-                if only_finished:
-                    # Check if all configurations in this batch are marked as finished
-                    all_finished = bool(
-                        np.all([at.info["is_finished"] for at in ats])
-                    )
-
-                # Verify that the number of collected configurations matches
-                size_preserved = len(ats) == self.all_shard_sizes[calc_idx]
-                if not size_preserved or not all_finished:
-                    logger.warning(
-                        f"Shard {calc_idx} failed with {size_preserved=} "
-                        f"and {all_finished=}"
-                    )
-                    failed_indices.append(calc_idx)
-
-                # Collect the configurations from this batch
-                all_atoms.extend(ats)
-
-        return all_atoms, failed_indices
+        return self.shard_manager.collect(
+            calcdir=self.calcdir,
+            remote_fs=self.remote_fs,
+            num_array_tasks=self.num_array_tasks,
+            map_indices=self.map_indices,
+            tag=self.tag,
+            only_finished=only_finished,
+        )
 
     def regroup(self, all_atoms) -> list[list[Atoms]]:
         """
@@ -341,51 +551,52 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
             all_atoms: A flat list of Atoms objects, each with an info dict
                 containing a 'file_index' key that indicates the original
                 trajectory file index.
+
         Returns:
             A list of lists, where each sublist contains Atoms objects from
             the same original trajectory file.
         """
-
-        indices = [at.info["file_index"] for at in all_atoms]
-        return regroup(all_atoms, indices)
+        return self.shard_manager.regroup(all_atoms)
 
     def redistribute(self, all_atoms_sets):
         """
         Redistribute the grouped Atoms objects back into their original
         trajectory files, writing them to the local file system with the
-        specified tag prepended to the filenames."""
+        specified tag prepended to the filenames.
 
-        for ats in all_atoms_sets:
-            # Get the original filename using the file_index from the info dict
-            fname = self.traj_files[int(ats[-1].info["file_index"])]
-            # Write the configurations to the local file system with the tag
-            self.local_fs.write_ase(front_tag(fname, self.tag), ats)
+        Args:
+            all_atoms_sets: List of lists, where each sublist contains Atoms
+                from the same original trajectory file.
+        """
+        self.shard_manager.redistribute(
+            all_atoms_sets, self.local_fs, self.tag
+        )
 
     def check_and_harvest(self, all_atoms, failed_indices):
         """
         Check for failed batches and redistribute collected configurations
         into their original trajectory files.
+
+        Args:
+            all_atoms: All collected Atoms objects.
+            failed_indices: Indices of batches that failed.
+
+        Raises:
+            Exception: If any batches failed or if collected count is insufficient.
         """
-        if failed_indices:
-            raise Exception(
-                f"Something went wrong during processing. Check slurm "
-                f"output at {Path(self.savepath)/ 'slurm_output'}\n"
-                f"{failed_indices=}"
-            )
-
-        if len(all_atoms) < self.num_configs_total:
-            raise Exception(
-                "Collected number of configurations < num_total_configs!"
-            )
-
-        all_atoms_sets = self.regroup(all_atoms)
-        self.redistribute(all_atoms_sets)
-        logger.info("Successfully harvested all processed configs!")
+        self.shard_manager.check_and_harvest(
+            all_atoms=all_atoms,
+            failed_indices=failed_indices,
+            local_fs=self.local_fs,
+            tag=self.tag,
+            savepath=Path(self.savepath),
+        )
 
     def collect_and_harvest(self):
         """
         Collect processed configurations from the remote machine and
         redistribute them into their original trajectory files.
+
         Raises an exception if any batch failed to process or if the
         number of collected configurations is less than the total expected.
         """

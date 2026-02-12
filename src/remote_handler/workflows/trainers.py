@@ -12,7 +12,6 @@ from typing import Optional
 
 import numpy as np
 
-from remote_handler.core.active_learning_base import ModelTrainer
 from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.core.tasks import (
     ArrayScriptTask,
@@ -20,6 +19,7 @@ from remote_handler.core.tasks import (
     SingleScriptTask,
 )
 from remote_handler.core.utils import grep
+from remote_handler.workflows.active_learning_base import ModelTrainer
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +112,7 @@ class MaceModelTrainer(ModelTrainer):
                 ]
             ]
 
-            from remote_handler.core.cluster_config import ClusterConfig
+            from remote_handler.core.cluster_handler import ClusterConfig
 
             cluster_config = ClusterConfig(
                 jobfile_name="run_train.sh",
@@ -314,7 +314,7 @@ class MACETrainer(ModelTrainer):
 
             from math import ceil
 
-            from remote_handler.core.cluster_config import ClusterConfig
+            from remote_handler.core.cluster_handler import ClusterConfig
             from remote_handler.core.file_handler import LocalFileSystem
 
             # Validate config file name
@@ -591,7 +591,7 @@ class NeuralilILTrainer(ModelTrainer):
 
         # In stub mode, we don't need to create the task
         if not self.stub:
-            from remote_handler.core.cluster_config import ClusterConfig
+            from remote_handler.core.cluster_handler import ClusterConfig
 
             cluster_config = ClusterConfig(
                 jobfile_name="run_slurm.sh",

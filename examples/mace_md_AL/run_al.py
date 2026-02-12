@@ -5,8 +5,8 @@ from pathlib import Path
 
 import cu_co_active_learning
 
-from remote_handler.core.active_learning_base import ActiveLearningHandler
 from remote_handler.core.file_handler import RemoteFileSystem
+from remote_handler.workflows.active_learning_base import ActiveLearningHandler
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 

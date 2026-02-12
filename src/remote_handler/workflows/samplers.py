@@ -14,9 +14,9 @@ import ase.io
 import numpy as np
 from ase import Atoms
 
-from remote_handler.core.active_learning_base import Sampler
 from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.core.tasks import SingleScriptTask
+from remote_handler.workflows.active_learning_base import Sampler
 
 logger = logging.getLogger(__name__)
 
@@ -288,7 +288,7 @@ class NSTrajectorySampler(Sampler):
             if not self.remote_fs.exists(self.ns_exe):
                 raise Exception("Provided ns_exe does not exist on remote_fs!")
 
-            from remote_handler.core.cluster_config import ClusterConfig
+            from remote_handler.core.cluster_handler import ClusterConfig
 
             cluster_config = ClusterConfig(
                 jobfile_name="run_slurm.sh",

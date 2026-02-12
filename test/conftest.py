@@ -29,7 +29,7 @@ if os.environ.get("REMOTE_HANDLER_CONFIG_DIR") is None:
     ] = "/home/nunglert/code/remote_handler/experiments/config_files"
 
 from remote_handler.core import file_handler
-from remote_handler.core.cluster_config import ClusterConfig
+from remote_handler.core.cluster_handler import ClusterConfig
 
 
 @pytest.fixture(scope="session")

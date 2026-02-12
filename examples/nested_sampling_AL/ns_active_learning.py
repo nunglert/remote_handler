@@ -21,16 +21,16 @@ from jaxnest.backends.mace import mace_train_utils
 from jaxnest.file_utils import grep, prepend_filename, secure_declare_path
 from jaxnest.input_parser import update_default_args
 
-from remote_handler.core.active_learning_base import (
+from remote_handler.core.file_handler import FileSystemHandlerBase
+from remote_handler.core.tasks import SingleScriptTask
+from remote_handler.dft_runner import VASPHandler
+from remote_handler.optimizer import RemoteOptimizationHandler
+from remote_handler.workflows.active_learning_base import (
     ActiveLearningHandler,
     GroundTruthEvaluator,
     ModelTrainer,
     Sampler,
 )
-from remote_handler.core.file_handler import FileSystemHandlerBase
-from remote_handler.core.tasks import SingleScriptTask
-from remote_handler.dft_runner import VASPHandler
-from remote_handler.optimizer import RemoteOptimizationHandler
 
 logger = logging.getLogger(__name__)
 

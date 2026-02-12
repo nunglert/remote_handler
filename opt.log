@@ -1,0 +1,66 @@
+
+Parsed arguments:
+{
+    "collect_only": false,
+    "config": null,
+    "custom_regex": null,
+    "do_optimization": false,
+    "do_rdf": false,
+    "do_steinhardt": false,
+    "do_traj": false,
+    "do_walkers": false,
+    "every": 1,
+    "files": [
+        "/home/nunglert/code/remote_handler/test/data/temp/run_optimizer/case1/local_dir/traj0.extxyz",
+        "/home/nunglert/code/remote_handler/test/data/temp/run_optimizer/case1/local_dir/traj1.extxyz"
+    ],
+    "fmax": 0.1,
+    "jobname": "opt",
+    "local_machine": "dirona",
+    "log_mode": "file",
+    "logfile": "opt.log",
+    "loop_time": 5,
+    "max_neighbors_list": [
+        15,
+        20,
+        25,
+        30,
+        35,
+        40,
+        45,
+        50,
+        60
+    ],
+    "max_neighbors_offset": 3,
+    "n_processors": 1,
+    "nbins": 200,
+    "num_parallel": 100,
+    "optimization_backend": "NNFF",
+    "partition": "normal",
+    "path": null,
+    "pickle_file": "/home/nunglert/nnff_trainings/velo/si_bartok_gpu7/run11_r2scan_rerun/model_params_plain_ensemble_VELO_8E04F5B1.pkl",
+    "python_script_path": "/home/nunglert/code/jaxnest_dev/scripts/utility/optimize_traj.py",
+    "read_out": null,
+    "read_out_auto": false,
+    "recompute_failed": false,
+    "remote_machine": "datalab",
+    "rmax": 4.0,
+    "savepath": null,
+    "shard_size": 1000,
+    "steinhardt_backend": "pyscal",
+    "steinhardt_l_values": [
+        4,
+        6
+    ],
+    "steps": 200,
+    "stub": false,
+    "supercell_trafo": [
+        3,
+        3,
+        3
+    ]
+}
+
+Parsed extxyz files:
+/home/nunglert/code/remote_handler/test/data/temp/run_optimizer/case1/local_dir/traj0.extxyz
+/home/nunglert/code/remote_handler/test/data/temp/run_optimizer/case1/local_dir/traj1.extxyz

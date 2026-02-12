@@ -10,6 +10,7 @@ from pathlib import Path
 
 from remote_handler import optimizer
 from remote_handler.core import file_handler, utils
+from remote_handler.core.cluster_handler import ClusterConfig
 
 # from jaxnest import file_utils
 # from jaxnest.file_utils import grep, secure_path
@@ -184,6 +185,12 @@ def get_parser():
         type=int,
         default=100,
         help="Number of parallel tasks.",
+    )
+    parser.add_argument(
+        "--n_processors",
+        type=int,
+        default=1,
+        help="Number of processors per task.",
     )
     parser.add_argument(
         "--python_script_path",
@@ -448,19 +455,43 @@ def process_args(args, parser):
         opt_logger.print(file)
 
     if args.remote_machine == "local":
-        args.remote_fs = file_handler.LocalFileSystem(
-            slurm_config_file="local.json"
+        args.remote_fs = file_handler.LocalFileSystem()
+        # If no savepath provided, use temp directory
+        if not args.savepath:
+            args.savepath = str(args.remote_fs.create_tempdir())
+        # Create a minimal local cluster config
+        args.cluster_config = ClusterConfig(
+            remote_machine="local",
+            partition=args.partition,
+            conda_env="",
+            conda_source="",
+            savepath=args.savepath,
+            template="local.sh.j2",
         )
     else:
-        args.remote_fs = file_handler.RemoteFileSystem(
-            slurm_config_file=f"{args.remote_machine}.json"
+        args.remote_fs = file_handler.RemoteFileSystem(args.remote_machine)
+        # If no savepath provided, use temp directory on remote
+        if not args.savepath:
+            args.savepath = str(args.remote_fs.create_tempdir())
+        # Create a cluster config for remote machine
+        args.cluster_config = ClusterConfig(
+            remote_machine=args.remote_machine,
+            partition=args.partition,
+            conda_env="jaxnest",  # Default conda environment
+            conda_source="~/miniconda3/etc/profile.d/conda.sh",  # Default conda source
+            savepath=args.savepath,
+            template=f"{args.remote_machine}.sh.j2",
         )
+
     return args
 
 
 def setup_optimizer(args):
     return optimizer.RemoteOptimizationHandler(
         args.ats_files,
+        cluster_config=args.cluster_config,
+        remote_fs=args.remote_fs,
+        n_processors=args.n_processors,
         shard_size=args.shard_size,
         savepath=args.savepath,
         num_parallel=args.num_parallel,
@@ -471,7 +502,9 @@ def setup_optimizer(args):
         max_neighbors_offset=args.max_neighbors_offset,
         optimization_backend=args.optimization_backend,
         steinhardt_backend=args.steinhardt_backend,
-        steinhardt_l_values=args.steinhardt_l_values,
+        steinhardt_l_value=args.steinhardt_l_values[0]
+        if isinstance(args.steinhardt_l_values, list)
+        else args.steinhardt_l_values,
         loop_time=args.loop_time,
         jobname=args.jobname,
         stub=args.stub,
@@ -483,7 +516,6 @@ def setup_optimizer(args):
         do_steinhardt=args.do_steinhardt,
         do_optimization=args.do_optimization,
         logfile=args.logfile,
-        remote_fs=args.remote_fs,
         collect_only=args.collect_only,
         # partition=args.partition
     )

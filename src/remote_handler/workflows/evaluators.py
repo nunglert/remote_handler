@@ -13,9 +13,9 @@ import ase.io
 import numpy as np
 from ase import Atoms
 
-from remote_handler.core.active_learning_base import GroundTruthEvaluator
 from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.core.utils import grep
+from remote_handler.workflows.active_learning_base import GroundTruthEvaluator
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ class VASPEvaluator(GroundTruthEvaluator):
 
         # In stub mode, we don't need VASPHandler
         if not self.stub:
-            from remote_handler.core.cluster_config import ClusterConfig
+            from remote_handler.core.cluster_handler import ClusterConfig
             from remote_handler.dft_runner import VASPHandler
 
             # Create minimal cluster config

@@ -16,6 +16,7 @@ from ase.calculators.calculator import compare_atoms
 from pytest_lazyfixture import lazy_fixture
 
 from remote_handler import optimizer, run_optimizer
+from remote_handler.atoms_handler import front_tag
 
 
 def at_to_hash(at, length=8):
@@ -57,8 +58,33 @@ def traj_files(local_dir, dummy_trajectory):
     return [tfile0, tfile1]
 
 
+@pytest.fixture(
+    params=[
+        pytest.param("remote", marks=[pytest.mark.remote]),
+        pytest.param("local", marks=[pytest.mark.local]),
+    ]
+)
+def fs_config_savepath(
+    request,
+    remote_fs,
+    remote_cluster_config,
+    local_fs,
+    local_cluster_config,
+    tmp_path,
+):
+    """Provide resolved filesystem, cluster_config, and savepath for parametrized tests."""
+    if request.param == "remote":
+        return remote_fs, remote_cluster_config, remote_cluster_config.savepath
+    else:
+        return (
+            local_fs,
+            local_cluster_config,
+            str(tmp_path / "local_slurm_test"),
+        )
+
+
 @pytest.fixture
-def default_params(filesystem, cluster_config, data_dir, dummy_trajectory):
+def default_params(fs_config_savepath, data_dir, dummy_trajectory):
     """
     Variables:
         asset_dir: Path with static files required for test
@@ -67,6 +93,7 @@ def default_params(filesystem, cluster_config, data_dir, dummy_trajectory):
         local_results: Path where the directory from the remote machine will be
             copied to in order to investigate the resulting files.
     """
+    filesystem, cluster_config, savepath = fs_config_savepath
 
     asset_dir = data_dir / "assets/optimizer/"
     temp_dir = data_dir / "temp/optimizer"
@@ -101,9 +128,9 @@ def default_params(filesystem, cluster_config, data_dir, dummy_trajectory):
         traj_files=traj_files,
         cluster_config=cluster_config,
         shard_size=10,
-        # savepath=remote_dir,
-        savepath=cluster_config.savepath,
+        savepath=savepath,
         num_parallel=5,
+        n_processors=2,
         stub=False,
         python_script_path=python_script_path,
         pickle_file=pickle_file,
@@ -121,14 +148,13 @@ def default_params(filesystem, cluster_config, data_dir, dummy_trajectory):
         end=None,
         do_optimization=False,
         do_steinhardt=True,
-        # conda_env="cppjax",
+        do_rdf=True,
         remote_fs=filesystem,
         logfile=logfile,
-        # partition="normal",
         collect_only=False,
         optimization_backend="NNFF",
         steinhardt_backend="pyscal",
-        steinhardt_l_values=[4, 6],
+        steinhardt_l_value=4,
         local_savepath=local_results,
         tag="opt",
     )
@@ -213,7 +239,7 @@ def test_collect_and_redistribute(instance):
     for idx, tfile in enumerate(handler.traj_files):
         # path, filename = os.path.split(tfile)
         # opt_tfile = Path(path) / f"{handler.tag}{filename}"
-        opt_tfile = optimizer.front_tag(tfile, handler.tag)
+        opt_tfile = front_tag(tfile, handler.tag)
         assert handler.local_fs.exists(opt_tfile)
 
 
@@ -239,7 +265,7 @@ def test_failure_incomplete(instance):
 
     # emulate incomplete processed trajectory
     traj_file = Path(handler.savepath) / "calcdirs/0/opt.extxyz"
-    optimized_file = optimizer.front_tag(traj_file, handler.tag)
+    optimized_file = front_tag(traj_file, handler.tag)
     ats = handler.remote_fs.read_ase(optimized_file, index="1:")
     handler.remote_fs.write_ase(optimized_file, ats)
 
@@ -260,7 +286,7 @@ def test_failure_is_finished(instance):
 
     # emulate failure for one config in trajectory via is_finished=False
     traj_file = Path(handler.savepath) / "calcdirs/0/opt.extxyz"
-    optimized_file = optimizer.front_tag(traj_file, handler.tag)
+    optimized_file = front_tag(traj_file, handler.tag)
     ats = handler.remote_fs.read_ase(optimized_file, index=":")
     ats[4].info["is_finished"] = False
     handler.remote_fs.write_ase(optimized_file, ats)
@@ -280,7 +306,7 @@ def test_recompute_failed(instance):
     # emulate failure for one config in trajectory via is_finished=False
     handler.collect_only = True
     traj_file = Path(handler.savepath) / "calcdirs/0/opt.extxyz"
-    optimized_file = optimizer.front_tag(traj_file, handler.tag)
+    optimized_file = front_tag(traj_file, handler.tag)
     ats = handler.remote_fs.read_ase(optimized_file, index=":")
     ats[4].info["is_finished"] = False
     handler.remote_fs.write_ase(optimized_file, ats)
@@ -314,6 +340,8 @@ def test_run_optimizer_parse_simple(argparser):
 
     assert isinstance(args.supercell_trafo, list)
     assert isinstance(args.max_neighbors_list, list)
+    # Note: arg parser uses steinhardt_l_values (plural), but
+    # RemoteOptimizationHandler expects steinhardt_l_value (singular)
     assert isinstance(args.steinhardt_l_values, list)
 
 

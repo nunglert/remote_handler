@@ -8,7 +8,7 @@ from typing import Any, Optional, Union
 
 from remote_handler.atoms_handler import RemoteAtomsHandler
 from remote_handler.core import cluster_handler, file_handler, tasks
-from remote_handler.core.cluster_config import ClusterConfig
+from remote_handler.core.cluster_handler import ClusterConfig
 
 logger = logging.getLogger(__name__)
 

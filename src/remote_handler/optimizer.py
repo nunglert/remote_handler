@@ -1,3 +1,4 @@
+import logging
 import os
 from abc import ABC, abstractmethod
 from copy import deepcopy
@@ -7,7 +8,9 @@ from typing import Any, Optional, Union
 
 from remote_handler.atoms_handler import RemoteAtomsHandler
 from remote_handler.core import cluster_handler, file_handler, tasks
-from remote_handler.core.cluster_config import ClusterConfig
+from remote_handler.core.cluster_handler import ClusterConfig
+
+logger = logging.getLogger(__name__)
 
 
 class RemoteOptimizationHandler(RemoteAtomsHandler):
@@ -126,9 +129,6 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
             n_processors,  # n_processors
             slurm_header_add="module load openblas",
         )
-
-        # Set up logger
-        self.logger = tasks.SimpleLogger(logfile)
 
         # Store parameters
         self.do_optimization = do_optimization
