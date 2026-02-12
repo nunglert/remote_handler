@@ -111,3 +111,150 @@ def test_reconnect(remote_fs, local_dir):
 
     fs.put(local_dir / filename, target_dir / filename)
     assert fs.exists(target_dir / filename)
+
+
+# ===== NEW MOCK-BASED TESTS =====
+# These tests demonstrate the new dependency injection capability
+# for testing RemoteFileSystem with mock SSH/SFTP clients
+
+
+from unittest.mock import MagicMock
+
+import paramiko
+
+from remote_handler.core.ssh_connection import MockSSHClientProvider
+
+
+class TestRemoteFileSystemWithMocks:
+    """Test RemoteFileSystem using mock SSH/SFTP clients."""
+
+    def test_put_with_mock_client(self):
+        """Test that put() correctly calls SFTP client's put method."""
+        mock_ssh = MagicMock(spec=paramiko.SSHClient)
+        mock_sftp = MagicMock(spec=paramiko.SFTPClient)
+        mock_sftp.stat.side_effect = FileNotFoundError  # For exists() checks
+
+        mock_provider = MockSSHClientProvider(mock_ssh, mock_sftp)
+
+        fs = file_handler.RemoteFileSystem(
+            remote_alias="test_host", ssh_client_provider=mock_provider
+        )
+
+        fs.put("/local/file.txt", "/remote/file.txt")
+
+        mock_sftp.put.assert_called_once_with(
+            "/local/file.txt", "/remote/file.txt"
+        )
+
+    def test_get_with_mock_client(self):
+        """Test that get() correctly calls SFTP client's get method."""
+        mock_ssh = MagicMock(spec=paramiko.SSHClient)
+        mock_sftp = MagicMock(spec=paramiko.SFTPClient)
+        mock_sftp.stat.side_effect = FileNotFoundError
+
+        mock_provider = MockSSHClientProvider(mock_ssh, mock_sftp)
+
+        fs = file_handler.RemoteFileSystem(
+            remote_alias="test_host", ssh_client_provider=mock_provider
+        )
+
+        fs.get("/remote/file.txt", "/local/file.txt")
+
+        mock_sftp.get.assert_called_once_with(
+            "/remote/file.txt", "/local/file.txt"
+        )
+
+    def test_exists_with_mock_client(self):
+        """Test exists() method with mock client."""
+        mock_ssh = MagicMock(spec=paramiko.SSHClient)
+        mock_sftp = MagicMock(spec=paramiko.SFTPClient)
+
+        # Setup mock to return success for stat (file exists)
+        mock_sftp.stat.return_value = MagicMock()
+
+        mock_provider = MockSSHClientProvider(mock_ssh, mock_sftp)
+
+        fs = file_handler.RemoteFileSystem(
+            remote_alias="test_host", ssh_client_provider=mock_provider
+        )
+
+        result = fs.exists("/remote/file.txt")
+
+        assert result is True
+        mock_sftp.stat.assert_called_once_with("/remote/file.txt")
+
+    def test_exists_file_not_found(self):
+        """Test exists() returns False when file doesn't exist."""
+        mock_ssh = MagicMock(spec=paramiko.SSHClient)
+        mock_sftp = MagicMock(spec=paramiko.SFTPClient)
+
+        # Setup mock to raise FileNotFoundError
+        mock_sftp.stat.side_effect = FileNotFoundError
+
+        mock_provider = MockSSHClientProvider(mock_ssh, mock_sftp)
+
+        fs = file_handler.RemoteFileSystem(
+            remote_alias="test_host", ssh_client_provider=mock_provider
+        )
+
+        result = fs.exists("/remote/file.txt")
+
+        assert result is False
+
+    def test_reconnect_on_failure_with_mock(self):
+        """Test @reconnect_on_failure decorator with mock clients."""
+        mock_ssh = MagicMock(spec=paramiko.SSHClient)
+        mock_sftp = MagicMock(spec=paramiko.SFTPClient)
+        mock_sftp.stat.side_effect = FileNotFoundError
+
+        # Configure mock to fail once, then succeed
+        mock_sftp.put.side_effect = [
+            paramiko.SSHException("Connection lost"),
+            None,  # Success on retry
+        ]
+
+        mock_provider = MockSSHClientProvider(mock_ssh, mock_sftp)
+
+        fs = file_handler.RemoteFileSystem(
+            remote_alias="test_host", ssh_client_provider=mock_provider
+        )
+
+        # Should succeed after automatic reconnect
+        fs.put("/local/file.txt", "/remote/file.txt")
+
+        # Verify it was called twice (initial + retry)
+        assert mock_sftp.put.call_count == 2
+
+    def test_mkdir_with_mock_client(self):
+        """Test mkdir() with mock client."""
+        mock_ssh = MagicMock(spec=paramiko.SSHClient)
+        mock_sftp = MagicMock(spec=paramiko.SFTPClient)
+        mock_sftp.stat.side_effect = FileNotFoundError
+
+        mock_provider = MockSSHClientProvider(mock_ssh, mock_sftp)
+
+        fs = file_handler.RemoteFileSystem(
+            remote_alias="test_host", ssh_client_provider=mock_provider
+        )
+
+        fs.mkdir("/remote/newdir")
+
+        mock_sftp.mkdir.assert_called_once_with("/remote/newdir")
+
+    def test_disconnect_calls_provider_cleanup(self):
+        """Test that disconnect calls provider cleanup."""
+        mock_ssh = MagicMock(spec=paramiko.SSHClient)
+        mock_sftp = MagicMock(spec=paramiko.SFTPClient)
+        mock_sftp.stat.side_effect = FileNotFoundError
+
+        mock_provider = MockSSHClientProvider(mock_ssh, mock_sftp)
+
+        fs = file_handler.RemoteFileSystem(
+            remote_alias="test_host", ssh_client_provider=mock_provider
+        )
+
+        fs._disconnect()
+
+        # Verify SFTP and SSH clients were closed
+        mock_sftp.close.assert_called_once()
+        mock_ssh.close.assert_called_once()

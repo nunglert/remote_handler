@@ -20,30 +20,14 @@ import ase.io
 import paramiko
 from ase import Atoms
 
+from remote_handler.core.ssh_connection import (
+    ConfigBasedSSHClientProvider,
+    SSHClientProvider,
+)
+
 logger = logging.getLogger(__name__)
 
-# Load directory where config files for slurm are stored from environment variable
 CONFIG_DIR = Path(os.environ.get("REMOTE_HANDLER_CONFIG_DIR"))
-
-# @contextmanager
-# def paramiko_debug_to_logger(target_logger):
-#     p_logger = logging.getLogger("paramiko")
-#     old_level = p_logger.level
-#     old_handlers = p_logger.handlers[:]
-
-#     handler = logging.StreamHandler()
-#     handler.setFormatter(logging.Formatter(
-#         "[PARAMIKO] %(levelname)s: %(message)s"
-#     ))
-
-#     p_logger.handlers = [handler]
-#     p_logger.setLevel(logging.DEBUG)
-
-#     try:
-#         yield
-#     finally:
-#         p_logger.handlers = old_handlers
-#         p_logger.setLevel(old_level)
 
 
 def tag_path(part0: str, part1: str, is_directory: bool = False):
@@ -438,10 +422,14 @@ class RemoteFileSystem(FileSystemHandlerBase):
 
     Args:
         remote_alias (str): The alias for the remote host as defined in the SSH config.
+        identityfile (str, optional): Path to SSH identity file to use.
         remote_temp_path (str, optional): Path on the remote system to use for
             temporary files.
         local_temp_path (str, optional): Path on the local system to use for
             temporary files.
+        ssh_client_provider (SSHClientProvider, optional): Custom provider for
+            SSH/SFTP clients. If None, uses ConfigBasedSSHClientProvider. This
+            parameter is primarily for testing.
     """
 
     def __init__(
@@ -450,6 +438,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
         identityfile: Optional[str] = None,
         remote_temp_path: Optional[str] = None,
         local_temp_path: Optional[str] = None,
+        ssh_client_provider: Optional[SSHClientProvider] = None,
     ):
         super().__init__()
 
@@ -457,6 +446,16 @@ class RemoteFileSystem(FileSystemHandlerBase):
         self.identityfile = identityfile
         self.ssh_client = None
         self.sftp_client = None
+
+        # Store the client provider - use config-based by default
+        if ssh_client_provider is None:
+            # Default: use config-based provider (backward compatible)
+            self.ssh_client_provider = ConfigBasedSSHClientProvider(
+                remote_alias=remote_alias, identityfile=identityfile
+            )
+        else:
+            # Test injection: use provided mock provider
+            self.ssh_client_provider = ssh_client_provider
 
         try:
             self._connect()
@@ -486,122 +485,13 @@ class RemoteFileSystem(FileSystemHandlerBase):
         os.mkdir(self.local_tempdir)
 
     def _connect(self) -> None:
-        ssh_config_file = os.path.expanduser("~/.ssh/config")
-        ssh_config = paramiko.SSHConfig()
-        with open(ssh_config_file) as f:
-            ssh_config.parse(f)
-
-        # Get the config option dictionary for the specified host
-        host_config = ssh_config.lookup(self.remote_alias)
-
-        # Extract relevant connection details
-        hostname = host_config.get("hostname")
-        username = host_config.get("user")
-        # Get the first IdentityFile if available, else None
-        if self.identityfile is None:
-            identityfiles = host_config.get("identityfile", [None])
-        else:
-            identityfiles = [self.identityfile]
-
-        if len(identityfiles) > 1:
-            print(
-                "Warning: Found more than 1 key, using the first one: {}.".format(
-                    identityfiles[0]
-                )
-            )
-        identityfile = identityfiles[0]
-
-        if identityfile:
-            logger.info(
-                "SSH (%s): using identity file %s",
-                self.remote_alias,
-                os.path.expanduser(identityfile),
-            )
-        else:
-            logger.info(
-                "SSH (%s): no identity file specified (agent / default keys)",
-                self.remote_alias,
-            )
-
-        proxyjump = host_config.get("proxyjump")
-
-        if proxyjump:
-            # Step 1: Connect to jump host
-
-            # Get jump host config
-            jump_config = ssh_config.lookup(proxyjump)
-            jump_host = jump_config.get("hostname")
-            jump_user = jump_config.get("user")
-            jump_key = jump_config.get("identityfile", [None])[0]
-            # Connect to jump host
-            jump_client = paramiko.SSHClient()
-
-            # Automatically add the jump host's SSH key if missing
-            jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-            # Connect to jump host
-            jump_client.connect(
-                jump_host,
-                username=jump_user,
-                key_filename=jump_key,
-            )
-
-            # Step 2: Create a tunnel from jump host to target
-            jump_transport = jump_client.get_transport()
-            # Define the destination and local addresses
-            dest_addr = (hostname, 22)
-            local_addr = ("localhost", 0)
-            # Open a channel through the jump host of type "direct-tcpip"
-            channel = jump_transport.open_channel(
-                "direct-tcpip", dest_addr, local_addr
-            )
-
-            # Step 3: Connect final client using this channel as a socket
-
-            # Create the SSH client for the target host
-            self.ssh_client = paramiko.SSHClient()
-            # Automatically add the target host's SSH key if missing
-            self.ssh_client.set_missing_host_key_policy(
-                paramiko.AutoAddPolicy()
-            )
-            # Connect to the target host using the channel from the jump host
-            self.ssh_client.connect(
-                hostname,
-                username=username,
-                key_filename=identityfile,
-                sock=channel,
-            )
-        else:
-            # Direct connection
-            self.ssh_client = paramiko.SSHClient()
-            self.ssh_client.set_missing_host_key_policy(
-                paramiko.AutoAddPolicy()
-            )
-
-            self.ssh_client.connect(
-                hostname,
-                username=username,
-                key_filename=identityfile,
-            )
-            self.func(username)
-
-        # Open an SFTP client session on the SSH server
-        self.sftp_client = self.ssh_client.open_sftp()
-
-    def func(self, username):
-        from binascii import hexlify
-
-        for key in self.ssh_client._agent.get_keys():
-            try:
-                id_ = hexlify(key.get_fingerprint())
-                # for 2-factor auth a successfully auth'd key password
-                # will return an allowed 2fac auth method
-                allowed_types = set(
-                    self.ssh_client._transport.auth_publickey(username, key)
-                )
-                logger.warning(f"{key}, {allowed_types}")
-            except:
-                logger.warning("sdasdsadsadsa")
+        """
+        Establish SSH and SFTP connections using the configured client provider.
+        """
+        (
+            self.ssh_client,
+            self.sftp_client,
+        ) = self.ssh_client_provider.create_connection()
 
     def _disconnect(self) -> None:
         """Close the SSH and SFTP connections."""
@@ -610,6 +500,10 @@ class RemoteFileSystem(FileSystemHandlerBase):
             self.sftp_client.close()
         if self.ssh_client:
             self.ssh_client.close()
+
+        # Cleanup provider resources (e.g., jump client)
+        if hasattr(self.ssh_client_provider, "cleanup"):
+            self.ssh_client_provider.cleanup()
 
     def _reconnect(self) -> None:
         self._disconnect()
