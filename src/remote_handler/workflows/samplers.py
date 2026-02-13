@@ -16,7 +16,13 @@ from ase import Atoms
 
 from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.core.tasks import SingleScriptTask
-from remote_handler.workflows.active_learning_base import Sampler
+from remote_handler.exceptions import (
+    DependencyError,
+    FileSystemError,
+    WorkflowError,
+)
+
+from .active_learning_base import Sampler
 
 logger = logging.getLogger(__name__)
 
@@ -253,7 +259,10 @@ class NSTrajectorySampler(Sampler):
         self.stub = stub
 
         if self.resample_size and self.resample_size > self.sample_size:
-            raise ValueError("resample_size must be <= sample_size")
+            raise WorkflowError(
+                f"Invalid resample configuration: resample_size ({self.resample_size}) "
+                f"must be <= sample_size ({self.sample_size})"
+            )
 
     def update(
         self, calcdir: os.PathLike, model_file: os.PathLike, **kwargs
@@ -279,14 +288,18 @@ class NSTrajectorySampler(Sampler):
                 from jaxnest import input_parser
                 from jaxnest.input_parser import update_default_args
             except ImportError:
-                raise ImportError(
-                    "NSTrajectorySampler requires 'jaxnest' package. "
-                    "Install it or use stub=True for testing."
+                raise DependencyError(
+                    "jaxnest",
+                    "NSTrajectorySampler requires the 'jaxnest' package. "
+                    "Install it with: pip install jaxnest\n"
+                    "Or use stub=True for testing.",
                 )
 
             # Verify ns_exe exists on remote
             if not self.remote_fs.exists(self.ns_exe):
-                raise Exception("Provided ns_exe does not exist on remote_fs!")
+                raise FileSystemError(
+                    f"Nested sampling executable not found on remote system: {self.ns_exe}"
+                )
 
             from remote_handler.core.cluster_handler import ClusterConfig
 
@@ -432,8 +445,9 @@ class NSTrajectorySampler(Sampler):
 
             ns_output_data = self.results_dir / "output_data"
             if not os.path.exists(ns_output_data):
-                raise Exception(
-                    "NS did not run successfully, couldn't find output_data dir!"
+                raise WorkflowError(
+                    f"Nested sampling did not complete successfully\n"
+                    f"Missing output directory: {ns_output_data}"
                 )
 
             # Load trajectories from NS runs
@@ -443,13 +457,17 @@ class NSTrajectorySampler(Sampler):
 
             n_runs = len(tfiles)
             if n_runs == 0:
-                raise Exception(
-                    "Could not successfully collect trajectory files!"
+                raise WorkflowError(
+                    f"Failed to collect trajectory files from nested sampling run\n"
+                    f"Results directory: {self.results_dir}"
                 )
 
             n_samples = len(ase.io.read(tfiles[0], index=":"))
             if n_samples == 0:
-                raise Exception("Trajectories are empty, check NS run!")
+                raise WorkflowError(
+                    f"Nested sampling trajectories are empty\n"
+                    f"Check NS run in: {self.results_dir}"
+                )
 
             # Calculate sampling interval
             sample_size_per_run = self.sample_size // n_runs

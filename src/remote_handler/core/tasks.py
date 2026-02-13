@@ -20,9 +20,10 @@ from remote_handler.core.file_handler import (
     FileSystemHandlerBase,
     LocalFileSystem,
     RemoteFileSystem,
-    tag_path,
 )
+from remote_handler.core.file_utils import tag_path
 from remote_handler.core.utils import SimpleLogger
+from remote_handler.exceptions import FileSystemError, TaskError
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +92,9 @@ class RemoteTask(ABC):
 
             # Check if the parent directory exists on the remote system
             if not self.remote_fs.exists(parent):
-                raise Exception(
-                    f"The parent of {savepath=} must already exist on the remote system!"
+                raise FileSystemError(
+                    f"Parent directory must exist on remote system: {parent}\n"
+                    f"Savepath: {savepath}"
                 )
 
             if not self.remote_fs.exists(savepath):
@@ -126,9 +128,9 @@ class RemoteTask(ABC):
 
             else:
                 if collect_only:
-                    raise Exception(
-                        "Can't collect if savepath does not exist on remote "
-                        "machine"
+                    raise FileSystemError(
+                        f"Cannot collect results: savepath does not exist on remote machine\n"
+                        f"Path: {self.savepath}"
                     )
                 logger.info("Creating the savepath at requested location")
                 # Create the directory on the remote system
@@ -223,9 +225,7 @@ class RemoteTask(ABC):
             If your task is a VASP run, one could check whether the OUTCAR ends
             with the characteristic lines, etc.
         """
-        raise NotImplementedError(
-            f"finish_check() is not implemented for this task!"
-        )
+        pass
 
 
 class SingleScriptTask(RemoteTask):
@@ -735,7 +735,7 @@ class ArrayScriptTask(RemoteTask):
         # 1. Validate python script
         if self.python_script_file is not None:
             if not os.path.exists(self.python_script_file):
-                raise ValueError(
+                raise TaskError(
                     f"Python script not found: {self.python_script_file}"
                 )
             if not str(self.python_script_file).endswith(".py"):
@@ -744,7 +744,7 @@ class ArrayScriptTask(RemoteTask):
                     f"{self.python_script_file}"
                 )
             if not os.access(self.python_script_file, os.R_OK):
-                raise ValueError(
+                raise TaskError(
                     f"Python script is not readable: {self.python_script_file}"
                 )
 
@@ -754,12 +754,12 @@ class ArrayScriptTask(RemoteTask):
             for resource in self.shared_ressources:
                 # Check file exists
                 if not os.path.exists(resource):
-                    raise ValueError(f"Shared resource not found: {resource}")
+                    raise TaskError(f"Shared resource not found: {resource}")
 
                 # Check for duplicate filenames
                 filename = os.path.basename(resource)
                 if filename in shared_filenames:
-                    raise ValueError(
+                    raise TaskError(
                         f"Duplicate shared resource filename: {filename}"
                     )
                 shared_filenames.add(filename)
@@ -777,7 +777,7 @@ class ArrayScriptTask(RemoteTask):
             # Check that all sublists have same length
             lengths = [len(content) for content in self.individual_ressources]
             if len(set(lengths)) > 1:
-                raise ValueError(
+                raise TaskError(
                     f"Individual resources have inconsistent lengths: {lengths}"
                 )
 
@@ -794,11 +794,11 @@ class ArrayScriptTask(RemoteTask):
 
                     # Validate Writeable attributes
                     if not hasattr(item, "filename") or not item.filename:
-                        raise ValueError(
+                        raise TaskError(
                             f"Individual resource [{i}][{j}] missing filename"
                         )
                     if not hasattr(item, "content"):
-                        raise ValueError(
+                        raise TaskError(
                             f"Individual resource [{i}][{j}] missing content"
                         )
 
@@ -810,7 +810,7 @@ class ArrayScriptTask(RemoteTask):
                     for content_list in self.individual_ressources:
                         filename = content_list[task_idx].filename
                         if filename in filenames:
-                            raise ValueError(
+                            raise TaskError(
                                 f"Duplicate filename in task {task_idx}: {filename}"
                             )
                         filenames.add(filename)

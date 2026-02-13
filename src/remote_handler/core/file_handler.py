@@ -20,42 +20,20 @@ import ase.io
 import paramiko
 from ase import Atoms
 
+from remote_handler.core.file_utils import tag_path as tag_path_util
 from remote_handler.core.ssh_connection import (
     ConfigBasedSSHClientProvider,
     SSHClientProvider,
 )
+from remote_handler.exceptions import FileSystemError, RemoteConnectionError
 
 logger = logging.getLogger(__name__)
 
 CONFIG_DIR = Path(os.environ.get("REMOTE_HANDLER_CONFIG_DIR"))
 
 
-def tag_path(part0: str, part1: str, is_directory: bool = False):
-    """
-    Append a timestamp to a filename or directory name to create a unique path.
-    Parameters:
-        part0 (str): The directory path where the file or directory is located.
-        part1 (str): The filename or directory name to which the timestamp will be appended.
-        is_directory (bool, optional): If True, indicates that part1 is a directory name.
-            Defaults to False.
-        Returns:
-            str: The new path with the timestamp appended to the filename or directory name.
-    """
-    # Get the current date and time
-    date_str = datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
-
-    if not is_directory:
-        file_parts = part1.split(".")
-        # If there's an extension, insert the date before it
-        new_filename = (
-            "".join(file_parts[:-1]) + "_" + date_str + "." + file_parts[-1]
-        )
-    else:
-        # If it's a directory, just append the date
-        new_filename = part1 + "_" + date_str
-
-    save_file = Path(part0) / new_filename
-    return save_file
+# Standalone tag_path function moved to file_utils.py to avoid duplication.
+# The FileSystemHandlerBase class below has an instance method tag_path() which is separate.
 
 
 class FileSystemHandlerBase(ABC):
@@ -220,7 +198,7 @@ class FileSystemHandlerBase(ABC):
         )
         # Append a timestamp to ensure uniqueness
         working_dir, filename = os.path.split(savepath)
-        savetag = tag_path(working_dir, filename, is_directory=True)
+        savetag = tag_path_util(working_dir, filename, is_directory=True)
         return Path(str(savetag) + random_string)
 
     def secure_path(
@@ -243,7 +221,7 @@ class FileSystemHandlerBase(ABC):
         parentpath, childname = os.path.split(path)
         # If the path already exists, append a timestamp to make it unique
         if self.exists(path):
-            path = tag_path(parentpath, childname, is_directory)
+            path = tag_path_util(parentpath, childname, is_directory)
 
         return path
 
@@ -470,7 +448,9 @@ class RemoteFileSystem(FileSystemHandlerBase):
         else:
             self.remote_tempdir = Path(remote_temp_path)
             if not self.exists(self.remote_tempdir):
-                raise Exception("`remote_temp_path` must already exist!")
+                raise FileSystemError(
+                    f"Remote temp path does not exist: {remote_temp_path}"
+                )
 
         # local_tempdir is only required to temporarily create extxyz files
         # for reading and writing ase objects and succesively move them via
@@ -479,7 +459,9 @@ class RemoteFileSystem(FileSystemHandlerBase):
             local_temp_path = Path("/tmp")
         else:
             if not os.path.exists(local_temp_path):
-                raise Exception("`local_temp_path` must already exist!")
+                raise FileSystemError(
+                    f"Local temp path does not exist: {local_temp_path}"
+                )
 
         self.local_tempdir = self.tag_path(Path(local_temp_path) / "ase_temp")
         os.mkdir(self.local_tempdir)
@@ -587,7 +569,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
 
         # Check if local_dir is a directory
         if not local_dir.is_dir():
-            raise ValueError(f"Local path '{local_dir}' is not a directory.")
+            raise FileSystemError(f"Path is not a directory: {local_dir}")
 
         # Create remote directory if it doesn't exist
         if not self.exists(remote_dir):
@@ -745,4 +727,6 @@ class RemoteFileSystem(FileSystemHandlerBase):
         try:
             self.sftp_client.remove(path)
         except IOError as e:
-            raise Exception(f"Failed to remove remote file: {path}") from e
+            raise FileSystemError(
+                f"Failed to remove remote file: {path}"
+            ) from e

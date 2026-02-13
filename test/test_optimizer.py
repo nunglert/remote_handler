@@ -361,7 +361,7 @@ def test_run_optimizer_parse_logger(
     temp_dir = data_dir / "temp/run_optimizer/logger"
     if not os.path.exists(temp_dir):
         os.makedirs(temp_dir, exist_ok=True)
-    log_file = "opt.log"
+    log_file = temp_dir / "opt.log"
 
     arg_list = [
         "--files",
@@ -395,7 +395,7 @@ class ScratchDir:
                     shutil.rmtree(path)
         os.makedirs(self.local_dir, exist_ok=False)
 
-        self.logfile = "opt.log"
+        self.logfile = self.temp_dir / "opt.log"
         if os.path.exists(self.logfile):
             os.remove(self.logfile)
 

@@ -9,6 +9,7 @@ import numpy as np
 from jinja2 import Environment, FileSystemLoader
 
 from remote_handler import DEFAULT_TEMPLATE_DIR
+from remote_handler.exceptions import TaskError
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,11 @@ def submit_job(script_path, output_path, ssh_command=None, cwd=None) -> str:
     if match is not None:
         return match.groups()[0]
     else:
-        raise Exception(result.stderr)
+        raise TaskError(
+            f"SLURM job submission failed\n"
+            f"Command: {submit_cmd}\n"
+            f"Error: {result.stderr}"
+        )
 
 
 def submit_job_array(

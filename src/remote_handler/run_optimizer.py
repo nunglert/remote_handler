@@ -9,7 +9,7 @@ from multiprocessing import process
 from pathlib import Path
 
 from remote_handler import optimizer
-from remote_handler.core import file_handler, utils
+from remote_handler.core import file_handler, file_utils, utils
 from remote_handler.core.cluster_handler import ClusterConfig
 
 # from jaxnest import file_utils
@@ -406,7 +406,7 @@ def process_args(args, parser):
                 homepath = Path(args.path).parent
             else:
                 homepath = Path(os.getcwd())
-            args.logfile = str(utils.secure_path(homepath / "opt.log"))
+            args.logfile = str(file_utils.secure_path(homepath / "opt.log"))
         logfile = args.logfile
 
     elif args.log_mode == "stdout":

@@ -18,6 +18,8 @@ from typing import Optional
 
 import paramiko
 
+from remote_handler.exceptions import RemoteConnectionError
+
 logger = logging.getLogger(__name__)
 
 
@@ -106,7 +108,10 @@ class SSHConfigParser:
         username = host_config.get("user")
 
         if hostname is None:
-            raise ValueError(f"No hostname found for alias: {remote_alias}")
+            raise RemoteConnectionError(
+                f"No hostname found for alias: {remote_alias}\n"
+                f"Check your ~/.ssh/config file"
+            )
 
         # Handle identity file with override logic
         if identityfile_override is None:
@@ -234,7 +239,9 @@ class ProxyJumpSSHConnection(SSHConnectionStrategy):
             ValueError: If proxyjump params are missing
         """
         if params.proxyjump is None:
-            raise ValueError("ProxyJump strategy requires proxyjump params")
+            raise RemoteConnectionError(
+                "ProxyJump strategy requires proxyjump params in connection parameters"
+            )
 
         jump_params = params.proxyjump
 

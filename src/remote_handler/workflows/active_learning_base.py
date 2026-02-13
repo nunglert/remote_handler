@@ -12,6 +12,8 @@ import ase.io
 import numpy as np
 from ase import Atoms
 
+from remote_handler.exceptions import WorkflowError
+
 logger = logging.getLogger(__name__)
 
 
@@ -281,14 +283,14 @@ class Schedule(ABC):
             try:
                 kwargs = self.get_kwargs(i)
             except Exception as e:
-                raise Exception(
+                raise WorkflowError(
                     "The parametrization of your Schedule seems to be "
                     f"incorrect. Failed due to {e}"
                 )
 
             # Check that the same parameters are returned at each iteration
             if kwargs.keys() != params.keys():
-                raise Exception(
+                raise WorkflowError(
                     "Schedule needs to return the same parameters for every "
                     "iteration!"
                 )
@@ -313,7 +315,7 @@ class Schedule(ABC):
             try:
                 kwargs_consumer(self.get_kwargs(i))
             except Exception as e:
-                raise Exception(
+                raise WorkflowError(
                     f"The kwargs your schedule returns for iteration {i} "
                     f"break your scheduler target. It throws the following "
                     f"error:\n{e}"
@@ -656,7 +658,7 @@ class ActiveLearningHandler(ABC):
             self.num_iterations - len(self.progress) + 1
         )
         if self.remaining_iterations <= 0:
-            raise Exception("No iterations left, increase num_iterations!")
+            raise WorkflowError("No iterations left, increase num_iterations!")
 
         self.sampler_output_dir = self.calchome / "sampler_output"
         self.evaluator_output_dir = self.calchome / "evaluator_output"
@@ -676,7 +678,7 @@ class ActiveLearningHandler(ABC):
         elif cycle_exit_point == "training":
             self.last_cycle_steps = [1, 1, 1]
         else:
-            raise Exception(
+            raise WorkflowError(
                 "Unknown cycle_exit_point. "
                 "Use either sampler, evaluation or training"
             )

@@ -18,6 +18,7 @@ from jinja2 import Environment, FileSystemLoader
 
 from remote_handler.core import file_handler, slurm_utils
 from remote_handler.core.file_handler import FileSystemHandlerBase
+from remote_handler.exceptions import ConfigurationError, FileSystemError
 
 logger = logging.getLogger(__name__)
 
@@ -78,19 +79,21 @@ class ClusterConfig:
         """
         if os.path.isabs(config_file):
             if not os.path.exists(config_file):
-                raise Exception(f"{config_file} does not exist!")
+                raise ConfigurationError(
+                    f"Configuration file does not exist: {config_file}"
+                )
             config_path = config_file
         else:
             if CONFIG_DIR is None or CONFIG_DIR == Path(""):
-                raise Exception(
-                    "If config_file is not an absolute path, "
-                    "set REMOTE_HANDLER_CONFIG_DIR environment variable, "
-                    "where config files for different clusters are stored."
+                raise ConfigurationError(
+                    "REMOTE_HANDLER_CONFIG_DIR environment variable must be set when using "
+                    "relative config file paths.\n"
+                    f"Attempted to load: {config_file}"
                 )
             config_path = CONFIG_DIR / config_file
             if not os.path.exists(config_path):
-                raise Exception(
-                    f"{config_file} does not exist in your "
+                raise ConfigurationError(
+                    f"Configuration file '{config_file}' not found in "
                     f"REMOTE_HANDLER_CONFIG_DIR={CONFIG_DIR}"
                 )
 
@@ -212,9 +215,9 @@ class SlurmHandlerBase(ABC):
 
     def _validate_savepath(self):
         if not self.remote_fs.exists(self.savepath):
-            raise Exception(
-                f"Your provided {self.savepath=} does not exist on the "
-                f"{self.cluster_config.remote_machine} filesystem!"
+            raise FileSystemError(
+                f"Save path does not exist on remote filesystem: {self.savepath}\n"
+                f"Remote machine: {self.cluster_config.remote_machine}"
             )
 
     def _validate_conda(self):
@@ -225,22 +228,22 @@ class SlurmHandlerBase(ABC):
             miniconda_home = Path(self.conda_source).parents[1]
             self.conda_source = Path(self.conda_source)
         else:
-            raise Exception(
-                "I can not recognize your supplied conda_source "
-                f"{self.conda_source}. Try sth like "
-                "conda_source=/home/user/miniconda3/. Note that we only "
-                "support miniconda3 at the moment."
+            raise ConfigurationError(
+                f"Invalid conda_source format: {self.conda_source}\n"
+                "Expected format: /home/user/miniconda3/ or /path/to/bin/activate\n"
+                "Note: Only miniconda3 is currently supported"
             )
 
         if not self.remote_fs.exists(self.conda_source):
-            raise Exception(
-                f"{self.conda_source=} does not exist on the filesystem "
-                f"{self.cluster_config.remote_machine}!"
+            raise FileSystemError(
+                f"Conda activation script not found: {self.conda_source}\n"
+                f"Remote machine: {self.cluster_config.remote_machine}"
             )
         if not self.remote_fs.exists(miniconda_home / "envs" / self.conda_env):
-            raise Exception(
-                f"The conda environment {self.conda_env} does not exist on the"
-                f" {self.cluster_config.remote_machine} filesystem!"
+            raise ConfigurationError(
+                f"Conda environment '{self.conda_env}' not found on "
+                f"{self.cluster_config.remote_machine}\n"
+                f"Expected path: {miniconda_home / 'envs' / self.conda_env}"
             )
 
     @abstractmethod
@@ -299,7 +302,9 @@ class SlurmJobHandler(SlurmHandlerBase):
         print(f"Using remote savepath: {self.calcdir}")
         # Check if in the remote machine the parent dir of 'savepath' exists
         if not remote_fs.exists(self.calcdir.parent):
-            raise Exception("Parent dir of savepath needs to exist!")
+            raise FileSystemError(
+                f"Parent directory of savepath does not exist: {self.calcdir.parent}"
+            )
 
         # Set the path for the slurm script
         self.slurm_script_path = self.calcdir / self.jobfile_name
@@ -424,7 +429,9 @@ class SlurmArrayHandler(SlurmHandlerBase):
         self.rootpath = Path(savepath)
         # Check if in the remote machine the parent dir of 'savepath' exists
         if not remote_fs.exists(self.rootpath.parent):
-            raise Exception("Parent dir of savepath needs to exist!")
+            raise FileSystemError(
+                f"Parent directory of savepath does not exist: {self.rootpath.parent}"
+            )
         # Set the path for the slurm script
         self.slurm_script_path = self.rootpath / self.jobfile_name
         # Create output and calcdir directories

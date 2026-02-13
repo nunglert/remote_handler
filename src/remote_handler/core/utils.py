@@ -29,63 +29,16 @@ def grep(path: str, expression: str, with_path: bool = True):
     return natsorted(results)
 
 
-def tag_path(part0, part1, is_directory=False):
-    """Provided a path to a file, this modifies the path by inserting a
-    timestamp in front of the file format.
-    Args:
-        part0: path to the directory
-        part1: filename (with extension)
-        is_directory: whether the path is a directory
-    Returns:
-        new path with timestamp inserted
-    """
-    date_str = datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
-    if not is_directory:
-        file_parts = part1.split(".")
-        new_filename = (
-            "".join(file_parts[:-1]) + "_" + date_str + "." + file_parts[-1]
-        )
-    else:
-        new_filename = part1 + "_" + date_str
-
-    save_file = Path(part0) / new_filename
-    return save_file
-
-
-def secure_path(save_file, is_directory=False) -> str: 
-    """Provided a path to a file, this checks whether such a file already
-    exists. If not, it leaves the path unchanged. If there is already such a
-    file in the specified path, this routine modifies the path by inserting a
-    timestamp in front of the file format.
-
-    Note: atm this works only for files with a single dot (E.g.: prefix.outfix
-        works, but for pre.fix.outfix the tagged path will only consider the
-        last dot)
-
-    Examples:
-        "/home/gerrit/kek.lel" -> "/home/gerrit/kek_2024-06-11_15_11_26.lel"
-
-    Args:
-        save_file: path to the file to be checked
-        is_directory: whether the path is a directory
-    Returns:
-        new path with timestamp inserted if the file existed already
-    """
-    if is_directory:  # delete trailing slash
-        save_file = str(Path(save_file))
-
-    working_dir, filename = os.path.split(save_file)
-    if os.path.exists(save_file):
-        save_file = tag_path(working_dir, filename, is_directory)
-
-    return save_file
+# tag_path and secure_path have been moved to file_utils.py to avoid duplication
+# Import them from there if needed:
+# from remote_handler.core.file_utils import tag_path, secure_path
 
 
 class SimpleLogger:
     """A simple logger that can print messages to the console or write them to a file.
     If a log file is specified, messages will be appended to that file.
     Otherwise, messages will be printed to the console.
-    
+
     Args:
         log_file: Optional path to a log file. If None, messages are printed to the
             console.
@@ -93,6 +46,7 @@ class SimpleLogger:
         logger = SimpleLogger(log_file="my_log.txt")
         logger.print("This is a log message.")
     """
+
     def __init__(self, log_file=None):
         self.log_file = log_file
 

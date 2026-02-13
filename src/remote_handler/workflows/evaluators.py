@@ -15,7 +15,9 @@ from ase import Atoms
 
 from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.core.utils import grep
-from remote_handler.workflows.active_learning_base import GroundTruthEvaluator
+from remote_handler.exceptions import WorkflowError
+
+from .active_learning_base import GroundTruthEvaluator
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +193,7 @@ class VASPEvaluator(GroundTruthEvaluator):
             self.vasp_handler.run()
 
             if not self.vasp_handler.finish_check(self.required_fraction):
-                raise Exception(
+                raise WorkflowError(
                     f"Less than {self.required_fraction * 100}% ran successfully. "
                     "Something probably went wrong. Otherwise, lower the "
                     "required_fraction parameter."

@@ -22,7 +22,6 @@ from remote_handler.workflows import (
     NSTrajectorySampler,
     VASPEvaluator,
 )
-from remote_handler.workflows.active_learning_base import ActiveLearningHandler
 
 
 @pytest.fixture

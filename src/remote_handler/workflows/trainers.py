@@ -19,7 +19,13 @@ from remote_handler.core.tasks import (
     SingleScriptTask,
 )
 from remote_handler.core.utils import grep
-from remote_handler.workflows.active_learning_base import ModelTrainer
+from remote_handler.exceptions import (
+    ConfigurationError,
+    DependencyError,
+    WorkflowError,
+)
+
+from .active_learning_base import ModelTrainer
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +220,10 @@ class MaceModelTrainer(ModelTrainer):
                     logger.warning(f"Model not found at {model_path}")
 
             if not model_paths:
-                raise Exception("No models were successfully trained!")
+                raise WorkflowError(
+                    "No models were successfully trained\n"
+                    f"Check training logs in: {self.results_dir}"
+                )
 
         logger.info(f"Collected {len(model_paths)} trained models")
         return model_paths
@@ -307,9 +316,11 @@ class MACETrainer(ModelTrainer):
                 )
                 from jaxnest.input_parser import update_default_args
             except ImportError:
-                raise ImportError(
-                    "MACETrainer requires 'jaxnest' package. "
-                    "Install it or use stub=True for testing."
+                raise DependencyError(
+                    "jaxnest",
+                    "MACETrainer requires the 'jaxnest' package. "
+                    "Install it with: pip install jaxnest\n"
+                    "Or use stub=True for testing.",
                 )
 
             from math import ceil
@@ -319,7 +330,10 @@ class MACETrainer(ModelTrainer):
 
             # Validate config file name
             if not os.path.split(self.config_file)[1] == "config.gin":
-                raise Exception("config_file needs to be named 'config.gin'!")
+                raise ConfigurationError(
+                    f"Invalid config filename: {os.path.basename(self.config_file)}\n"
+                    "MACE config file must be named 'config.gin'"
+                )
 
             # Parse gin config and merge with training_kwargs
             gin_kwargs = mace_train_utils.parse_gin_to_dict(self.config_file)
@@ -459,7 +473,7 @@ optimizer.steps_per_interval = 128
             self.train_task.run()
 
             if not self.train_task.finish_check():
-                raise Exception("Training did not finish successfully!")
+                raise WorkflowError("Training did not complete successfully")
 
             # Find trained model
             logs_dir = (
@@ -469,7 +483,7 @@ optimizer.steps_per_interval = 128
             model_files = grep(str(logs_dir), r".*\.pkl")
 
             if not model_files:
-                raise Exception("No model file found after training!")
+                raise WorkflowError("Model file not found after training")
 
             model_file = model_files[0]
 
@@ -695,7 +709,7 @@ class NeuralilILTrainer(ModelTrainer):
             self.train_task.run()
 
             if not self.train_task.finish_check():
-                raise Exception("Training did not finish successfully!")
+                raise WorkflowError("Training did not complete successfully")
 
             # Get model file path from training kwargs
             model_file = (
@@ -706,7 +720,7 @@ class NeuralilILTrainer(ModelTrainer):
             )
 
             if not os.path.exists(model_file):
-                raise Exception(f"Model file not found at {model_file}!")
+                raise WorkflowError(f"Model file not found: {model_file}")
 
         logger.info(f"Trained model available at: {model_file}")
         return model_file
