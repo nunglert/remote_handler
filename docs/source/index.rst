@@ -21,29 +21,33 @@ Features
 - **Array Jobs**: Efficient batch processing using SLURM array jobs
 - **File Management**: Automatic handling of input/output file transfers
 - **Workflows**: Support for active learning and optimization workflows
-- **Type Safety**: Full type hints for better IDE support
 
 Quick Example
 -------------
 
 .. code-block:: python
 
-   from remote_handler import RemoteOptimizationHandler
-   from remote_handler.core import ClusterConfig
+   from remote_handler.dft_runner import VASPHandler
+   from remote_handler.core import ClusterConfig, RemoteFileSystem
 
    # Configure your cluster
    config = ClusterConfig.from_file("my_cluster.json")
+   remote_fs = RemoteFileSystem(remote_alias="datalab")
 
-   # Set up optimization handler
-   handler = RemoteOptimizationHandler(
-       traj_files=["trajectory.extxyz"],
+   # Set up VASP calculations
+   vasp_handler = VASPHandler(
+       traj_files=["structures.extxyz"],
        cluster_config=config,
-       shard_size=100,
-       num_parallel=10,
+       remote_fs=remote_fs,
+       incar_kwargs={
+           "xc": "PBE",
+           "encut": 400,
+           "prec": "Accurate",
+       },
    )
 
-   # Run the optimization workflow
-   handler.run()
+   # Run DFT calculations
+   vasp_handler.run()
 
 Indices and tables
 ==================

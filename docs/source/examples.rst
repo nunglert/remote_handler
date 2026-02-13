@@ -3,6 +3,7 @@ Examples
 
 This section provides practical examples for common use cases.
 
+
 Example 1: Batch Optimization
 ------------------------------
 

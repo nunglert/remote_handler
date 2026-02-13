@@ -3,15 +3,19 @@ API Reference
 
 This section contains the complete API reference for remote_handler.
 
-.. toctree::
-   :maxdepth: 2
-
-   core
-   handlers
-   workflows
-
 Core Modules
 ------------
+
+Core modules provide the foundational functionality for cluster interaction,
+file management, and task execution.
+
+Configuration Management
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: remote_handler.config
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
 Cluster Configuration
 ~~~~~~~~~~~~~~~~~~~~~

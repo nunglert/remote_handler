@@ -33,7 +33,6 @@ dynamic = ["version"]
 [project.optional-dependencies]
 dev = [
     "pytest==7.4.0",
-    "pytest-lazy-fixture",
     "pre-commit"
 ]
 docs = [

@@ -23,28 +23,19 @@ def remote_target_dir(remote_fs, remote_cluster_config):
     )
 
 
-@pytest.fixture(params=["remote", "local"])
-def fs_and_target(request, remote_fs, remote_target_dir, local_fs, tmp_path):
-    """Parametrized fixture providing filesystem and target directory pairs."""
-    if request.param == "remote":
-        return remote_fs, remote_target_dir
-    else:
-        return local_fs, tmp_path
-
-
 class TestFileSystem:
     """Test filesystem operations for both local and remote filesystems."""
 
-    def test_put(self, fs_and_target, local_dir):
+    def test_put(self, fs_with_target, local_dir):
         """Test uploading a single file."""
-        fs, target_dir = fs_and_target
+        fs, target_dir = fs_with_target
         filename = "single_file.txt"
         fs.put(local_dir / filename, target_dir / filename)
         assert fs.exists(target_dir / filename)
 
-    def test_get(self, fs_and_target, local_dir):
+    def test_get(self, fs_with_target, local_dir):
         """Test downloading a single file."""
-        fs, target_dir = fs_and_target
+        fs, target_dir = fs_with_target
         filename = "single_file.txt"
         filename2 = "single_file2.txt"
 
@@ -56,16 +47,16 @@ class TestFileSystem:
 
         assert os.path.exists(local_dir / filename2)
 
-    def test_put_dir(self, fs_and_target, local_dir):
+    def test_put_dir(self, fs_with_target, local_dir):
         """Test uploading a directory."""
-        fs, target_dir = fs_and_target
+        fs, target_dir = fs_with_target
         dirname = "directory_with_contents"
         fs.put_dir(local_dir / dirname, target_dir / dirname)
         assert fs.exists(target_dir / dirname)
 
-    def test_get_dir(self, fs_and_target, local_dir):
+    def test_get_dir(self, fs_with_target, local_dir):
         """Test downloading a directory."""
-        fs, target_dir = fs_and_target
+        fs, target_dir = fs_with_target
         dirname = "directory_with_contents"
         dirname2 = "directory_with_contents2"
 
@@ -77,9 +68,9 @@ class TestFileSystem:
 
         assert os.path.exists(local_dir / dirname2)
 
-    def test_create_tempdir(self, fs_and_target):
+    def test_create_tempdir(self, fs_with_target):
         """Test creating a temporary directory."""
-        fs, _ = fs_and_target
+        fs, _ = fs_with_target
         temppath = fs.create_tempdir()
         assert fs.exists(temppath)
 
