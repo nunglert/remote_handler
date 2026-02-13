@@ -5,7 +5,6 @@ import time
 from pathlib import Path
 
 import pytest
-from pytest_lazyfixture import lazy_fixture
 
 from remote_handler.core import file_handler, tasks
 

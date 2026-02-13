@@ -29,12 +29,6 @@ from remote_handler.exceptions import FileSystemError, RemoteConnectionError
 
 logger = logging.getLogger(__name__)
 
-CONFIG_DIR = Path(os.environ.get("REMOTE_HANDLER_CONFIG_DIR"))
-
-
-# Standalone tag_path function moved to file_utils.py to avoid duplication.
-# The FileSystemHandlerBase class below has an instance method tag_path() which is separate.
-
 
 class FileSystemHandlerBase(ABC):
     """

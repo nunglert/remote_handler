@@ -13,7 +13,6 @@ import numpy as np
 import pytest
 from ase import Atoms
 from ase.calculators.calculator import compare_atoms
-from pytest_lazyfixture import lazy_fixture
 
 from remote_handler import optimizer, run_optimizer
 from remote_handler.atoms_handler import front_tag
