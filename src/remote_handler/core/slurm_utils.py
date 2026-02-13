@@ -8,27 +8,10 @@ from typing import Optional
 import numpy as np
 from jinja2 import Environment, FileSystemLoader
 
-from remote_handler import DEFAULT_TEMPLATE_DIR
+from remote_handler.config import get_config
 from remote_handler.exceptions import TaskError
 
 logger = logging.getLogger(__name__)
-
-# Build template search path
-# Custom templates from environment variable take precedence over defaults
-TEMPLATE_DIRS = []
-custom_template_dir = os.environ.get("REMOTE_HANDLER_SLURM_TEMPLATES")
-if custom_template_dir:
-    custom_path = Path(custom_template_dir)
-    if custom_path.exists() and custom_path.is_dir():
-        TEMPLATE_DIRS.append(custom_path)
-        logger.info(f"Using custom SLURM templates from: {custom_path}")
-    else:
-        logger.warning(
-            f"REMOTE_HANDLER_SLURM_TEMPLATES is set to '{custom_template_dir}' "
-            "but path does not exist or is not a directory. Ignoring."
-        )
-# Always include the default template directory as fallback
-TEMPLATE_DIRS.append(DEFAULT_TEMPLATE_DIR)
 
 
 def submit_job(script_path, output_path, ssh_command=None, cwd=None) -> str:
@@ -243,7 +226,9 @@ def get_array_slurm_str(
         map_indices = np.arange(num_array_tasks)
 
     # Create a Jinja2 environment with the custom loader to have logging
-    env = Environment(loader=LoggingFileSystemLoader(TEMPLATE_DIRS))
+    config = get_config()
+    template_dirs = config.get_template_dirs()
+    env = Environment(loader=LoggingFileSystemLoader(template_dirs))
     template = env.get_template(header_template)
     # Render the template with the provided parameters
     slurm_str = template.render(
@@ -299,7 +284,9 @@ def get_slurm_str(
     """
 
     # Create a Jinja2 environment with the custom loader to have logging
-    env = Environment(loader=LoggingFileSystemLoader(TEMPLATE_DIRS))
+    config = get_config()
+    template_dirs = config.get_template_dirs()
+    env = Environment(loader=LoggingFileSystemLoader(template_dirs))
 
     # Load the specified header template
     template = env.get_template(header_template)

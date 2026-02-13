@@ -16,14 +16,12 @@ from typing import Optional
 import numpy as np
 from jinja2 import Environment, FileSystemLoader
 
+from remote_handler.config import get_config
 from remote_handler.core import file_handler, slurm_utils
 from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.exceptions import ConfigurationError, FileSystemError
 
 logger = logging.getLogger(__name__)
-
-# Load directory where config files are stored from environment variable
-CONFIG_DIR = Path(os.environ.get("REMOTE_HANDLER_CONFIG_DIR", ""))
 
 
 @dataclass
@@ -68,8 +66,8 @@ class ClusterConfig:
             ClusterConfig instance with loaded configuration
 
         Raises:
-            Exception: If the config file doesn't exist or CONFIG_DIR is not set
-                      for relative paths
+            ConfigurationError: If the config file doesn't exist or config directory not set
+                               for relative paths
 
         Example:
             >>> # Using absolute path
@@ -78,24 +76,15 @@ class ClusterConfig:
             >>> config = ClusterConfig.from_file("cluster.json")
         """
         if os.path.isabs(config_file):
-            if not os.path.exists(config_file):
+            config_path = Path(config_file)
+            if not config_path.exists():
                 raise ConfigurationError(
                     f"Configuration file does not exist: {config_file}"
                 )
-            config_path = config_file
         else:
-            if CONFIG_DIR is None or CONFIG_DIR == Path(""):
-                raise ConfigurationError(
-                    "REMOTE_HANDLER_CONFIG_DIR environment variable must be set when using "
-                    "relative config file paths.\n"
-                    f"Attempted to load: {config_file}"
-                )
-            config_path = CONFIG_DIR / config_file
-            if not os.path.exists(config_path):
-                raise ConfigurationError(
-                    f"Configuration file '{config_file}' not found in "
-                    f"REMOTE_HANDLER_CONFIG_DIR={CONFIG_DIR}"
-                )
+            # Use centralized configuration
+            config = get_config()
+            config_path = config.get_config_file(config_file)
 
         logger.info(f"Reading ClusterConfig from {config_path}")
         with open(config_path, "r") as f:

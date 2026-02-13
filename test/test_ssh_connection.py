@@ -22,6 +22,7 @@ from remote_handler.core.ssh_connection import (
     SSHConnectionParams,
     SSHConnectionStrategy,
 )
+from remote_handler.exceptions import RemoteConnectionError
 
 
 class TestSSHConnectionParams:
@@ -230,7 +231,9 @@ class TestConnectionStrategies:
             hostname="target.example.com", username="targetuser"
         )
 
-        with pytest.raises(ValueError, match="ProxyJump strategy requires"):
+        with pytest.raises(
+            RemoteConnectionError, match="ProxyJump strategy requires"
+        ):
             strategy.connect(params)
 
     def test_proxyjump_cleanup(self):

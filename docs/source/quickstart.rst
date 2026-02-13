@@ -6,6 +6,8 @@ This guide will get you started with using remote_handler for your computational
 Basic Workflow
 --------------
 
+# NU: I like the basic workflow. But I would rather like it to be shown for a very simple Script example and not the quite involve optimiaztaon handler
+
 1. **Configure your cluster**
 
    Create a configuration file or use ``ClusterConfig``:
@@ -61,6 +63,9 @@ Basic Workflow
 
 Advanced Usage
 --------------
+
+#NU: Please introduce the VASPHandler as first example, then also MACE training and LAMMPS sampling. As last most advanced example show the construction of a ActiveLearningHandler
+
 
 Active Learning Workflow
 ~~~~~~~~~~~~~~~~~~~~~~~~
