@@ -11,7 +11,7 @@ from remote_handler.scripts.input_models import DftSinglepointInput
 # Load and validate input configuration
 # ----------------------------------------------------------------------
 calcpath = Path(sys.argv[1])
-INPUTFILE = calcpath / "input_opt.json"
+INPUTFILE = calcpath / "input_dft.json"
 input_config = DftSinglepointInput.from_file(INPUTFILE)
 input_config.validate()
 # ----------------------------------------------------------------------

@@ -1,14 +1,0 @@
-/home/nico.unglert/miniconda3/envs/clinamen/lib/python3.12/site-packages/e3nn/o3/_wigner.py:10: UserWarning: Environment variable TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD detected, since the`weights_only` argument was not explicitly passed to `torch.load`, forcing weights_only=False.
-  _Jd, _W3j_flat, _W3j_indices = torch.load(os.path.join(os.path.dirname(__file__), 'constants.pt'))
-/home/nico.unglert/code/mace-freeze/mace/calculators/mace.py:197: UserWarning: Environment variable TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD detected, since the`weights_only` argument was not explicitly passed to `torch.load`, forcing weights_only=False.
-  torch.load(f=model_path, map_location=device)
-  0%|          | 0/5 [00:00<?, ?it/s, loss=0, std=0, step=0]
-  0%|          | 0/5 [00:00<?, ?it/s][A  0%|          | 0/5 [00:05<?, ?it/s, loss=-304, step=0.117, std=2.15] 20%|██        | 1/5 [00:05<00:23,  5.94s/it, loss=-304, step=0.117, std=2.15]
- 20%|██        | 1/5 [00:05<00:23,  5.94s/it][A 20%|██        | 1/5 [00:07<00:23,  5.94s/it, loss=-301, step=0.114, std=1.68] 40%|████      | 2/5 [00:07<00:09,  3.32s/it, loss=-301, step=0.114, std=1.68]
- 40%|████      | 2/5 [00:07<00:09,  3.32s/it][A 40%|████      | 2/5 [00:08<00:09,  3.32s/it, loss=-301, step=0.112, std=2.97] 60%|██████    | 3/5 [00:08<00:04,  2.22s/it, loss=-301, step=0.112, std=2.97]
- 60%|██████    | 3/5 [00:08<00:04,  2.22s/it][A 60%|██████    | 3/5 [00:09<00:04,  2.22s/it, loss=-301, step=0.11, std=3.25]  80%|████████  | 4/5 [00:09<00:01,  1.70s/it, loss=-301, step=0.11, std=3.25]
- 80%|████████  | 4/5 [00:09<00:01,  1.70s/it][A 80%|████████  | 4/5 [00:09<00:01,  1.70s/it, loss=-298, step=0.108, std=2.12]100%|██████████| 5/5 [00:09<00:00,  1.31s/it, loss=-298, step=0.108, std=2.12]
-100%|██████████| 5/5 [00:09<00:00,  1.31s/it][A100%|██████████| 5/5 [00:09<00:00,  1.97s/it]
-100%|██████████| 5/5 [00:09<00:00,  1.97s/it, loss=-298, step=0.108, std=2.12]
-/home/nico.unglert/code/mace-freeze/mace/calculators/mace.py:197: UserWarning: Environment variable TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD detected, since the`weights_only` argument was not explicitly passed to `torch.load`, forcing weights_only=False.
-  torch.load(f=model_path, map_location=device)
