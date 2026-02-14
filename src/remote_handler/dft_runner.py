@@ -105,7 +105,7 @@ class VASPHandler(RemoteAtomsHandler):
 
         self.logger = tasks.SimpleLogger(logfile)
         self.json_args = {
-            "STUB": stub,
+            # "STUB": stub,
             "INCAR_kwargs": incar_kwargs,
             "launch_command": f"{launcher} {n_processors} {vasp_binary}",
         }

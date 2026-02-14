@@ -31,7 +31,7 @@ print(atoms)
 
 VASP_calculator_args = {
     "command": input_config.launch_command,  # TODO: prun?
-    "txt": None,
+    "txt": "vasp.out",
 }
 
 VASP_config = {**VASP_calculator_args, **input_config.INCAR_kwargs}
@@ -44,3 +44,6 @@ atoms.calc = SinglePointCalculator(
 )
 
 ase.io.write(calcpath / ("dft_" + input_config.DATABASE), atoms)
+
+with open(calcpath / "is_finished.info", "w") as f:
+    f.write("I'm a finished DFT run")
