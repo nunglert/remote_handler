@@ -417,6 +417,13 @@ class CmaesSamplingInput:
     continue_evolution: bool = False
     generation_checkpoint: Optional[int] = None
     repository_path: Optional[str] = None
+    # Optional post-evolution optimization
+    do_optimization: bool = False
+    dof_mode: str = "full-dof"
+    surface_axis: int = 2
+    fix_range: Optional[list[float]] = None
+    bulk_terminate: bool = False
+    optimizer: str = "FIRE"
 
     @classmethod
     def from_file(cls, input_file: Path) -> "CmaesSamplingInput":
@@ -489,3 +496,90 @@ class CmaesSamplingInput:
 
         if self.continue_evolution and self.models is None:
             raise ScriptInputError("models must be provided (cannot be None)")
+
+
+@dataclass
+class CmaesOptimizeInput:
+    """Input configuration for cmaes_optimize.py script.
+
+    Attributes:
+        evolutions: List of dicts, each describing one evolution to optimize.
+            Required keys: 'label' (str), 'path' (str).
+            Optional keys: 'dof_mode' (str), 'choose_gen' (int),
+            'override_founder' (str), 'scaled_center' (list[float]),
+            'radius' (float).
+        models: List of MACE model file paths
+        surface_axis: Surface normal axis (0, 1, or 2)
+        fix_range: Scaled range of atoms to fix along surface normal
+        bulk_terminate: If True, remove overlayer from bottom layer
+        optimizer: Name of ASE optimizer class (e.g. 'FIRE', 'BFGS')
+        output_dir: Subdirectory name for optimized output files
+
+    Example:
+        >>> config = CmaesOptimizeInput.from_file(Path("input_optimize.json"))
+        >>> config.validate()
+    """
+
+    evolutions: list[dict]
+    models: list[str]
+    surface_axis: int = 2
+    fix_range: Optional[list[float]] = None
+    bulk_terminate: bool = False
+    optimizer: str = "FIRE"
+    output_dir: str = "optimized"
+
+    @classmethod
+    def from_file(cls, input_file: Path) -> "CmaesOptimizeInput":
+        """Load configuration from JSON file.
+
+        Args:
+            input_file: Path to JSON input file
+
+        Returns:
+            CmaesOptimizeInput instance
+
+        Raises:
+            ScriptInputError: If file doesn't exist, invalid JSON, or missing fields
+        """
+        input_file = Path(input_file).expanduser()
+
+        if not input_file.exists():
+            raise ScriptInputError(f"Input file not found: {input_file}")
+
+        try:
+            with open(input_file) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ScriptInputError(
+                f"Invalid JSON in input file: {input_file}\n"
+                f"Error at line {e.lineno}, column {e.colno}: {e.msg}"
+            )
+
+        try:
+            return cls(**data)
+        except TypeError as e:
+            raise ScriptInputError(
+                f"Invalid fields in input file: {input_file}\n" f"Error: {e}"
+            )
+
+    def validate(self) -> None:
+        """Validate configuration parameters.
+
+        Raises:
+            ScriptInputError: If any parameter is invalid
+        """
+        if not self.evolutions:
+            raise ScriptInputError("evolutions cannot be empty")
+
+        if not self.models:
+            raise ScriptInputError("models cannot be empty")
+
+        for i, evo in enumerate(self.evolutions):
+            if "label" not in evo:
+                raise ScriptInputError(
+                    f"evolutions[{i}] missing required key 'label'"
+                )
+            if "path" not in evo:
+                raise ScriptInputError(
+                    f"evolutions[{i}] missing required key 'path'"
+                )

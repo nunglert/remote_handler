@@ -80,6 +80,23 @@ class SSHConfigParser:
         """
         self.config_file = os.path.expanduser(config_file)
 
+    def get_available_hosts(self) -> list[str]:
+        """
+        List all host aliases defined in the SSH config file.
+
+        Returns:
+            Sorted list of host alias names (excluding wildcard patterns).
+        """
+        try:
+            ssh_config = paramiko.SSHConfig()
+            with open(self.config_file) as f:
+                ssh_config.parse(f)
+            return sorted(
+                h for h in ssh_config.get_hostnames() if "*" not in h
+            )
+        except FileNotFoundError:
+            return []
+
     def parse_host_config(
         self, remote_alias: str, identityfile_override: Optional[str] = None
     ) -> SSHConnectionParams:
@@ -108,9 +125,11 @@ class SSHConfigParser:
         username = host_config.get("user")
 
         if hostname is None:
+            available = self.get_available_hosts()
+            hosts_str = ", ".join(available) if available else "(none found)"
             raise RemoteConnectionError(
-                f"No hostname found for alias: {remote_alias}\n"
-                f"Check your ~/.ssh/config file"
+                f"No hostname found for alias '{remote_alias}' in {self.config_file}\n"
+                f"Available hosts: {hosts_str}"
             )
 
         # Handle identity file with override logic

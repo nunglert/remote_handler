@@ -1,0 +1,22 @@
+{
+  "STUB": false,
+  "INCAR_kwargs": {
+    "xc": "pbe",
+    "encut": 400,
+    "ediff": 1e-05,
+    "kpts": [
+      3,
+      3,
+      1
+    ],
+    "gamma": true,
+    "ismear": 0,
+    "sigma": 0.05,
+    "lwave": false,
+    "lcharg": false,
+    "lreal": false,
+    "ncore": 8
+  },
+  "launch_command": "mpirun -n 8 vasp_std",
+  "DATABASE": "dft.extxyz"
+}

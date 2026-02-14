@@ -6,6 +6,7 @@ import os
 import posixpath
 import random
 import shutil
+import socket
 import string
 import tempfile
 import time
@@ -431,9 +432,22 @@ class RemoteFileSystem(FileSystemHandlerBase):
 
         try:
             self._connect()
+        except socket.gaierror:
+            available = []
+            if hasattr(self.ssh_client_provider, "config_parser"):
+                available = (
+                    self.ssh_client_provider.config_parser.get_available_hosts()
+                )
+            hosts_str = ", ".join(available) if available else "(none found)"
+            raise RemoteConnectionError(
+                f"Could not resolve hostname for alias '{remote_alias}'. "
+                f"The host may be unreachable or misspelled.\n"
+                f"Available SSH hosts: {hosts_str}"
+            )
         except Exception as e:
             logger.warning(
-                "Failed connecting SSH client. Try providing the key file explicitly. Assure it does not have a passphrase!"
+                "Failed connecting SSH client. Try providing the key file "
+                "explicitly. Assure it does not have a passphrase!"
             )
             raise e
 

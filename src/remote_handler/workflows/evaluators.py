@@ -13,6 +13,7 @@ import ase.io
 import numpy as np
 from ase import Atoms
 
+from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.core.utils import grep
 from remote_handler.exceptions import WorkflowError
@@ -32,6 +33,7 @@ class VASPEvaluator(GroundTruthEvaluator):
     Args:
         singlepoint_script: Path to dft_singlepoint.py or compatible evaluation script
         remote_fs: FileSystemHandlerBase for the machine where evaluation runs
+        cluster_config: ClusterConfig with partition, conda env, template settings
         num_parallel: Number of parallel SLURM jobs to queue
         incar_kwargs: VASP INCAR tags as dictionary
         remote_savepath: Path on remote machine for calculation files
@@ -39,13 +41,13 @@ class VASPEvaluator(GroundTruthEvaluator):
         stub: If True, creates mock outputs without running VASP
         loop_time: Interval (seconds) to poll for job completion
         required_fraction: Fraction of samples that must succeed
-        n_processors: Number of CPU cores per VASP job
     """
 
     def __init__(
         self,
         singlepoint_script: os.PathLike,
         remote_fs: FileSystemHandlerBase,
+        cluster_config: ClusterConfig,
         num_parallel: int,
         incar_kwargs: dict,
         remote_savepath: Optional[os.PathLike] = None,
@@ -53,21 +55,22 @@ class VASPEvaluator(GroundTruthEvaluator):
         stub: bool = False,
         loop_time: float = 30,
         required_fraction: float = 0.5,
-        n_processors: int = 2,
+        n_processors: int = 8,
     ):
         super().__init__()
         self.singlepoint_script = singlepoint_script
         self.incar_kwargs = incar_kwargs
         self.remote_fs = remote_fs
+        self.cluster_config = cluster_config
         self.num_parallel = num_parallel
         self.stub = stub
         self.launcher = launcher
         self.loop_time = loop_time
+        self.n_processors = n_processors
         self.required_fraction = required_fraction
         self.remote_savepath = (
             Path(remote_savepath) if remote_savepath else None
         )
-        self.n_processors = n_processors
 
     def update(
         self, calcdir: Path, evaluator_input: Path | list[Path], **kwargs
@@ -95,18 +98,11 @@ class VASPEvaluator(GroundTruthEvaluator):
 
         # In stub mode, we don't need VASPHandler
         if not self.stub:
-            from remote_handler.core.cluster_handler import ClusterConfig
             from remote_handler.dft_runner import VASPHandler
-
-            # Create minimal cluster config
-            cluster_config = ClusterConfig(
-                jobfile_name="run_vasp.sh",
-                n_processors=self.n_processors,
-            )
 
             self.vasp_handler = VASPHandler(
                 traj_files=traj_files,
-                cluster_config=cluster_config,
+                cluster_config=self.cluster_config,
                 remote_fs=self.remote_fs,
                 savepath=str(self.remote_savepath)
                 if self.remote_savepath

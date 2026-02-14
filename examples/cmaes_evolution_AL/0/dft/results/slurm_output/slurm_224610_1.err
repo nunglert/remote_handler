@@ -1,0 +1,11 @@
+Loading compiler version 2023.2.1
+  Load "debugger" to debug DPC++ applications with the gdb-oneapi debugger.
+  Load "dpl" for additional DPC++ APIs: https://github.com/oneapi-src/oneDPL
+---
+User needs to perform 'source /opt/intel/oneapi/setvars.sh --force'
+Use 'mpirun -n' for parallelization
+---
+Traceback (most recent call last):
+  File "/home/nunglert/dump/dft/dft/dft_singlepoint.py", line 8, in <module>
+    from remote_handler.scripts.input_models import DftSinglepointInput
+ModuleNotFoundError: No module named 'remote_handler.scripts.input_models'

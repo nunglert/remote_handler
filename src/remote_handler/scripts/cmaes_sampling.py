@@ -83,3 +83,68 @@ evolution_args = {
     "repository_path": input_config.repository_path,
 }
 last_gen, _, _, _ = run_evolution(**evolution_args)
+
+# Extract winner structure and write to extxyz
+import numpy as np
+from ase.io import write as ase_write
+
+from remote_handler.scripts.cmaes_optimize import dof_to_atoms_from_evo
+
+winner_atoms, handler, opt_gen, transform_dof = dof_to_atoms_from_evo(
+    label=input_config.label,
+    path=calcpath,
+    dof_mode=input_config.dof_mode,
+    scaled_center=input_config.scaled_center,
+    radius=input_config.radius,
+)
+
+winner_file = calcpath / f"{input_config.label}_winner.extxyz"
+ase_write(winner_file, winner_atoms)
+print(f"Winner structure written to {winner_file}")
+
+if input_config.do_optimization:
+    from remote_handler.scripts.cmaes_optimize import create_optimize_fun
+
+    print("\n--- Post-evolution optimization ---")
+
+    from mace.calculators import MACECalculator
+
+    calc = MACECalculator(
+        model_paths=input_config.models,
+        device="cuda",
+        default_dtype="float32",
+    )
+
+    fix_range = (
+        np.asarray(input_config.fix_range)
+        if input_config.fix_range is not None
+        else np.asarray([0.3, 0.7])
+    )
+
+    output_path = calcpath / "optimized"
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    optimace = create_optimize_fun(
+        save_path=output_path,
+        dof_to_atoms=transform_dof,
+        calc=calc,
+        surface_normal_axis=input_config.surface_axis,
+        fix_range=fix_range,
+        pbc=np.asarray([1, 1, 0]),
+    )
+
+    if optimace is None:
+        raise ValueError("Optimization function is None.")
+
+    last_generation = handler.load_generation(generation=opt_gen)
+    winner_index = np.argmin(last_generation[2])
+    winner_dof = last_generation[1][winner_index]
+
+    print("Starting winner optimization")
+    optimace(
+        winner_dof,
+        label=f"{input_config.label}_winner",
+        bulk_terminate=input_config.bulk_terminate,
+        optimizer=input_config.optimizer,
+    )
+    print("Optimization done.")

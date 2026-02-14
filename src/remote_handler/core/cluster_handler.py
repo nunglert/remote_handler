@@ -250,7 +250,8 @@ class SlurmHandlerBase(ABC):
 
         if not self.remote_fs.exists(self.conda_source):
             raise FileSystemError(
-                f"Conda activation script not found: {self.conda_source}\n"
+                f"Conda activation script not found at: {self.conda_source}. "
+                "We currently do not support '~', write the full path!\n"
                 f"Remote machine: {self.cluster_config.remote_machine}"
             )
         if not self.remote_fs.exists(miniconda_home / "envs" / self.conda_env):

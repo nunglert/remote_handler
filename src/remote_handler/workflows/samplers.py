@@ -28,6 +28,14 @@ from .active_learning_base import Sampler
 logger = logging.getLogger(__name__)
 
 
+def update_default_args(args, default):
+    """
+    Update the default arguments with user-provided values.
+    """
+    for key, value in args.items():
+        default[key] = value
+
+
 class LammpsSampler(Sampler):
     """
     MD sampler using LAMMPS with uncertainty-based sampling.
@@ -204,7 +212,7 @@ class LammpsSampler(Sampler):
         return output_path
 
 
-class CmaesSampler(Sampler):
+class CMAESSampler(Sampler):
     """
     Sampler using CMA-ES evolutionary optimization with MACE models.
 
@@ -231,6 +239,12 @@ class CmaesSampler(Sampler):
         c_r: c_r parameter for covariance matrix bias
         remote_savepath: Path on remote machine for calculation files
         loop_time: Interval (seconds) to poll for job completion
+        do_optimization: If True, optimize the winner after evolution
+        dof_mode: Degree-of-freedom mode for optimization ('full-dof' or 'defect')
+        surface_axis: Surface normal axis for optimization (0, 1, or 2)
+        fix_range: Scaled range of atoms to fix during optimization
+        bulk_terminate: If True, remove overlayer from bottom layer
+        opt_optimizer: ASE optimizer class name for structure optimization
     """
 
     def __init__(
@@ -254,6 +268,12 @@ class CmaesSampler(Sampler):
         remote_savepath: Optional[os.PathLike] = None,
         loop_time: float = 30,
         stub: bool = False,
+        do_optimization: bool = False,
+        dof_mode: str = "full-dof",
+        surface_axis: int = 2,
+        fix_range: Optional[list[float]] = None,
+        bulk_terminate: bool = False,
+        opt_optimizer: str = "FIRE",
     ):
         super().__init__()
         self.remote_fs = remote_fs
@@ -275,6 +295,12 @@ class CmaesSampler(Sampler):
         self.remote_savepath = remote_savepath
         self.loop_time = loop_time
         self.stub = stub
+        self.do_optimization = do_optimization
+        self.dof_mode = dof_mode
+        self.surface_axis = surface_axis
+        self.fix_range = fix_range
+        self.bulk_terminate = bulk_terminate
+        self.opt_optimizer = opt_optimizer
 
     def update(
         self, calcdir: Path, sampler_input: list[Path], **kwargs
@@ -290,7 +316,6 @@ class CmaesSampler(Sampler):
         self.sample_dir = calcdir / "sample"
         self.results_dir = self.sample_dir / "results"
         os.makedirs(self.sample_dir, exist_ok=True)
-        os.makedirs(self.results_dir, exist_ok=True)
 
         self.model_files = sampler_input
 
@@ -310,9 +335,18 @@ class CmaesSampler(Sampler):
                 "scaled_center": self.scaled_center,
                 "radius": self.radius,
                 "c_r": self.c_r,
+                "do_optimization": self.do_optimization,
+                "dof_mode": self.dof_mode,
+                "surface_axis": self.surface_axis,
+                "fix_range": self.fix_range,
+                "bulk_terminate": self.bulk_terminate,
+                "optimizer": self.opt_optimizer,
             }
 
-            self.script_input_file = self.results_dir / "input_cmaes.json"
+            self.script_input_file = self.sample_dir / "input_cmaes.json"
+
+            update_default_args(kwargs, script_input)
+
             with open(self.script_input_file, "w") as f:
                 f.write(json.dumps(script_input, indent=2))
 
@@ -383,14 +417,160 @@ class CmaesSampler(Sampler):
         else:
             self.sampling_task.submit()
             self.sampling_task.collect_results()
-            output_path = (
-                Path(self.sampling_task.local_savepath)
-                / "out"
-                / "samples.extxyz"
-            )
+            output_path = self.results_dir / self.label
 
         logger.info(f"CMA-ES sampled configurations written to {output_path}")
         return output_path
+
+
+class BatchCMAESSampler(CMAESSampler):
+    """
+    Runs a batch of CMA-ES evolutions with different random seeds.
+
+    Each evolution is an independent CMAESSampler run. Child seeds are derived
+    deterministically from the master random_seed. If do_optimization=True on
+    the parent, each evolution also optimizes its winner within the same
+    SLURM job.
+
+    Args:
+        batch_size: Number of independent CMA-ES evolutions to run
+        **remaining args: Passed to CMAESSampler
+    """
+
+    def __init__(
+        self,
+        batch_size: int,
+        remote_fs: FileSystemHandlerBase,
+        cluster_config: ClusterConfig,
+        sampling_script: os.PathLike,
+        founder_path: os.PathLike,
+        label: str = "cmaes_run",
+        generations: int = 1000,
+        step_size: float = 0.12,
+        random_seed: int = 0,
+        pop_size: Optional[int] = None,
+        save_nth: int = 1,
+        batch: bool = False,
+        loss_mode: str = "energy-only",
+        loss_threshold: float = -1e6,
+        scaled_center: Optional[list[float]] = None,
+        radius: Optional[float] = None,
+        c_r: float = 20.0,
+        remote_savepath: Optional[os.PathLike] = None,
+        loop_time: float = 30,
+        stub: bool = False,
+        do_optimization: bool = False,
+        dof_mode: str = "full-dof",
+        surface_axis: int = 2,
+        fix_range: Optional[list[float]] = None,
+        bulk_terminate: bool = False,
+        opt_optimizer: str = "FIRE",
+    ):
+        super().__init__(
+            remote_fs,
+            cluster_config,
+            sampling_script,
+            founder_path,
+            label,
+            generations,
+            step_size,
+            random_seed,
+            pop_size,
+            save_nth,
+            batch,
+            loss_mode,
+            loss_threshold,
+            scaled_center,
+            radius,
+            c_r,
+            remote_savepath,
+            loop_time,
+            stub,
+            do_optimization,
+            dof_mode,
+            surface_axis,
+            fix_range,
+            bulk_terminate,
+            opt_optimizer,
+        )
+        self.batch_size = batch_size
+
+    def update(
+        self, calcdir: Path, sampler_input: list[Path], **kwargs
+    ) -> None:
+        """
+        Prepare N CMA-ES evolution tasks with different random seeds.
+
+        Args:
+            calcdir: Base directory for this AL iteration
+            sampler_input: List of model file paths
+            **kwargs: Additional parameters passed to each CMAESSampler.update()
+        """
+        self.base_calcdir = calcdir
+        self.model_files = sampler_input
+
+        rng = np.random.default_rng(self.random_seed)
+        child_seeds = rng.integers(0, 2**31, size=self.batch_size)
+
+        self.sampling_tasks = []
+
+        # Temporarily mutate label/seed per run, restore after loop
+        _orig_label = self.label
+        _orig_seed = self.random_seed
+
+        for run_idx, seed in enumerate(child_seeds):
+            self.random_seed = int(seed)
+            self.label = f"{_orig_label}_{run_idx}"
+
+            run_calcdir = Path(calcdir) / f"run_{run_idx}"
+            super().update(
+                calcdir=run_calcdir, sampler_input=sampler_input, **kwargs
+            )
+
+            if not self.stub:
+                self.sampling_tasks.append(self.sampling_task)
+
+        self.random_seed = _orig_seed
+        self.label = _orig_label
+
+    def get_sampled_configs(self) -> list[Path]:
+        """
+        Submit all CMA-ES evolutions and collect results.
+
+        Returns:
+            List of Paths to each evolution's output directory
+        """
+        if self.stub:
+            logger.info("Running in stub mode - creating mock batch samples")
+            output_paths = []
+            for run_idx in range(self.batch_size):
+                run_dir = (
+                    self.base_calcdir / f"run_{run_idx}" / "sample" / "results"
+                )
+                output_dir = run_dir / "out"
+                os.makedirs(output_dir, exist_ok=True)
+                mock_samples = self._create_stub_outputs()
+                output_path = output_dir / "samples.extxyz"
+                ase.io.write(output_path, mock_samples)
+                output_paths.append(output_path)
+            return output_paths
+
+        output_paths = []
+        for run_idx, task in enumerate(self.sampling_tasks):
+            label = f"{self.label}_{run_idx}"
+            task.submit()
+            task.collect_results()
+
+            results_dir = Path(task.local_savepath)
+            if self.do_optimization:
+                output_paths.append(
+                    results_dir / "optimized" / f"POSCAR_{label}_winner_end"
+                )
+            else:
+                output_paths.append(results_dir / f"{label}_winner.extxyz")
+
+        logger.info(f"Batch CMA-ES completed {len(output_paths)} evolutions")
+        return output_paths
 
 
 class NSTrajectorySampler(Sampler):
@@ -476,7 +656,6 @@ class NSTrajectorySampler(Sampler):
         if not self.stub:
             try:
                 from jaxnest import input_parser
-                from jaxnest.input_parser import update_default_args
             except ImportError:
                 raise DependencyError(
                     "jaxnest",
