@@ -19,7 +19,11 @@ from jinja2 import Environment, FileSystemLoader
 from remote_handler.config import get_config
 from remote_handler.core import file_handler, slurm_utils
 from remote_handler.core.file_handler import FileSystemHandlerBase
-from remote_handler.exceptions import ConfigurationError, FileSystemError
+from remote_handler.exceptions import (
+    ConfigurationError,
+    DependencyError,
+    FileSystemError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -199,8 +203,29 @@ class SlurmHandlerBase(ABC):
         self.is_submitted = False
         super().__init__()
 
+        self._validate_slurm()
         self._validate_conda()
         self._validate_savepath()
+
+    def _validate_slurm(self):
+        """Check that slurm (sbatch) is available on the target system."""
+        cmd = "which sbatch"
+        if self.ssh_command is not None:
+            cmd = f"{self.ssh_command} '{cmd}'"
+        try:
+            subprocess.run(
+                cmd, shell=True, capture_output=True, text=True, check=True
+            )
+        except subprocess.CalledProcessError:
+            target = (
+                "local machine"
+                if self.ssh_command is None
+                else self.cluster_config.remote_machine
+            )
+            raise DependencyError(
+                f"SLURM is not available on {target}: 'sbatch' not found.\n"
+                "Ensure SLURM is installed and accessible in PATH."
+            )
 
     def _validate_savepath(self):
         if not self.remote_fs.exists(self.savepath):

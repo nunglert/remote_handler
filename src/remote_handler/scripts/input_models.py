@@ -1,0 +1,491 @@
+"""Input models for remote_handler scripts.
+
+This module defines dataclasses for validating script inputs, providing:
+- Type safety and IDE support
+- Clear documentation of required/optional parameters
+- Validation before script execution
+- Consistent error handling
+
+Each script has a corresponding Input dataclass that can be loaded from JSON:
+    >>> from remote_handler.scripts.input_models import MaceTrainingInput
+    >>> config = MaceTrainingInput.from_file(Path("input.json"))
+    >>> config.validate()
+"""
+
+import json
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Optional
+
+from remote_handler.exceptions import ScriptInputError
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class MaceTrainingInput:
+    """Input configuration for mace_training.py script.
+
+    Attributes:
+        database_files: List of paths to database files (will be combined if multiple)
+        train_runner: Path to MACE train_runner executable (e.g., mace_run_train)
+        config_file: Path to user's YAML config with training parameters
+        model_name: Name tag for the trained model
+        seed: Random seed for database splitting and training
+        validation_fraction: Fraction of data to use for validation (default: 0.1)
+
+    Example:
+        >>> config = MaceTrainingInput.from_file(Path("input_train.json"))
+        >>> config.validate()
+    """
+
+    database_files: list[str]
+    train_runner: Path
+    config_file: Path
+    model_name: str
+    seed: int
+    validation_fraction: float = 0.1
+
+    @classmethod
+    def from_file(cls, input_file: Path) -> "MaceTrainingInput":
+        """Load configuration from JSON file.
+
+        Args:
+            input_file: Path to JSON input file
+
+        Returns:
+            MaceTrainingInput instance
+
+        Raises:
+            ScriptInputError: If file doesn't exist, invalid JSON, or missing fields
+        """
+        input_file = Path(input_file).expanduser()
+
+        if not input_file.exists():
+            raise ScriptInputError(f"Input file not found: {input_file}")
+
+        try:
+            with open(input_file) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ScriptInputError(
+                f"Invalid JSON in input file: {input_file}\n"
+                f"Error at line {e.lineno}, column {e.colno}: {e.msg}"
+            )
+        except Exception as e:
+            raise ScriptInputError(
+                f"Failed to read input file: {input_file}\n" f"Error: {e}"
+            )
+
+        # Convert string paths to Path objects
+        if "train_runner" in data:
+            data["train_runner"] = Path(data["train_runner"]).expanduser()
+        if "config_file" in data:
+            data["config_file"] = Path(data["config_file"]).expanduser()
+
+        try:
+            return cls(**data)
+        except TypeError as e:
+            raise ScriptInputError(
+                f"Invalid fields in input file: {input_file}\n"
+                f"Error: {e}\n"
+                f"Expected fields: database_files, train_runner, config_file, "
+                f"model_name, seed, validation_fraction (optional)"
+            )
+
+    def validate(self) -> None:
+        """Validate configuration parameters.
+
+        Raises:
+            ScriptInputError: If any parameter is invalid
+        """
+        if not self.database_files:
+            raise ScriptInputError("database_files cannot be empty")
+
+        if not self.config_file.exists():
+            raise ScriptInputError(
+                f"Config file does not exist: {self.config_file}"
+            )
+
+        if not (0 < self.validation_fraction < 1):
+            raise ScriptInputError(
+                f"validation_fraction must be between 0 and 1, got {self.validation_fraction}"
+            )
+
+        if not self.model_name:
+            raise ScriptInputError("model_name cannot be empty")
+
+
+@dataclass
+class LammpsSamplingInput:
+    """Input configuration for lammps_sampling.py script.
+
+    Attributes:
+        lammps_path: Path to LAMMPS executable
+        template_file: Name of LAMMPS input template file
+        data_file: Name of initial structure data file
+        model_files: List of paths to MACE model files (for committee)
+        element_mapping: Dict mapping atom numbers to element symbols
+        cutoff_radius: Cutoff radius for local uncertainty aggregation (Angstrom)
+        bin_count: Number of trajectory segments for sampling
+        seed: Random seed for LAMMPS
+        lammps_config_name: Name for generated LAMMPS input file (default: "lammps.in")
+
+    Example:
+        >>> config = LammpsSamplingInput.from_file(Path("input.json"))
+        >>> config.validate()
+    """
+
+    lammps_path: Path
+    template_file: str
+    data_file: str
+    model_files: list[str]
+    element_mapping: dict[str, str]
+    cutoff_radius: float
+    bin_count: int
+    seed: int
+    lammps_config_name: str = "lammps.in"
+
+    @classmethod
+    def from_file(cls, input_file: Path) -> "LammpsSamplingInput":
+        """Load configuration from JSON file.
+
+        Args:
+            input_file: Path to JSON input file
+
+        Returns:
+            LammpsSamplingInput instance
+
+        Raises:
+            ScriptInputError: If file doesn't exist, invalid JSON, or missing fields
+        """
+        input_file = Path(input_file).expanduser()
+
+        if not input_file.exists():
+            raise ScriptInputError(f"Input file not found: {input_file}")
+
+        try:
+            with open(input_file) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ScriptInputError(
+                f"Invalid JSON in input file: {input_file}\n"
+                f"Error at line {e.lineno}, column {e.colno}: {e.msg}"
+            )
+
+        # Convert paths
+        if "lammps_path" in data:
+            data["lammps_path"] = Path(data["lammps_path"]).expanduser()
+
+        try:
+            return cls(**data)
+        except TypeError as e:
+            raise ScriptInputError(
+                f"Invalid fields in input file: {input_file}\n" f"Error: {e}"
+            )
+
+    def validate(self) -> None:
+        """Validate configuration parameters.
+
+        Raises:
+            ScriptInputError: If any parameter is invalid
+        """
+        if not self.lammps_path.exists():
+            raise ScriptInputError(
+                f"LAMMPS executable not found: {self.lammps_path}"
+            )
+
+        if not self.model_files:
+            raise ScriptInputError("model_files cannot be empty")
+
+        if self.cutoff_radius <= 0:
+            raise ScriptInputError(
+                f"cutoff_radius must be positive, got {self.cutoff_radius}"
+            )
+
+        if self.bin_count <= 0:
+            raise ScriptInputError(
+                f"bin_count must be positive, got {self.bin_count}"
+            )
+
+
+@dataclass
+class DftSinglepointInput:
+    """Input configuration for dft_singlepoint.py script.
+
+    Attributes:
+        DATABASE: Path to input structure file
+        launch_command: Command to launch VASP
+        INCAR_kwargs: Dictionary of VASP INCAR parameters
+
+    Example:
+        >>> config = DftSinglepointInput.from_file(Path("input_opt.json"))
+        >>> config.validate()
+    """
+
+    DATABASE: str
+    launch_command: str
+    INCAR_kwargs: dict[str, Any]
+
+    @classmethod
+    def from_file(cls, input_file: Path) -> "DftSinglepointInput":
+        """Load configuration from JSON file.
+
+        Args:
+            input_file: Path to JSON input file
+
+        Returns:
+            DftSinglepointInput instance
+
+        Raises:
+            ScriptInputError: If file doesn't exist, invalid JSON, or missing fields
+        """
+        input_file = Path(input_file).expanduser()
+
+        if not input_file.exists():
+            raise ScriptInputError(f"Input file not found: {input_file}")
+
+        try:
+            with open(input_file) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ScriptInputError(
+                f"Invalid JSON in input file: {input_file}\n"
+                f"Error at line {e.lineno}, column {e.colno}: {e.msg}"
+            )
+
+        try:
+            return cls(**data)
+        except TypeError as e:
+            raise ScriptInputError(
+                f"Invalid fields in input file: {input_file}\n" f"Error: {e}"
+            )
+
+    def validate(self) -> None:
+        """Validate configuration parameters.
+
+        Raises:
+            ScriptInputError: If any parameter is invalid
+        """
+        if not self.DATABASE:
+            raise ScriptInputError("DATABASE cannot be empty")
+
+        if not self.launch_command:
+            raise ScriptInputError("launch_command cannot be empty")
+
+        if not isinstance(self.INCAR_kwargs, dict):
+            raise ScriptInputError("INCAR_kwargs must be a dictionary")
+
+
+@dataclass
+class OptimizeTrajInput:
+    """Input configuration for optimize_traj.py script.
+
+    Attributes:
+        tag: Tag to prepend to output files
+        DATABASE: Path to input trajectory file
+        do_optimization: Whether to perform structure optimization
+        do_steinhardt: Whether to compute Steinhardt parameters
+        do_rdf: Whether to compute radial distribution function
+        general_args: General parameters (cutoff, nbins, etc.)
+        calculator_args: Calculator configuration (optional, required if do_optimization=True)
+        optimization_args: Optimization parameters (optional, required if do_optimization=True)
+        steinhardt_args: Steinhardt parameters (optional, required if do_steinhardt=True)
+
+    Example:
+        >>> config = OptimizeTrajInput.from_file(Path("input_opt.json"))
+        >>> config.validate()
+    """
+
+    tag: str
+    DATABASE: str
+    do_optimization: bool
+    do_steinhardt: bool
+    do_rdf: bool
+    general_args: dict[str, Any]
+    calculator_args: Optional[dict[str, Any]] = None
+    optimization_args: Optional[dict[str, Any]] = None
+    steinhardt_args: Optional[dict[str, Any]] = None
+
+    @classmethod
+    def from_file(cls, input_file: Path) -> "OptimizeTrajInput":
+        """Load configuration from JSON file.
+
+        Args:
+            input_file: Path to JSON input file
+
+        Returns:
+            OptimizeTrajInput instance
+
+        Raises:
+            ScriptInputError: If file doesn't exist, invalid JSON, or missing fields
+        """
+        input_file = Path(input_file).expanduser()
+
+        if not input_file.exists():
+            raise ScriptInputError(f"Input file not found: {input_file}")
+
+        try:
+            with open(input_file) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ScriptInputError(
+                f"Invalid JSON in input file: {input_file}\n"
+                f"Error at line {e.lineno}, column {e.colno}: {e.msg}"
+            )
+
+        try:
+            return cls(**data)
+        except TypeError as e:
+            raise ScriptInputError(
+                f"Invalid fields in input file: {input_file}\n" f"Error: {e}"
+            )
+
+    def validate(self) -> None:
+        """Validate configuration parameters.
+
+        Raises:
+            ScriptInputError: If any parameter is invalid
+        """
+        if not self.DATABASE:
+            raise ScriptInputError("DATABASE cannot be empty")
+
+        if not isinstance(self.general_args, dict):
+            raise ScriptInputError("general_args must be a dictionary")
+
+        if self.do_optimization and not self.calculator_args:
+            raise ScriptInputError(
+                "calculator_args required when do_optimization=True"
+            )
+
+        if self.do_optimization and not self.optimization_args:
+            raise ScriptInputError(
+                "optimization_args required when do_optimization=True"
+            )
+
+        if self.do_steinhardt and not self.steinhardt_args:
+            raise ScriptInputError(
+                "steinhardt_args required when do_steinhardt=True"
+            )
+
+
+@dataclass
+class CmaesSamplingInput:
+    """Input configuration for cmaes_sampling.py script.
+
+    Attributes:
+        founder: 'random' or filename of founder POSCAR (absolute path if not
+            in default directory)
+        label: Run label for the evolution
+        random_seed: Random seed for evolution
+        step_size: Initial CMA-ES step size
+        generations: Number of generations to run
+        pop_size: Population size (overrides CMA-ES default if set)
+        save_nth: Save every nth generation
+        batch: If True, NN eval is vmapped
+        models: List of model file paths (space separated in original CLI)
+        loss_mode: Loss function to use ('energy-only', 'with-uncertainties',
+            'adversarial', 'loss-threshold')
+        loss_threshold: Lower threshold for loss
+        scaled_center: Scaled center as [x, y, z]
+        radius: Radius of sphere around scaled_center
+        c_r: c_r parameter for covariance matrix bias
+        continue_evolution: Whether to continue a stopped evolution
+        generation_checkpoint: Generation checkpoint to continue from
+        repository_path: Path to ftmlip directory
+
+    Example:
+        >>> config = CmaesSamplingInput.from_file(Path("input.json"))
+        >>> config.validate()
+    """
+
+    founder: str
+    label: str = "dummy"
+    random_seed: int = 0
+    step_size: float = 1.0
+    generations: int = 1000
+    pop_size: Optional[int] = None
+    save_nth: int = 1
+    batch: bool = False
+    models: Optional[list[str]] = None
+    loss_mode: str = "energy-only"
+    loss_threshold: float = -1e6
+    scaled_center: Optional[list[float]] = None
+    radius: Optional[float] = None
+    c_r: float = 20.0
+    continue_evolution: bool = False
+    generation_checkpoint: Optional[int] = None
+    repository_path: Optional[str] = None
+
+    @classmethod
+    def from_file(cls, input_file: Path) -> "CmaesSamplingInput":
+        """Load configuration from JSON file.
+
+        Args:
+            input_file: Path to JSON input file
+
+        Returns:
+            CmaesSamplingInput instance
+
+        Raises:
+            ScriptInputError: If file doesn't exist, invalid JSON, or missing fields
+        """
+        input_file = Path(input_file).expanduser()
+
+        if not input_file.exists():
+            raise ScriptInputError(f"Input file not found: {input_file}")
+
+        try:
+            with open(input_file) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ScriptInputError(
+                f"Invalid JSON in input file: {input_file}\n"
+                f"Error at line {e.lineno}, column {e.colno}: {e.msg}"
+            )
+
+        try:
+            return cls(**data)
+        except TypeError as e:
+            raise ScriptInputError(
+                f"Invalid fields in input file: {input_file}\n" f"Error: {e}"
+            )
+
+    def validate(self) -> None:
+        """Validate configuration parameters.
+
+        Raises:
+            ScriptInputError: If any parameter is invalid
+        """
+        if not self.founder:
+            raise ScriptInputError("founder cannot be empty")
+
+        if self.generations <= 0:
+            raise ScriptInputError(
+                f"generations must be positive, got {self.generations}"
+            )
+
+        if self.step_size <= 0:
+            raise ScriptInputError(
+                f"step_size must be positive, got {self.step_size}"
+            )
+
+        if self.save_nth <= 0:
+            raise ScriptInputError(
+                f"save_nth must be positive, got {self.save_nth}"
+            )
+
+        valid_loss_modes = {
+            "energy-only",
+            "with-uncertainties",
+            "adversarial",
+            "loss-threshold",
+        }
+        if self.loss_mode not in valid_loss_modes:
+            raise ScriptInputError(
+                f"loss_mode must be one of {valid_loss_modes}, got '{self.loss_mode}'"
+            )
+
+        if self.continue_evolution and self.models is None:
+            raise ScriptInputError("models must be provided (cannot be None)")

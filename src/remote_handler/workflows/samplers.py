@@ -14,6 +14,7 @@ import ase.io
 import numpy as np
 from ase import Atoms
 
+from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.core.tasks import SingleScriptTask
 from remote_handler.exceptions import (
@@ -203,6 +204,195 @@ class LammpsSampler(Sampler):
         return output_path
 
 
+class CmaesSampler(Sampler):
+    """
+    Sampler using CMA-ES evolutionary optimization with MACE models.
+
+    Runs CMA-ES evolution to explore configuration space, optimizing atomic
+    structures using neural network force field energy evaluation.
+    Supports stub mode for testing without actual CMA-ES execution.
+
+    Args:
+        remote_fs: FileSystemHandlerBase for the machine where sampling runs
+        cluster_config: ClusterConfig with partition, conda env, template settings
+        sampling_script: Path to cmaes_sampling.py or compatible script
+        founder_path: Path to founder POSCAR structure file
+        label: Run label for the evolution
+        generations: Number of CMA-ES generations to run
+        step_size: Initial CMA-ES step size
+        random_seed: Random seed for evolution
+        pop_size: Population size (None uses CMA-ES default)
+        save_nth: Save every nth generation
+        batch: If True, NN evaluation is vmapped
+        loss_mode: Loss function ('energy-only', 'loss-threshold', etc.)
+        loss_threshold: Lower threshold for loss
+        scaled_center: Scaled center as [x, y, z] for DOF sphere
+        radius: Radius of sphere around scaled_center
+        c_r: c_r parameter for covariance matrix bias
+        remote_savepath: Path on remote machine for calculation files
+        loop_time: Interval (seconds) to poll for job completion
+    """
+
+    def __init__(
+        self,
+        remote_fs: FileSystemHandlerBase,
+        cluster_config: ClusterConfig,
+        sampling_script: os.PathLike,
+        founder_path: os.PathLike,
+        label: str = "cmaes_run",
+        generations: int = 1000,
+        step_size: float = 0.12,
+        random_seed: int = 0,
+        pop_size: Optional[int] = None,
+        save_nth: int = 1,
+        batch: bool = False,
+        loss_mode: str = "energy-only",
+        loss_threshold: float = -1e6,
+        scaled_center: Optional[list[float]] = None,
+        radius: Optional[float] = None,
+        c_r: float = 20.0,
+        remote_savepath: Optional[os.PathLike] = None,
+        loop_time: float = 30,
+        stub: bool = False,
+    ):
+        super().__init__()
+        self.remote_fs = remote_fs
+        self.cluster_config = cluster_config
+        self.sampling_script = sampling_script
+        self.founder_path = founder_path
+        self.label = label
+        self.generations = generations
+        self.step_size = step_size
+        self.random_seed = random_seed
+        self.pop_size = pop_size
+        self.save_nth = save_nth
+        self.batch = batch
+        self.loss_mode = loss_mode
+        self.loss_threshold = loss_threshold
+        self.scaled_center = scaled_center
+        self.radius = radius
+        self.c_r = c_r
+        self.remote_savepath = remote_savepath
+        self.loop_time = loop_time
+        self.stub = stub
+
+    def update(
+        self, calcdir: Path, sampler_input: list[Path], **kwargs
+    ) -> None:
+        """
+        Prepare sampler for a new iteration.
+
+        Args:
+            calcdir: Directory for this AL iteration
+            sampler_input: List of model file paths
+            **kwargs: Additional parameters
+        """
+        self.sample_dir = calcdir / "sample"
+        self.results_dir = self.sample_dir / "results"
+        os.makedirs(self.sample_dir, exist_ok=True)
+        os.makedirs(self.results_dir, exist_ok=True)
+
+        self.model_files = sampler_input
+
+        if not self.stub:
+            script_input = {
+                "founder": Path(self.founder_path).name,
+                "label": self.label,
+                "models": [p.name for p in self.model_files],
+                "random_seed": self.random_seed,
+                "step_size": self.step_size,
+                "generations": self.generations,
+                "pop_size": self.pop_size,
+                "save_nth": self.save_nth,
+                "batch": self.batch,
+                "loss_mode": self.loss_mode,
+                "loss_threshold": self.loss_threshold,
+                "scaled_center": self.scaled_center,
+                "radius": self.radius,
+                "c_r": self.c_r,
+            }
+
+            self.script_input_file = self.results_dir / "input_cmaes.json"
+            with open(self.script_input_file, "w") as f:
+                f.write(json.dumps(script_input, indent=2))
+
+            self.sampling_task = SingleScriptTask(
+                local_savepath=self.results_dir,
+                input_file=self.script_input_file,
+                cluster_config=self.cluster_config,
+                remote_fs=self.remote_fs,
+                script_file=self.sampling_script,
+                remote_savepath=self.remote_savepath,
+                jobfile_name="run_cmaes.sh",
+                jobname="cmaes_sample",
+                logfile="cmaes_sample.log",
+                n_processors=1,
+                loop_time=self.loop_time,
+                collect_only=False,
+            )
+
+            self.sampling_task.allocate_data()
+
+            # Copy required files to remote
+            self.sampling_task.copy_file(self.founder_path)
+            for p in self.model_files:
+                self.sampling_task.copy_file(p)
+
+    def _create_stub_outputs(self) -> list[Atoms]:
+        """
+        Create mock CMA-ES sampling outputs for testing.
+
+        Returns:
+            List of Atoms objects with mock evolution results
+        """
+        logger.info("Creating stub CMA-ES samples")
+
+        mock_samples = []
+        for i in range(5):
+            symbols = ["Si"] * 63
+            positions = np.random.uniform(0, 10.86, (len(symbols), 3))
+
+            atoms = Atoms(
+                symbols=symbols,
+                positions=positions,
+                cell=[10.86, 10.86, 10.86],
+                pbc=True,
+            )
+
+            atoms.info["generation"] = i
+            atoms.info["loss"] = -100.0 + np.random.uniform(-5, 5)
+            mock_samples.append(atoms)
+
+        return mock_samples
+
+    def get_sampled_configs(self) -> Path:
+        """
+        Run CMA-ES evolution and collect configurations.
+
+        Returns:
+            Path to XYZ file containing sampled configurations
+        """
+        if self.stub:
+            logger.info("Running in stub mode - creating mock CMA-ES samples")
+            sampled_configs = self._create_stub_outputs()
+
+            output_dir = self.results_dir / "out"
+            os.makedirs(output_dir, exist_ok=True)
+            output_path = output_dir / "samples.extxyz"
+            ase.io.write(output_path, sampled_configs)
+        else:
+            self.sampling_task.submit()
+            self.sampling_task.collect_results()
+            output_path = (
+                Path(self.sampling_task.local_savepath)
+                / "out"
+                / "samples.extxyz"
+            )
+
+        logger.info(f"CMA-ES sampled configurations written to {output_path}")
+        return output_path
+
+
 class NSTrajectorySampler(Sampler):
     """
     Sampler using Nested Sampling with JAXNEST.
@@ -291,7 +481,7 @@ class NSTrajectorySampler(Sampler):
                 raise DependencyError(
                     "jaxnest",
                     "NSTrajectorySampler requires the 'jaxnest' package. "
-                    "Install it with: pip install jaxnest\n"
+                    "Install it according to the guide on the JAXNEST gitlab repo\n"
                     "Or use stub=True for testing.",
                 )
 

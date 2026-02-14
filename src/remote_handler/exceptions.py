@@ -80,3 +80,16 @@ class DependencyError(RemoteHandlerError):
     """
 
     pass
+
+
+class ScriptInputError(RemoteHandlerError):
+    """Script input validation failures.
+
+    Examples:
+        - Missing required input parameters
+        - Invalid input file format
+        - Input parameter validation errors
+        - Malformed JSON input files
+    """
+
+    pass

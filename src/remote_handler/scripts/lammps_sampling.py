@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import pathlib
@@ -17,6 +16,8 @@ from mace.calculators.lammps_mliap_mace import LAMMPS_MLIAP_MACE
 from mace.calculators.mace import MACECalculator
 from mace.cli.convert_e3nn_cueq import run as run_e3nn_to_cueq
 
+from remote_handler.scripts.input_models import LammpsSamplingInput
+
 try:
     import cuequivariance as cue
     import cuequivariance_torch as cuet
@@ -26,27 +27,28 @@ except ImportError:
     CUET_AVAILABLE = False
 
 
+# Load and validate input configuration
 calcpath = Path(sys.argv[1]).parent
 INPUTFILE = Path(sys.argv[1])
-input_args = json.load(open(INPUTFILE, "r"))
+input_config = LammpsSamplingInput.from_file(INPUTFILE)
+input_config.validate()
 
 outpath = calcpath / "out"
 os.makedirs(outpath, exist_ok=False)
 
-lammps_path = Path(input_args["lammps_path"])
+lammps_path = input_config.lammps_path
+template_file_name = input_config.template_file
+data_path = calcpath / input_config.data_file
+model_paths = [calcpath / p for p in input_config.model_files]
 
-template_file_name = input_args["template_file"]
-data_path = calcpath / input_args["data_file"]
-model_paths = [calcpath / p for p in input_args["model_files"]]
-
-config_path = outpath / input_args["lammps_config_name"]
+config_path = outpath / input_config.lammps_config_name
 samples_file = outpath / "samples.xyz"
 full_traj_file = outpath / "traj+uncertainties.xyz"
 
-element_mapping = input_args["element_mapping"]
-cutoff_radius = input_args["cutoff_radius"]
-bin_count = input_args["bin_count"]
-seed = input_args["seed"]
+element_mapping = input_config.element_mapping
+cutoff_radius = input_config.cutoff_radius
+bin_count = input_config.bin_count
+seed = input_config.seed
 
 
 def parse_jinja_template(

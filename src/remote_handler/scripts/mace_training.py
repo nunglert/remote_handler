@@ -1,27 +1,29 @@
-import contextlib
-import json
 import logging
-import os
 import pathlib
 import subprocess
 import sys
 from pathlib import Path
-from typing import Generator, Optional
+from typing import Optional
 
 import ase.io
-import jinja2
 import numpy as np
+import yaml
 from ase import Atoms
 
+from remote_handler.scripts.input_models import MaceTrainingInput
+
+# Load and validate input configuration
 calcpath = Path(sys.argv[1])
 INPUTFILE = calcpath / "input_train.json"
-input_args = json.load(open(INPUTFILE, "r"))
+input_config = MaceTrainingInput.from_file(INPUTFILE)
+input_config.validate()
 
 rootpath = calcpath.parents[1]
 
-if len(input_args["database_files"]) > 1:
+# Combine database files if multiple provided
+if len(input_config.database_files) > 1:
     all_ats = []
-    for p in input_args["database_files"]:
+    for p in input_config.database_files:
         ats = ase.io.read(rootpath / p, index=":")
         if ats is Atoms:
             all_ats.append(ats)
@@ -30,16 +32,8 @@ if len(input_args["database_files"]) > 1:
     combined_path = calcpath / "combined_db.extxyz"
     ase.io.write(combined_path, all_ats)
     database_path = combined_path
-
 else:
-    database_path = rootpath / input_args["database_files"][0]
-
-
-template_file_name = input_args["template_file"]
-model_name = input_args["model_name"]
-seed = input_args["seed"]
-valid_fraction = input_args["validation_fraction"]
-train_runner = Path(input_args["train_runner"])
+    database_path = rootpath / input_config.database_files[0]
 
 config_path = calcpath / "mace_config.yaml"
 
@@ -92,55 +86,71 @@ def split_db(
     return (train_file, valid_file) if do_return_path else None
 
 
-def parse_jinja_template(
-    output_file: pathlib.Path,
-    template_dir: pathlib.Path,
-    template_file_name: str,
-    **kwargs,
-) -> None:
-    """Parse a Jinja2 template and write to file
-
-    Args:
-        output_file: Path to file to store the parsed template to
-        template_dir: Path to directory containing Jinja2 templates
-        template_file_name: File name of the template to use
-        **kwargs: Keyword arguments setting template parameters to fill
-    """
-    jinja_env = jinja2.Environment(
-        loader=jinja2.FileSystemLoader(template_dir),
-    )
-    template = jinja_env.get_template(template_file_name)
-    with open(output_file.resolve(), "w") as file:
-        file.write(template.render(**kwargs))
-
-
-def run_training_from_config_template(
-    config_file: pathlib.Path,
+def merge_config_with_paths(
+    user_config_file: pathlib.Path,
     model_name: str,
     seed: int,
     train_file: pathlib.Path,
     valid_file: pathlib.Path,
-    train_runner: str,
     storage_dir: pathlib.Path,
-    template_dir: pathlib.Path,
-    template_file_name: str,
-    logger: Optional[logging.Logger] = None,
-) -> None:
-    """Prepare a yaml configuration file for MACE training from a template and
-    train a model based on that template and the supplied data
+) -> dict:
+    """Load user's YAML config and merge with generated paths.
 
     Args:
-        config_file: Path to yaml file to store the MACE configuration to
+        user_config_file: Path to user's YAML config file
         model_name: Name tag of the model to be trained
         seed: Seed used for model training
         train_file: Path to file to read the training configurations from
         valid_file: Path to file to read the validation configurations from
-        train_runner: Path to MACE training runner script.
-            (Usually located at $MACE_ROOT_DIR/mace/cli/run_train.py)
+        storage_dir: Directory to store the MACE training outputs in
+
+    Returns:
+        Dictionary with merged configuration
+    """
+    # Load user's config
+    with open(user_config_file.resolve(), "r") as f:
+        config = yaml.safe_load(f) or {}
+
+    # Override/add paths managed by the script
+    config.update(
+        {
+            "name": model_name,
+            "seed": seed,
+            "train_file": str(train_file.resolve()),
+            "valid_file": str(valid_file.resolve()),
+            "checkpoints_dir": str((storage_dir / "checkpoints").resolve()),
+            "log_dir": str((storage_dir / "logs").resolve()),
+            "model_dir": str((storage_dir / "models").resolve()),
+            "results_dir": str((storage_dir / "results").resolve()),
+        }
+    )
+
+    return config
+
+
+def run_training_from_config(
+    config_file: pathlib.Path,
+    user_config_file: pathlib.Path,
+    model_name: str,
+    seed: int,
+    train_file: pathlib.Path,
+    valid_file: pathlib.Path,
+    train_runner: pathlib.Path,
+    storage_dir: pathlib.Path,
+    logger: Optional[logging.Logger] = None,
+) -> None:
+    """Prepare a yaml configuration file for MACE training and train a model.
+
+    Args:
+        config_file: Path to yaml file to store the final MACE configuration
+        user_config_file: Path to user's YAML config with training parameters
+        model_name: Name tag of the model to be trained
+        seed: Seed used for model training
+        train_file: Path to file to read the training configurations from
+        valid_file: Path to file to read the validation configurations from
+        train_runner: Path to MACE training runner script
         storage_dir: Directory to store the MACE training outputs in.
             Trained models are serialized in storage_dir/models
-        template_dir: Path to directory containing templates
-        template_file_name: File name of the template to use
         logger: Logger used to write additional output to
     """
     # Create model directory beforehand if it does not exist
@@ -148,22 +158,31 @@ def run_training_from_config_template(
     model_dir = storage_dir / "models"
     make_dir(model_dir)
 
-    parse_jinja_template(
-        config_file,
-        template_dir,
-        template_file_name,
-        name=model_name,
+    # Merge user config with generated paths
+    final_config = merge_config_with_paths(
+        user_config_file=user_config_file,
+        model_name=model_name,
         seed=seed,
-        train_file=str(train_file.resolve()),
-        valid_file=str(valid_file.resolve()),
-        checkpoints_dir=str((storage_dir / "checkpoints").resolve()),
-        log_dir=str((storage_dir / "logs").resolve()),
-        model_dir=str(model_dir.resolve()),
-        results_dir=str((storage_dir / "results").resolve()),
+        train_file=train_file,
+        valid_file=valid_file,
+        storage_dir=storage_dir,
     )
+
+    # Write final config
+    with open(config_file.resolve(), "w") as f:
+        yaml.safe_dump(
+            final_config, f, default_flow_style=False, sort_keys=False
+        )
+
+    # Run training
     try:
         subprocess.run(
-            ["python", train_runner, "--config", str(config_file.resolve())],
+            [
+                "python",
+                str(train_runner),
+                "--config",
+                str(config_file.resolve()),
+            ],
             check=True,
             stderr=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -175,7 +194,6 @@ def run_training_from_config_template(
                 f"{run_error.returncode}"
             )
             logger.error(run_error.stderr.decode("utf-8"))
-        # TODO: Check how to best handle the error here
         raise RuntimeError(run_error)
 
 
@@ -183,20 +201,20 @@ split = split_db(
     database_path,
     calcpath / "db.extxyz",
     do_return_path=True,
-    validation_fraction=valid_fraction,
+    validation_fraction=input_config.validation_fraction,
+    seed=input_config.seed,
 )
 train_path = split[0]
 valid_path = split[1]
 
-run_training_from_config_template(
+run_training_from_config(
     config_file=config_path,
-    model_name=model_name,
-    seed=seed,
+    user_config_file=rootpath / input_config.config_file,
+    model_name=input_config.model_name,
+    seed=input_config.seed,
     train_file=train_path,
     valid_file=valid_path,
-    train_runner=str(train_runner),
+    train_runner=input_config.train_runner,
     storage_dir=calcpath,
-    template_dir=rootpath,
-    template_file_name=template_file_name,
     logger=logging.getLogger(),
 )
