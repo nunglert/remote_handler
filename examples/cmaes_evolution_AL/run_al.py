@@ -140,8 +140,9 @@ vasp_evaluator = VASPEvaluator(
 # ---------------------------------------------------------------------------
 mace_trainer = MaceModelTrainer(
     remote_fs=gpu_fs,
+    cluster_config=gpu_cluster_config,
     training_script=scripts_dir / "mace_training.py",
-    template_path=mace_template,
+    config_file=mace_template,
     remote_mace_train_runner=Path(
         "/home/nico.unglert/code/mace-freeze/scripts/run_train.py"
     ),

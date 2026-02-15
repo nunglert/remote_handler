@@ -12,6 +12,7 @@ from remote_handler.scripts.input_models import (
     LammpsSamplingInput,
     MaceTrainingInput,
     OptimizeTrajInput,
+    ScriptInput,
 )
 
 
@@ -73,7 +74,7 @@ class TestMaceTrainingInput:
         with pytest.raises(ScriptInputError) as exc_info:
             MaceTrainingInput.from_file(input_file)
 
-        assert "Invalid fields" in str(exc_info.value)
+        assert "missing fields" in str(exc_info.value).lower()
 
     def test_validate_empty_database_files(self, tmp_path):
         """Test validation with empty database_files."""
@@ -449,7 +450,7 @@ class TestCmaesSamplingInput:
         with pytest.raises(ScriptInputError) as exc_info:
             CmaesSamplingInput.from_file(input_file)
 
-        assert "Invalid fields" in str(exc_info.value)
+        assert "missing fields" in str(exc_info.value).lower()
 
     def test_validate_empty_founder(self):
         """Test validation with empty founder."""
@@ -520,3 +521,77 @@ class TestCmaesSamplingInput:
         )
 
         config.validate()  # Should not raise
+
+
+class TestScriptInputBaseClass:
+    """Tests for ScriptInput base class functionality."""
+
+    def test_from_dict_filters_unknown_keys(self):
+        """Test that from_dict filters unknown keys with warning."""
+        data = {
+            "founder": "/path/to/POSCAR",
+            "label": "test",
+            "stub": True,  # Unknown key
+            "extra_field": 42,  # Unknown key
+        }
+
+        config = CmaesSamplingInput.from_dict(data)
+
+        assert config.founder == "/path/to/POSCAR"
+        assert config.label == "test"
+        assert not hasattr(config, "stub")
+        assert not hasattr(config, "extra_field")
+
+    def test_from_dict_converts_path_fields(self, tmp_path):
+        """Test that from_dict converts _path_fields to Path objects."""
+        config_yaml = tmp_path / "config.yaml"
+        config_yaml.write_text("model: MACE")
+
+        data = {
+            "database_files": ["data.xyz"],
+            "train_runner": "/usr/bin/mace_run_train",
+            "config_file": str(config_yaml),
+            "model_name": "test",
+            "seed": 42,
+        }
+
+        config = MaceTrainingInput.from_dict(data)
+
+        assert isinstance(config.train_runner, Path)
+        assert isinstance(config.config_file, Path)
+
+    def test_from_dict_missing_required_field(self):
+        """Test that from_dict raises on missing required fields."""
+        data = {"label": "test"}  # Missing 'founder'
+
+        with pytest.raises(ScriptInputError) as exc_info:
+            CmaesSamplingInput.from_dict(data)
+
+        assert "missing fields" in str(exc_info.value).lower()
+
+    def test_from_file_delegates_to_from_dict(self, tmp_path):
+        """Test that from_file with unknown keys still works via from_dict."""
+        input_file = tmp_path / "input.json"
+        input_data = {
+            "founder": "/path/to/POSCAR",
+            "stub": True,  # Unknown key - should be filtered
+        }
+        input_file.write_text(json.dumps(input_data))
+
+        config = CmaesSamplingInput.from_file(input_file)
+
+        assert config.founder == "/path/to/POSCAR"
+        assert not hasattr(config, "stub")
+
+    def test_from_dict_no_path_fields(self):
+        """Test from_dict with a class that has no _path_fields."""
+        data = {
+            "DATABASE": "data.xyz",
+            "launch_command": "mpirun vasp",
+            "INCAR_kwargs": {"encut": 500},
+        }
+
+        config = DftSinglepointInput.from_dict(data)
+
+        assert config.DATABASE == "data.xyz"
+        assert isinstance(config.DATABASE, str)

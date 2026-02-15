@@ -22,6 +22,10 @@ from remote_handler.exceptions import (
     FileSystemError,
     WorkflowError,
 )
+from remote_handler.scripts.input_models import (
+    CmaesSamplingInput,
+    LammpsSamplingInput,
+)
 
 from .active_learning_base import Sampler
 
@@ -115,8 +119,10 @@ class LammpsSampler(Sampler):
                 "cutoff_radius": self.uncertainty_cutoff_radius,
                 "bin_count": self.num_samples,
                 "seed": np.random.randint(1e6),
-                "stub": self.stub,
             }
+
+            # Validate input dict against the script's expected schema
+            LammpsSamplingInput.from_dict(script_input)
 
             self.script_input_file = self.results_dir / "input_sample.json"
             with open(self.script_input_file, "w") as f:
@@ -346,6 +352,9 @@ class CMAESSampler(Sampler):
             self.script_input_file = self.sample_dir / "input_cmaes.json"
 
             update_default_args(kwargs, script_input)
+
+            # Validate input dict against the script's expected schema
+            CmaesSamplingInput.from_dict(script_input)
 
             with open(self.script_input_file, "w") as f:
                 f.write(json.dumps(script_input, indent=2))

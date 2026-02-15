@@ -1,17 +1,21 @@
-"""Integration tests for mace_training.py script."""
+"""Integration tests for mace_training.py script and MaceModelTrainer."""
 
 import json
 import os
+import pickle
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import ase.io
+import numpy as np
 import pytest
 from ase import Atoms
 
+from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.exceptions import ScriptInputError
+from remote_handler.workflows.trainers import MaceModelTrainer
 
 
 @pytest.fixture(scope="session")
@@ -236,3 +240,78 @@ class TestMaceTrainingIntegration:
         assert (calc_dir / "combined_db.extxyz").exists()
         combined = ase.io.read(calc_dir / "combined_db.extxyz", index=":")
         assert len(combined) == 20
+
+
+@pytest.mark.integration
+class TestMaceModelTrainerIntegration:
+    """Integration tests for MaceModelTrainer workflow class."""
+
+    @pytest.mark.skipif(
+        not os.getenv("MACE_TRAIN_RUNNER"),
+        reason="MACE_TRAIN_RUNNER environment variable not set",
+    )
+    def test_full_local_training(
+        self, integration_temp_dir, test_atoms_database, local_fs
+    ):
+        """Test MaceModelTrainer with actual local MACE training.
+
+        Requires MACE_TRAIN_RUNNER env var pointing to MACE run_train.py.
+        """
+        from remote_handler.scripts import input_models
+
+        root_dir = integration_temp_dir / "trainer_full"
+        if root_dir.exists():
+            shutil.rmtree(root_dir)
+        root_dir.mkdir()
+
+        train_runner = os.getenv("MACE_TRAIN_RUNNER")
+
+        # Write database
+        db_file = root_dir / "training_data.xyz"
+        ase.io.write(db_file, test_atoms_database)
+
+        # Create MACE config template
+        template = root_dir / "mace_config.yaml"
+        template.write_text(
+            "model: MACE\n"
+            "batch_size: 4\n"
+            "max_num_epochs: 2\n"
+            "hidden_irreps: 16x0e\n"
+            "r_max: 4.0\n"
+            "max_ell: 2\n"
+            "device: cpu\n"
+            "default_dtype: float32\n"
+            "E0s: average\n"
+        )
+
+        local_cluster_config = ClusterConfig(
+            remote_machine="datalab",
+            partition="GPU-a40",
+            conda_env="clinamen",
+            conda_source="/home/nico.unglert/miniconda3",
+            savepath=str(root_dir / "remote_savepath"),
+            template="datalab.sh.j2",
+        )
+
+        trainer = MaceModelTrainer(
+            remote_fs=local_fs,
+            cluster_config=local_cluster_config,
+            training_script=Path(input_models.__file__).parent
+            / "mace_training.py",
+            config_file=template,
+            remote_mace_train_runner=train_runner,
+            num_models=2,
+            stub=False,
+            loop_time=10,
+        )
+
+        calcdir = root_dir / "iteration_0"
+        calcdir.mkdir()
+        trainer.update(calcdir, db_file)
+
+        model_files = trainer.get_trained_model()
+
+        assert len(model_files) == 2
+        for model_file in model_files:
+            assert model_file.exists()
+            assert "stagetwo" in model_file.name

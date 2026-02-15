@@ -12,11 +12,12 @@ Each script has a corresponding Input dataclass that can be loaded from JSON:
     >>> config.validate()
 """
 
+import dataclasses
 import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
 from remote_handler.exceptions import ScriptInputError
 
@@ -24,41 +25,65 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class MaceTrainingInput:
-    """Input configuration for mace_training.py script.
+class ScriptInput:
+    """Base class for script input configurations.
 
-    Attributes:
-        database_files: List of paths to database files (will be combined if multiple)
-        train_runner: Path to MACE train_runner executable (e.g., mace_run_train)
-        config_file: Path to user's YAML config with training parameters
-        model_name: Name tag for the trained model
-        seed: Random seed for database splitting and training
-        validation_fraction: Fraction of data to use for validation (default: 0.1)
+    Provides shared ``from_file`` and ``from_dict`` class methods so that
+    subclasses only need to declare their fields and a ``validate`` method.
 
-    Example:
-        >>> config = MaceTrainingInput.from_file(Path("input_train.json"))
-        >>> config.validate()
+    Subclasses can set ``_path_fields`` to a tuple of field names that should
+    be converted from strings to ``Path`` objects when loading from a dict.
     """
 
-    database_files: list[str]
-    train_runner: Path
-    config_file: Path
-    model_name: str
-    seed: int
-    validation_fraction: float = 0.1
+    _path_fields: ClassVar[tuple[str, ...]] = ()
 
     @classmethod
-    def from_file(cls, input_file: Path) -> "MaceTrainingInput":
-        """Load configuration from JSON file.
+    def from_dict(cls, data: dict) -> "ScriptInput":
+        """Create an instance from a dictionary, filtering unknown keys.
+
+        Unknown keys are silently filtered with a warning log message.
+        Fields listed in ``_path_fields`` are converted to ``Path`` objects.
+
+        Args:
+            data: Dictionary of input parameters
+
+        Returns:
+            Instance of the subclass
+
+        Raises:
+            ScriptInputError: If required fields are missing
+        """
+        known = {f.name for f in dataclasses.fields(cls)}
+        unknown = set(data) - known
+        if unknown:
+            logger.warning(f"{cls.__name__}: ignoring unknown keys {unknown}")
+        filtered = {k: v for k, v in data.items() if k in known}
+
+        # Convert path fields
+        for field in cls._path_fields:
+            if field in filtered:
+                filtered[field] = Path(filtered[field]).expanduser()
+
+        try:
+            return cls(**filtered)
+        except TypeError as e:
+            raise ScriptInputError(
+                f"Invalid or missing fields for {cls.__name__}: {e}"
+            )
+
+    @classmethod
+    def from_file(cls, input_file: Path) -> "ScriptInput":
+        """Load configuration from a JSON file.
 
         Args:
             input_file: Path to JSON input file
 
         Returns:
-            MaceTrainingInput instance
+            Instance of the subclass
 
         Raises:
-            ScriptInputError: If file doesn't exist, invalid JSON, or missing fields
+            ScriptInputError: If file doesn't exist, invalid JSON, or
+                missing fields
         """
         input_file = Path(input_file).expanduser()
 
@@ -78,21 +103,44 @@ class MaceTrainingInput:
                 f"Failed to read input file: {input_file}\n" f"Error: {e}"
             )
 
-        # Convert string paths to Path objects
-        if "train_runner" in data:
-            data["train_runner"] = Path(data["train_runner"]).expanduser()
-        if "config_file" in data:
-            data["config_file"] = Path(data["config_file"]).expanduser()
+        return cls.from_dict(data)
 
-        try:
-            return cls(**data)
-        except TypeError as e:
-            raise ScriptInputError(
-                f"Invalid fields in input file: {input_file}\n"
-                f"Error: {e}\n"
-                f"Expected fields: database_files, train_runner, config_file, "
-                f"model_name, seed, validation_fraction (optional)"
-            )
+    def validate(self) -> None:
+        """Validate configuration parameters.
+
+        Override in subclasses to add domain-specific checks.
+
+        Raises:
+            ScriptInputError: If any parameter is invalid
+        """
+        pass
+
+
+@dataclass
+class MaceTrainingInput(ScriptInput):
+    """Input configuration for mace_training.py script.
+
+    Attributes:
+        database_files: List of paths to database files (will be combined if multiple)
+        train_runner: Path to MACE train_runner executable (e.g., mace_run_train)
+        config_file: Path to user's YAML config with training parameters
+        model_name: Name tag for the trained model
+        seed: Random seed for database splitting and training
+        validation_fraction: Fraction of data to use for validation (default: 0.1)
+
+    Example:
+        >>> config = MaceTrainingInput.from_file(Path("input_train.json"))
+        >>> config.validate()
+    """
+
+    _path_fields: ClassVar[tuple[str, ...]] = ("train_runner", "config_file")
+
+    database_files: list[str]
+    train_runner: Path
+    config_file: Path
+    model_name: str
+    seed: int
+    validation_fraction: float = 0.1
 
     def validate(self) -> None:
         """Validate configuration parameters.
@@ -118,7 +166,7 @@ class MaceTrainingInput:
 
 
 @dataclass
-class LammpsSamplingInput:
+class LammpsSamplingInput(ScriptInput):
     """Input configuration for lammps_sampling.py script.
 
     Attributes:
@@ -137,6 +185,8 @@ class LammpsSamplingInput:
         >>> config.validate()
     """
 
+    _path_fields: ClassVar[tuple[str, ...]] = ("lammps_path",)
+
     lammps_path: Path
     template_file: str
     data_file: str
@@ -146,44 +196,6 @@ class LammpsSamplingInput:
     bin_count: int
     seed: int
     lammps_config_name: str = "lammps.in"
-
-    @classmethod
-    def from_file(cls, input_file: Path) -> "LammpsSamplingInput":
-        """Load configuration from JSON file.
-
-        Args:
-            input_file: Path to JSON input file
-
-        Returns:
-            LammpsSamplingInput instance
-
-        Raises:
-            ScriptInputError: If file doesn't exist, invalid JSON, or missing fields
-        """
-        input_file = Path(input_file).expanduser()
-
-        if not input_file.exists():
-            raise ScriptInputError(f"Input file not found: {input_file}")
-
-        try:
-            with open(input_file) as f:
-                data = json.load(f)
-        except json.JSONDecodeError as e:
-            raise ScriptInputError(
-                f"Invalid JSON in input file: {input_file}\n"
-                f"Error at line {e.lineno}, column {e.colno}: {e.msg}"
-            )
-
-        # Convert paths
-        if "lammps_path" in data:
-            data["lammps_path"] = Path(data["lammps_path"]).expanduser()
-
-        try:
-            return cls(**data)
-        except TypeError as e:
-            raise ScriptInputError(
-                f"Invalid fields in input file: {input_file}\n" f"Error: {e}"
-            )
 
     def validate(self) -> None:
         """Validate configuration parameters.
@@ -211,7 +223,7 @@ class LammpsSamplingInput:
 
 
 @dataclass
-class DftSinglepointInput:
+class DftSinglepointInput(ScriptInput):
     """Input configuration for dft_singlepoint.py script.
 
     Attributes:
@@ -227,40 +239,6 @@ class DftSinglepointInput:
     DATABASE: str
     launch_command: str
     INCAR_kwargs: dict[str, Any]
-
-    @classmethod
-    def from_file(cls, input_file: Path) -> "DftSinglepointInput":
-        """Load configuration from JSON file.
-
-        Args:
-            input_file: Path to JSON input file
-
-        Returns:
-            DftSinglepointInput instance
-
-        Raises:
-            ScriptInputError: If file doesn't exist, invalid JSON, or missing fields
-        """
-        input_file = Path(input_file).expanduser()
-
-        if not input_file.exists():
-            raise ScriptInputError(f"Input file not found: {input_file}")
-
-        try:
-            with open(input_file) as f:
-                data = json.load(f)
-        except json.JSONDecodeError as e:
-            raise ScriptInputError(
-                f"Invalid JSON in input file: {input_file}\n"
-                f"Error at line {e.lineno}, column {e.colno}: {e.msg}"
-            )
-
-        try:
-            return cls(**data)
-        except TypeError as e:
-            raise ScriptInputError(
-                f"Invalid fields in input file: {input_file}\n" f"Error: {e}"
-            )
 
     def validate(self) -> None:
         """Validate configuration parameters.
@@ -279,7 +257,7 @@ class DftSinglepointInput:
 
 
 @dataclass
-class OptimizeTrajInput:
+class OptimizeTrajInput(ScriptInput):
     """Input configuration for optimize_traj.py script.
 
     Attributes:
@@ -307,40 +285,6 @@ class OptimizeTrajInput:
     calculator_args: Optional[dict[str, Any]] = None
     optimization_args: Optional[dict[str, Any]] = None
     steinhardt_args: Optional[dict[str, Any]] = None
-
-    @classmethod
-    def from_file(cls, input_file: Path) -> "OptimizeTrajInput":
-        """Load configuration from JSON file.
-
-        Args:
-            input_file: Path to JSON input file
-
-        Returns:
-            OptimizeTrajInput instance
-
-        Raises:
-            ScriptInputError: If file doesn't exist, invalid JSON, or missing fields
-        """
-        input_file = Path(input_file).expanduser()
-
-        if not input_file.exists():
-            raise ScriptInputError(f"Input file not found: {input_file}")
-
-        try:
-            with open(input_file) as f:
-                data = json.load(f)
-        except json.JSONDecodeError as e:
-            raise ScriptInputError(
-                f"Invalid JSON in input file: {input_file}\n"
-                f"Error at line {e.lineno}, column {e.colno}: {e.msg}"
-            )
-
-        try:
-            return cls(**data)
-        except TypeError as e:
-            raise ScriptInputError(
-                f"Invalid fields in input file: {input_file}\n" f"Error: {e}"
-            )
 
     def validate(self) -> None:
         """Validate configuration parameters.
@@ -371,7 +315,7 @@ class OptimizeTrajInput:
 
 
 @dataclass
-class CmaesSamplingInput:
+class CmaesSamplingInput(ScriptInput):
     """Input configuration for cmaes_sampling.py script.
 
     Attributes:
@@ -425,40 +369,6 @@ class CmaesSamplingInput:
     bulk_terminate: bool = False
     optimizer: str = "FIRE"
 
-    @classmethod
-    def from_file(cls, input_file: Path) -> "CmaesSamplingInput":
-        """Load configuration from JSON file.
-
-        Args:
-            input_file: Path to JSON input file
-
-        Returns:
-            CmaesSamplingInput instance
-
-        Raises:
-            ScriptInputError: If file doesn't exist, invalid JSON, or missing fields
-        """
-        input_file = Path(input_file).expanduser()
-
-        if not input_file.exists():
-            raise ScriptInputError(f"Input file not found: {input_file}")
-
-        try:
-            with open(input_file) as f:
-                data = json.load(f)
-        except json.JSONDecodeError as e:
-            raise ScriptInputError(
-                f"Invalid JSON in input file: {input_file}\n"
-                f"Error at line {e.lineno}, column {e.colno}: {e.msg}"
-            )
-
-        try:
-            return cls(**data)
-        except TypeError as e:
-            raise ScriptInputError(
-                f"Invalid fields in input file: {input_file}\n" f"Error: {e}"
-            )
-
     def validate(self) -> None:
         """Validate configuration parameters.
 
@@ -499,7 +409,7 @@ class CmaesSamplingInput:
 
 
 @dataclass
-class CmaesOptimizeInput:
+class CmaesOptimizeInput(ScriptInput):
     """Input configuration for cmaes_optimize.py script.
 
     Attributes:
@@ -527,40 +437,6 @@ class CmaesOptimizeInput:
     bulk_terminate: bool = False
     optimizer: str = "FIRE"
     output_dir: str = "optimized"
-
-    @classmethod
-    def from_file(cls, input_file: Path) -> "CmaesOptimizeInput":
-        """Load configuration from JSON file.
-
-        Args:
-            input_file: Path to JSON input file
-
-        Returns:
-            CmaesOptimizeInput instance
-
-        Raises:
-            ScriptInputError: If file doesn't exist, invalid JSON, or missing fields
-        """
-        input_file = Path(input_file).expanduser()
-
-        if not input_file.exists():
-            raise ScriptInputError(f"Input file not found: {input_file}")
-
-        try:
-            with open(input_file) as f:
-                data = json.load(f)
-        except json.JSONDecodeError as e:
-            raise ScriptInputError(
-                f"Invalid JSON in input file: {input_file}\n"
-                f"Error at line {e.lineno}, column {e.colno}: {e.msg}"
-            )
-
-        try:
-            return cls(**data)
-        except TypeError as e:
-            raise ScriptInputError(
-                f"Invalid fields in input file: {input_file}\n" f"Error: {e}"
-            )
 
     def validate(self) -> None:
         """Validate configuration parameters.

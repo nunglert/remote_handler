@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 
+from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.workflows import (
     LammpsSampler,
     MaceModelTrainer,
@@ -31,6 +32,19 @@ def mock_remote_fs():
     mock_fs = MagicMock()
     mock_fs.slurm_config = {"savepath": "/remote/path"}
     return mock_fs
+
+
+@pytest.fixture
+def mock_cluster_config():
+    """Create a mock ClusterConfig for stub-mode tests."""
+    return ClusterConfig(
+        remote_machine="mock",
+        partition="default",
+        conda_env="test",
+        conda_source="/opt/conda",
+        savepath="/tmp/remote_handler",
+        template="mock.sh.j2",
+    )
 
 
 @pytest.fixture(scope="session")
@@ -80,7 +94,11 @@ class TestMACE_MD_ALWorkflow:
     """Test integrated workflow with multiple components using ActiveLearningHandler."""
 
     def test_full_al_cycle_stub(
-        self, mock_remote_fs, mock_xyz_file, workflow_test_dir
+        self,
+        mock_remote_fs,
+        mock_cluster_config,
+        mock_xyz_file,
+        workflow_test_dir,
     ):
         """Test MACE MD AL workflow: evaluation → training → LAMMPS sampling."""
 
@@ -117,6 +135,7 @@ class TestMACE_MD_ALWorkflow:
         evaluator = VASPEvaluator(
             singlepoint_script=dft_script,
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             num_parallel=5,
             incar_kwargs={"encut": 300},
             stub=True,
@@ -124,8 +143,9 @@ class TestMACE_MD_ALWorkflow:
 
         trainer = MaceModelTrainer(
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             training_script=train_script,
-            template_path=template,
+            config_file=template,
             remote_mace_train_runner="/remote/mace/run_train.py",
             num_models=3,
             stub=True,
@@ -178,7 +198,9 @@ class TestMACE_MD_ALWorkflow:
 class TestNestedSamplingALWorkflow:
     """Tests for full nested sampling active learning workflow using ActiveLearningHandler."""
 
-    def test_nested_sampling_al_cycle(self, mock_remote_fs, workflow_test_dir):
+    def test_nested_sampling_al_cycle(
+        self, mock_remote_fs, mock_cluster_config, workflow_test_dir
+    ):
         """Test NS AL workflow: sampling → evaluation → MACE training."""
         # This tests the workflow from examples/nested_sampling_AL/ns_active_learning.py
 
@@ -217,6 +239,7 @@ class TestNestedSamplingALWorkflow:
         evaluator = VASPEvaluator(
             singlepoint_script=dft_script,
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             num_parallel=5,
             incar_kwargs={"ENCUT": 400, "EDIFF": 1e-5},
             stub=True,
@@ -225,6 +248,7 @@ class TestNestedSamplingALWorkflow:
         trainer = MACETrainer(
             training_script=training_script,
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             config_file=config_file,
             stub=True,
         )
@@ -267,7 +291,7 @@ class TestNestedSamplingALWorkflow:
         assert model_files[0].suffix == ".pkl"
 
     def test_nested_sampling_al_with_neuralil(
-        self, mock_remote_fs, workflow_test_dir
+        self, mock_remote_fs, mock_cluster_config, workflow_test_dir
     ):
         """Test NS AL workflow with NeuralilILTrainer."""
 
@@ -303,6 +327,7 @@ class TestNestedSamplingALWorkflow:
         evaluator = VASPEvaluator(
             singlepoint_script=dft_script,
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             num_parallel=5,
             incar_kwargs={"ENCUT": 400},
             stub=True,
@@ -311,6 +336,7 @@ class TestNestedSamplingALWorkflow:
         trainer = NeuralilILTrainer(
             training_script=training_script,
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             training_kwargs={"pickle_file_name": "neuralil.pkl"},
             stub=True,
         )

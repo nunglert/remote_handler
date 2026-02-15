@@ -141,7 +141,7 @@ Train MACE machine learning potentials:
    # Create MACE trainer
    mace_trainer = MaceModelTrainer(
        training_script="train_mace.py",
-       template_path="mace_config_template.yaml",
+       config_file="mace_config_template.yaml",
        remote_mace_train_runner="/path/to/mace/run_train.py",
        cluster_config=config,
        filesystem=remote_fs,
@@ -220,7 +220,7 @@ Combine sampling, evaluation, and training into a complete active learning loop:
 
    trainer = MaceModelTrainer(
        training_script="train_mace.py",
-       template_path="mace_config.yaml.j2",
+       config_file="mace_config.yaml.j2",
        remote_mace_train_runner="/path/to/run_train.py",
        cluster_config=config,
        filesystem=remote_fs,

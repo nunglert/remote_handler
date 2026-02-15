@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 
+from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.workflows import (
     LammpsSampler,
     MaceModelTrainer,
@@ -30,6 +31,19 @@ def mock_remote_fs():
     mock_fs = MagicMock()
     mock_fs.slurm_config = {"savepath": "/remote/path"}
     return mock_fs
+
+
+@pytest.fixture
+def mock_cluster_config():
+    """Create a mock ClusterConfig for stub-mode tests."""
+    return ClusterConfig(
+        remote_machine="mock",
+        partition="default",
+        conda_env="test",
+        conda_source="/opt/conda",
+        savepath="/tmp/remote_handler",
+        template="mock.sh.j2",
+    )
 
 
 @pytest.fixture(scope="session")
@@ -105,7 +119,9 @@ def mock_model_files(tmp_path):
 class TestVASPEvaluator:
     """Test VASPEvaluator in stub mode."""
 
-    def test_init_vasp_evaluator(self, mock_remote_fs, tmp_path):
+    def test_init_vasp_evaluator(
+        self, mock_remote_fs, mock_cluster_config, tmp_path
+    ):
         """Test VASPEvaluator initialization."""
         script = tmp_path / "dft_singlepoint.py"
         script.touch()
@@ -113,6 +129,7 @@ class TestVASPEvaluator:
         evaluator = VASPEvaluator(
             singlepoint_script=script,
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             num_parallel=5,
             incar_kwargs={"encut": 300, "xc": "pbe"},
             remote_savepath="/remote/calc",
@@ -124,7 +141,7 @@ class TestVASPEvaluator:
         assert evaluator.incar_kwargs["encut"] == 300
 
     def test_vasp_stub_outputs(
-        self, mock_remote_fs, temp_calcdir, mock_xyz_file
+        self, mock_remote_fs, mock_cluster_config, temp_calcdir, mock_xyz_file
     ):
         """Test VASPEvaluator creates stub outputs."""
         script = temp_calcdir / "dft_singlepoint.py"
@@ -133,6 +150,7 @@ class TestVASPEvaluator:
         evaluator = VASPEvaluator(
             singlepoint_script=script,
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             num_parallel=5,
             incar_kwargs={"encut": 300},
             stub=True,
@@ -157,7 +175,9 @@ class TestVASPEvaluator:
             assert "REF_forces" in atoms.arrays
             assert atoms.calc is None
 
-    def test_vasp_create_stub_outputs(self, mock_remote_fs, tmp_path):
+    def test_vasp_create_stub_outputs(
+        self, mock_remote_fs, mock_cluster_config, tmp_path
+    ):
         """Test _create_stub_outputs method directly."""
         script = tmp_path / "dft_singlepoint.py"
         script.touch()
@@ -165,6 +185,7 @@ class TestVASPEvaluator:
         evaluator = VASPEvaluator(
             singlepoint_script=script,
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             num_parallel=5,
             incar_kwargs={"encut": 300},
             stub=True,
@@ -393,7 +414,9 @@ class TestNSTrajectorySampler:
 class TestMaceModelTrainer:
     """Test MaceModelTrainer in stub mode."""
 
-    def test_init_mace_trainer(self, mock_remote_fs, tmp_path):
+    def test_init_mace_trainer(
+        self, mock_remote_fs, mock_cluster_config, tmp_path
+    ):
         """Test MaceModelTrainer initialization."""
         script = tmp_path / "mace_training.py"
         script.touch()
@@ -402,8 +425,9 @@ class TestMaceModelTrainer:
 
         trainer = MaceModelTrainer(
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             training_script=script,
-            template_path=template,
+            config_file=template,
             remote_mace_train_runner="/remote/mace/run_train.py",
             num_models=5,
             stub=True,
@@ -413,7 +437,7 @@ class TestMaceModelTrainer:
         assert trainer.num_models == 5
 
     def test_mace_trainer_stub_outputs(
-        self, mock_remote_fs, temp_calcdir, mock_xyz_file
+        self, mock_remote_fs, mock_cluster_config, temp_calcdir, mock_xyz_file
     ):
         """Test MaceModelTrainer creates stub model outputs."""
         script = temp_calcdir / "mace_training.py"
@@ -423,8 +447,9 @@ class TestMaceModelTrainer:
 
         trainer = MaceModelTrainer(
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             training_script=script,
-            template_path=template,
+            config_file=template,
             remote_mace_train_runner="/remote/mace/run_train.py",
             num_models=3,
             stub=True,
@@ -449,7 +474,9 @@ class TestMaceModelTrainer:
                 assert "model_type" in model_data
                 assert model_data["model_type"] == "MACE"
 
-    def test_mace_trainer_create_stub_outputs(self, mock_remote_fs, tmp_path):
+    def test_mace_trainer_create_stub_outputs(
+        self, mock_remote_fs, mock_cluster_config, tmp_path
+    ):
         """Test _create_stub_outputs method directly."""
         script = tmp_path / "mace_training.py"
         script.touch()
@@ -458,8 +485,9 @@ class TestMaceModelTrainer:
 
         trainer = MaceModelTrainer(
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             training_script=script,
-            template_path=template,
+            config_file=template,
             remote_mace_train_runner="/remote/mace/run_train.py",
             num_models=4,
             stub=True,
@@ -486,7 +514,9 @@ class TestMaceModelTrainer:
 class TestMACETrainer:
     """Test MACETrainer (JAXNEST version) in stub mode."""
 
-    def test_init_jaxnest_mace_trainer(self, mock_remote_fs, tmp_path):
+    def test_init_jaxnest_mace_trainer(
+        self, mock_remote_fs, mock_cluster_config, tmp_path
+    ):
         """Test MACETrainer initialization."""
         script = tmp_path / "mace_training.py"
         script.touch()
@@ -496,6 +526,7 @@ class TestMACETrainer:
         trainer = MACETrainer(
             training_script=script,
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             config_file=config,
             stub=True,
         )
@@ -504,7 +535,7 @@ class TestMACETrainer:
         assert trainer.training_fraction == 0.9
 
     def test_jaxnest_mace_trainer_stub_outputs(
-        self, mock_remote_fs, temp_calcdir, mock_xyz_file
+        self, mock_remote_fs, mock_cluster_config, temp_calcdir, mock_xyz_file
     ):
         """Test MACETrainer creates stub model output."""
         script = temp_calcdir / "mace_training.py"
@@ -515,6 +546,7 @@ class TestMACETrainer:
         trainer = MACETrainer(
             training_script=script,
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             config_file=config,
             stub=True,
         )
@@ -538,7 +570,9 @@ class TestMACETrainer:
             assert "model.max_ell" in gin_config
             assert "final_train_loss" in params
 
-    def test_jaxnest_mace_create_stub_outputs(self, mock_remote_fs, tmp_path):
+    def test_jaxnest_mace_create_stub_outputs(
+        self, mock_remote_fs, mock_cluster_config, tmp_path
+    ):
         """Test _create_stub_outputs method directly."""
         script = tmp_path / "mace_training.py"
         script.touch()
@@ -548,6 +582,7 @@ class TestMACETrainer:
         trainer = MACETrainer(
             training_script=script,
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             config_file=config,
             stub=True,
         )
@@ -573,7 +608,9 @@ class TestMACETrainer:
 class TestNeuralilILTrainer:
     """Tests for NeuralilIL model trainer."""
 
-    def test_neuralil_trainer_initialization(self, mock_remote_fs, tmp_path):
+    def test_neuralil_trainer_initialization(
+        self, mock_remote_fs, mock_cluster_config, tmp_path
+    ):
         """Test NeuralilILTrainer can be initialized."""
         training_script = tmp_path / "train_neuralil.py"
         training_script.touch()
@@ -581,6 +618,7 @@ class TestNeuralilILTrainer:
         trainer = NeuralilILTrainer(
             training_script=training_script,
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             remote_savepath="/remote/train",
             training_kwargs={
                 "pickle_file_name": "neuralil_model.pkl",
@@ -597,7 +635,9 @@ class TestNeuralilILTrainer:
             trainer.training_kwargs["pickle_file_name"] == "neuralil_model.pkl"
         )
 
-    def test_neuralil_trainer_stub_outputs(self, mock_remote_fs, tmp_path):
+    def test_neuralil_trainer_stub_outputs(
+        self, mock_remote_fs, mock_cluster_config, tmp_path
+    ):
         """Test NeuralilILTrainer creates realistic stub outputs."""
         training_script = tmp_path / "train_neuralil.py"
         training_script.touch()
@@ -605,6 +645,7 @@ class TestNeuralilILTrainer:
         trainer = NeuralilILTrainer(
             training_script=training_script,
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             training_kwargs={"pickle_file_name": "neuralil_model.pkl"},
             stub=True,
         )

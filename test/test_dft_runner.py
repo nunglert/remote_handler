@@ -154,6 +154,7 @@ def instance(default_params):
     return handler, params
 
 
+@pytest.mark.heavy
 def test_init(instance):
     handler, params = instance
 
@@ -161,6 +162,7 @@ def test_init(instance):
     assert handler.remote_fs.exists(handler.savepath / "calcdirs")
 
 
+@pytest.mark.heavy
 def test_allocate_data(instance):
     handler, params = instance
 
