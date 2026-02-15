@@ -21,8 +21,11 @@ Usage:
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
+
+import ase.io
 
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import RemoteFileSystem
@@ -39,7 +42,7 @@ logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 # ---------------------------------------------------------------------------
 # example_dir = Path(__file__).parent.resolve()
 calchome = Path(
-    "/home/nico.unglert/code/remote_handler/examples/cmaes_evolution_AL"
+    "/home/nico.unglert/code/remote_handler/experiments/clinamen/run0/"
 )
 scripts_dir = Path(input_models.__file__).parent
 config_dir = calchome / "config"
@@ -70,19 +73,38 @@ dft_cluster_config = ClusterConfig(
     template="lugus.sh.j2",
 )
 
+
 # ---------------------------------------------------------------------------
 # Inputs  (adjust to your system)
 # ---------------------------------------------------------------------------
-founder_poscar = inputs_dir / "POSCAR_si_vacancy"
+def create_founder(founder_path):
+    from ase.build import bulk
+    from ase.io import write
 
+    si_bulk = bulk("Si", "diamond", a=5.43, cubic=True) * (2, 1, 1)
+    del si_bulk[-1]
+    write(founder_path, si_bulk, format="vasp")
+    return founder_path
+
+
+founder_poscar = create_founder(inputs_dir / "POSCAR_si_vacancy")
+
+# initial_db = example_dir / "inputs" / "initial_database.extxyz"
+# initial_models = [
+#     example_dir / "inputs" / "models" / f"model_{i}.model"
+#     for i in range(5)
+# ]
 mace_template = config_dir / "mace_config.yaml"
 foundation_model = inputs_dir / "2023-12-10-mace-128-L0_energy_epoch-249.model"
+
+# Working directory for AL iterations
+# calchome = example_dir / "al_runs"
 
 # ---------------------------------------------------------------------------
 # 1. Sampler: BatchCMAESSampler
 # ---------------------------------------------------------------------------
 cmaes_sampler = BatchCMAESSampler(
-    batch_size=1,
+    batch_size=20,
     remote_fs=gpu_fs,
     cluster_config=gpu_cluster_config,
     sampling_script=scripts_dir / "clinamen2" / "cmaes_sampling.py",
@@ -91,11 +113,11 @@ cmaes_sampler = BatchCMAESSampler(
     generations=5,
     step_size=0.12,
     random_seed=42,
-    save_nth=10,
+    save_nth=2,
     batch=False,
     loss_mode="energy-only",
     remote_savepath=Path("/home/nico.unglert/dump/remote_handler"),
-    loop_time=30,
+    loop_time=1,
     # Post-evolution optimization (optional)
     do_optimization=True,
     dof_mode="defect",
@@ -124,7 +146,7 @@ vasp_evaluator = VASPEvaluator(
         "lreal": False,
         "ncore": 8,
     },
-    loop_time=30,
+    loop_time=1,
 )
 
 # ---------------------------------------------------------------------------
@@ -133,20 +155,28 @@ vasp_evaluator = VASPEvaluator(
 mace_trainer = MaceFinetuningTrainer(
     remote_fs=gpu_fs,
     cluster_config=gpu_cluster_config,
-    training_script=scripts_dir / "mace_training.py",
+    training_script=scripts_dir / "mace" / "mace_finetuning.py",
     config_file=mace_template,
     remote_mace_train_runner=Path(
         "/home/nico.unglert/code/mace-freeze/scripts/run_train.py"
     ),
     foundation_model=foundation_model,
-    num_models=5,
+    num_models=2,
     remote_savepath=Path("/home/nico.unglert/dump/remote_handler"),
-    loop_time=30,
+    loop_time=1,
 )
 
+initial_sample_file = calchome / "initial_samples.extxyz"
+if os.path.exists(initial_sample_file):
+    initial_atoms = ase.io.read(initial_sample_file, index=":")
+else:
+    cmaes_sampler.update("initial_samples", [foundation_model])
+    initial_atoms_paths = cmaes_sampler.get_sampled_configs()
+    initial_atoms = []
+    for p in initial_atoms_paths:
+        initial_atoms.extend(ase.io.read(p, index=":"))
 
-cmaes_sampler.update("initial_samples", [foundation_model])
-initial_atoms = cmaes_sampler.get_sampled_configs()
+    ase.io.write(initial_sample_file, initial_atoms)
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +190,7 @@ al_handler = ActiveLearningHandler(
     num_iterations=10,
     cycle_entry_point="evaluation",
     cycle_exit_point="training",
-    initial_sampler_out=initial_atoms,
+    initial_sampler_out=initial_sample_file,
     initial_evaluator_out=None,
     initial_trainer_out=None,
     combine_evaluator_outputs=True,
