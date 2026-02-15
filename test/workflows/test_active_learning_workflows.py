@@ -18,7 +18,6 @@ from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.workflows import (
     LammpsSampler,
     MaceModelTrainer,
-    MACETrainer,
     NeuralilILTrainer,
     NSTrajectorySampler,
     VASPEvaluator,
@@ -245,11 +244,12 @@ class TestNestedSamplingALWorkflow:
             stub=True,
         )
 
-        trainer = MACETrainer(
+        trainer = MaceModelTrainer(
             training_script=training_script,
             remote_fs=mock_remote_fs,
             cluster_config=mock_cluster_config,
             config_file=config_file,
+            remote_mace_train_runner="/usr/bin/mace_run_train",
             stub=True,
         )
 

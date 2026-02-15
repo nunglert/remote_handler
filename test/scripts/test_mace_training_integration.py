@@ -15,7 +15,10 @@ from ase import Atoms
 
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.exceptions import ScriptInputError
-from remote_handler.workflows.trainers import MaceModelTrainer
+from remote_handler.workflows.trainers import (
+    MaceFinetuningTrainer,
+    MaceModelTrainer,
+)
 
 
 @pytest.fixture(scope="session")
@@ -241,6 +244,72 @@ class TestMaceTrainingIntegration:
         combined = ase.io.read(calc_dir / "combined_db.extxyz", index=":")
         assert len(combined) == 20
 
+    @pytest.mark.skipif(
+        not os.getenv("FOUNDATION_MODEL"),
+        reason="FOUNDATION_MODEL environment variable not set",
+    )
+    def test_finetuning_script(
+        self, integration_temp_dir, test_atoms_database
+    ):
+        """Test mace_finetuning.py script with foundation model."""
+        root_dir = integration_temp_dir / "test_finetuning_script"
+        if root_dir.exists():
+            shutil.rmtree(root_dir)
+        root_dir.mkdir()
+
+        foundation_model = os.getenv("FOUNDATION_MODEL")
+        assert os.path.exists(foundation_model)
+        train_runner = os.getenv("MACE_TRAIN_RUNNER")
+        assert os.path.exists(train_runner)
+
+        # Write database
+        db_file = root_dir / "training_data.xyz"
+        ase.io.write(db_file, test_atoms_database)
+
+        # Create config (no foundation_model here — the script injects it)
+        config_file = root_dir / "mace_config.yaml"
+        config_file.write_text(
+            "model: MACE\n"
+            "batch_size: 4\n"
+            "E0s: average\n"
+            "max_num_epochs: 5\n"
+        )
+
+        # Create calc directory
+        calc_dir = root_dir / "calc"
+        calc_dir.mkdir()
+
+        # Create input JSON with foundation_model field
+        input_json = calc_dir / "input_train.json"
+        input_data = {
+            "database_files": [str(db_file)],
+            "train_runner": train_runner,
+            "config_file": str(config_file),
+            "foundation_model": foundation_model,
+            "model_name": "finetuned_test",
+            "seed": 42,
+            "validation_fraction": 0.2,
+        }
+        input_json.write_text(json.dumps(input_data))
+
+        # Run finetuning script
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "remote_handler.scripts.mace.mace_finetuning",
+                str(calc_dir),
+            ],
+            capture_output=True,
+            text=True,
+            cwd=root_dir,
+        )
+        print(result.stderr)
+
+        assert (
+            result.returncode == 0
+        ), f"Finetuning script failed:\n{result.stderr}"
+
 
 @pytest.mark.integration
 class TestMaceModelTrainerIntegration:
@@ -297,7 +366,7 @@ class TestMaceModelTrainerIntegration:
             remote_fs=local_fs,
             cluster_config=local_cluster_config,
             training_script=Path(input_models.__file__).parent
-            / "mace_training.py",
+            / "mace/mace_training.py",
             config_file=template,
             remote_mace_train_runner=train_runner,
             num_models=2,
@@ -314,4 +383,83 @@ class TestMaceModelTrainerIntegration:
         assert len(model_files) == 2
         for model_file in model_files:
             assert model_file.exists()
-            assert "stagetwo" in model_file.name
+
+
+@pytest.mark.integration
+class TestMaceFinetuningTrainerIntegration:
+    """Integration tests for MaceFinetuningTrainer workflow class."""
+
+    @pytest.mark.skipif(
+        not os.getenv("MACE_FREEZE_TRAIN_RUNNER")
+        or not os.getenv("FOUNDATION_MODEL"),
+        reason="MACE_FREEZE_TRAIN_RUNNER and FOUNDATION_MODEL env vars required",
+    )
+    def test_full_local_finetuning(
+        self, integration_temp_dir, test_atoms_database, local_fs
+    ):
+        """Test MaceFinetuningTrainer with actual local MACE finetuning.
+
+        Requires:
+            - MACE_FREEZE_TRAIN_RUNNER env var pointing to MACE run_train.py
+            - FOUNDATION_MODEL env var pointing to a pretrained model file
+        """
+        from remote_handler.scripts import input_models
+
+        root_dir = integration_temp_dir / "finetuning_trainer_full"
+        if root_dir.exists():
+            shutil.rmtree(root_dir)
+        root_dir.mkdir()
+
+        train_runner = os.getenv("MACE_FREEZE_TRAIN_RUNNER")
+        foundation_model = os.getenv("FOUNDATION_MODEL")
+        assert os.path.exists(foundation_model)
+
+        # Write database
+        db_file = root_dir / "training_data.xyz"
+        ase.io.write(db_file, test_atoms_database)
+
+        # Create MACE config template
+        # For finetuning, architecture params (hidden_irreps, r_max, etc.)
+        # come from the foundation model. dtype must match the foundation
+        # model to avoid tensordot mismatches.
+        template = root_dir / "mace_config.yaml"
+        template.write_text(
+            "model: MACE\n"
+            "batch_size: 4\n"
+            "max_num_epochs: 2\n"
+            "device: cpu\n"
+            "E0s: average\n"
+            "freeze: 6\n"
+        )
+
+        local_cluster_config = ClusterConfig(
+            remote_machine="datalab",
+            partition="GPU-a40",
+            conda_env="clinamen",
+            conda_source="/home/nico.unglert/miniconda3",
+            savepath=str(root_dir / "remote_savepath"),
+            template="datalab.sh.j2",
+        )
+
+        trainer = MaceFinetuningTrainer(
+            remote_fs=local_fs,
+            cluster_config=local_cluster_config,
+            training_script=Path(input_models.__file__).parent
+            / "mace/mace_finetuning.py",
+            config_file=template,
+            foundation_model=foundation_model,
+            remote_mace_train_runner=train_runner,
+            num_models=2,
+            stub=False,
+            loop_time=1,
+        )
+
+        calcdir = root_dir / "iteration_0"
+        calcdir.mkdir()
+        trainer.update(calcdir, db_file)
+
+        model_files = trainer.get_trained_model()
+
+        assert len(model_files) == 2
+        for model_file in model_files:
+            assert model_file.exists()

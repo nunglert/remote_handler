@@ -18,7 +18,6 @@ from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.workflows import (
     LammpsSampler,
     MaceModelTrainer,
-    MACETrainer,
     NeuralilILTrainer,
     NSTrajectorySampler,
     VASPEvaluator,
@@ -509,100 +508,6 @@ class TestMaceModelTrainer:
                 model = pickle.load(f)
                 assert "training_loss" in model
                 assert "validation_loss" in model
-
-
-class TestMACETrainer:
-    """Test MACETrainer (JAXNEST version) in stub mode."""
-
-    def test_init_jaxnest_mace_trainer(
-        self, mock_remote_fs, mock_cluster_config, tmp_path
-    ):
-        """Test MACETrainer initialization."""
-        script = tmp_path / "mace_training.py"
-        script.touch()
-        config = tmp_path / "mace_config.gin"
-        config.touch()
-
-        trainer = MACETrainer(
-            training_script=script,
-            remote_fs=mock_remote_fs,
-            cluster_config=mock_cluster_config,
-            config_file=config,
-            stub=True,
-        )
-
-        assert trainer.stub is True
-        assert trainer.training_fraction == 0.9
-
-    def test_jaxnest_mace_trainer_stub_outputs(
-        self, mock_remote_fs, mock_cluster_config, temp_calcdir, mock_xyz_file
-    ):
-        """Test MACETrainer creates stub model output."""
-        script = temp_calcdir / "mace_training.py"
-        script.touch()
-        config = temp_calcdir / "mace_config.gin"
-        config.touch()
-
-        trainer = MACETrainer(
-            training_script=script,
-            remote_fs=mock_remote_fs,
-            cluster_config=mock_cluster_config,
-            config_file=config,
-            stub=True,
-        )
-
-        # Update trainer with database files
-        trainer.update(temp_calcdir, [mock_xyz_file])
-
-        # Get trained model (should create stub output)
-        model_file = trainer.get_trained_model()
-
-        assert Path(model_file).exists()
-        assert Path(model_file).suffix == ".pkl"
-
-        # Verify model content
-        import pickle
-
-        with open(model_file, "rb") as f:
-            gin_config = pickle.load(f)
-            params = pickle.load(f)
-
-            assert "model.max_ell" in gin_config
-            assert "final_train_loss" in params
-
-    def test_jaxnest_mace_create_stub_outputs(
-        self, mock_remote_fs, mock_cluster_config, tmp_path
-    ):
-        """Test _create_stub_outputs method directly."""
-        script = tmp_path / "mace_training.py"
-        script.touch()
-        config = tmp_path / "mace_config.gin"
-        config.touch()
-
-        trainer = MACETrainer(
-            training_script=script,
-            remote_fs=mock_remote_fs,
-            cluster_config=mock_cluster_config,
-            config_file=config,
-            stub=True,
-        )
-
-        # Need to set results_dir for stub outputs
-        trainer.results_dir = tmp_path / "results"
-        trainer.results_dir.mkdir()
-
-        stub_model = trainer._create_stub_outputs()
-
-        assert stub_model.exists()
-
-        import pickle
-
-        with open(stub_model, "rb") as f:
-            gin_str = pickle.load(f)
-            params = pickle.load(f)
-
-            assert "model.max_ell" in gin_str
-            assert "final_train_loss" in params
 
 
 class TestNeuralilILTrainer:

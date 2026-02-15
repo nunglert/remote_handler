@@ -30,7 +30,7 @@ from remote_handler.scripts import input_models
 from remote_handler.workflows.active_learning_base import ActiveLearningHandler
 from remote_handler.workflows.evaluators import VASPEvaluator
 from remote_handler.workflows.samplers import BatchCMAESSampler
-from remote_handler.workflows.trainers import MaceModelTrainer
+from remote_handler.workflows.trainers import MaceFinetuningTrainer
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
@@ -75,16 +75,8 @@ dft_cluster_config = ClusterConfig(
 # ---------------------------------------------------------------------------
 founder_poscar = inputs_dir / "POSCAR_si_vacancy"
 
-# initial_db = example_dir / "inputs" / "initial_database.extxyz"
-# initial_models = [
-#     example_dir / "inputs" / "models" / f"model_{i}.model"
-#     for i in range(5)
-# ]
 mace_template = config_dir / "mace_config.yaml"
 foundation_model = inputs_dir / "2023-12-10-mace-128-L0_energy_epoch-249.model"
-
-# Working directory for AL iterations
-# calchome = example_dir / "al_runs"
 
 # ---------------------------------------------------------------------------
 # 1. Sampler: BatchCMAESSampler
@@ -93,7 +85,7 @@ cmaes_sampler = BatchCMAESSampler(
     batch_size=1,
     remote_fs=gpu_fs,
     cluster_config=gpu_cluster_config,
-    sampling_script=scripts_dir / "cmaes_sampling.py",
+    sampling_script=scripts_dir / "clinamen2" / "cmaes_sampling.py",
     founder_path=founder_poscar,
     label="cmaes_evo",
     generations=5,
@@ -138,7 +130,7 @@ vasp_evaluator = VASPEvaluator(
 # ---------------------------------------------------------------------------
 # 3. Trainer: MaceModelTrainer
 # ---------------------------------------------------------------------------
-mace_trainer = MaceModelTrainer(
+mace_trainer = MaceFinetuningTrainer(
     remote_fs=gpu_fs,
     cluster_config=gpu_cluster_config,
     training_script=scripts_dir / "mace_training.py",
@@ -146,6 +138,7 @@ mace_trainer = MaceModelTrainer(
     remote_mace_train_runner=Path(
         "/home/nico.unglert/code/mace-freeze/scripts/run_train.py"
     ),
+    foundation_model=foundation_model,
     num_models=5,
     remote_savepath=Path("/home/nico.unglert/dump/remote_handler"),
     loop_time=30,

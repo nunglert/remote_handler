@@ -151,10 +151,54 @@ class MaceTrainingInput(ScriptInput):
         if not self.database_files:
             raise ScriptInputError("database_files cannot be empty")
 
-        if not self.config_file.exists():
+        if not (0 < self.validation_fraction < 1):
             raise ScriptInputError(
-                f"Config file does not exist: {self.config_file}"
+                f"validation_fraction must be between 0 and 1, got {self.validation_fraction}"
             )
+
+        if not self.model_name:
+            raise ScriptInputError("model_name cannot be empty")
+
+
+@dataclass
+class MaceFinetuningInput(ScriptInput):
+    """Input configuration for mace_finetuning.py script.
+
+    Extends the standard MACE training input with a foundation model
+    that is used as the starting point for finetuning.
+
+    Attributes:
+        database_files: List of paths to database files (will be combined if multiple)
+        train_runner: Path to MACE train_runner executable (e.g., mace_run_train)
+        config_file: Path to user's YAML config with training parameters
+        foundation_model: Path to the pretrained foundation model file
+        model_name: Name tag for the trained model
+        seed: Random seed for database splitting and training
+        validation_fraction: Fraction of data to use for validation (default: 0.1)
+    """
+
+    _path_fields: ClassVar[tuple[str, ...]] = (
+        "train_runner",
+        "config_file",
+        "foundation_model",
+    )
+
+    database_files: list[str]
+    train_runner: Path
+    config_file: Path
+    foundation_model: Path
+    model_name: str
+    seed: int
+    validation_fraction: float = 0.1
+
+    def validate(self) -> None:
+        """Validate configuration parameters.
+
+        Raises:
+            ScriptInputError: If any parameter is invalid
+        """
+        if not self.database_files:
+            raise ScriptInputError("database_files cannot be empty")
 
         if not (0 < self.validation_fraction < 1):
             raise ScriptInputError(
@@ -167,7 +211,7 @@ class MaceTrainingInput(ScriptInput):
 
 @dataclass
 class LammpsSamplingInput(ScriptInput):
-    """Input configuration for lammps_sampling.py script.
+    """Input configuration for lammps/lammps_sampling.py script.
 
     Attributes:
         lammps_path: Path to LAMMPS executable
@@ -258,7 +302,7 @@ class DftSinglepointInput(ScriptInput):
 
 @dataclass
 class OptimizeTrajInput(ScriptInput):
-    """Input configuration for optimize_traj.py script.
+    """Input configuration for jaxnest/optimize_traj.py script.
 
     Attributes:
         tag: Tag to prepend to output files
@@ -316,7 +360,7 @@ class OptimizeTrajInput(ScriptInput):
 
 @dataclass
 class CmaesSamplingInput(ScriptInput):
-    """Input configuration for cmaes_sampling.py script.
+    """Input configuration for clinamen2/cmaes_sampling.py script.
 
     Attributes:
         founder: 'random' or filename of founder POSCAR (absolute path if not
@@ -410,7 +454,7 @@ class CmaesSamplingInput(ScriptInput):
 
 @dataclass
 class CmaesOptimizeInput(ScriptInput):
-    """Input configuration for cmaes_optimize.py script.
+    """Input configuration for clinamen2/cmaes_optimize.py script.
 
     Attributes:
         evolutions: List of dicts, each describing one evolution to optimize.
@@ -459,3 +503,89 @@ class CmaesOptimizeInput(ScriptInput):
                 raise ScriptInputError(
                     f"evolutions[{i}] missing required key 'path'"
                 )
+
+
+@dataclass
+class TorchSimSamplingInput(ScriptInput):
+    """Input configuration for torch_sim/torch_sim_sampling.py script.
+
+    Attributes:
+        founder: Filename of the founder structure (ASE-readable format)
+        model_path: Path to a MACE model file, or "foundation" to use the
+            MACE-MP foundation model
+        ensemble: Ensemble type, "nvt" or "npt"
+        temperatures: List of replica temperatures in K
+        target_temperature: Target temperature in K (used for initial NPT
+            equilibration in NVT mode). Required when ensemble="nvt".
+        dt: Integration timestep in ps (default: 0.001)
+        gamma: Friction coefficient for Langevin thermostat (optional)
+        alpha: Friction coefficient for particle Langevin (NPT, optional)
+        cell_alpha: Friction coefficient for cell Langevin (NPT, optional)
+        n_steps_npt: Number of NPT equilibration steps (default: 0)
+        n_steps_pt: Number of production parallel tempering steps (default: 100)
+        seed: Random seed (default: 123)
+        device: Torch device string (default: "cuda")
+        dtype: Torch dtype string, "float32" or "float64" (default: "float32")
+
+    Example:
+        >>> config = TorchSimSamplingInput.from_file(Path("input.json"))
+        >>> config.validate()
+    """
+
+    founder: str
+    model_path: str
+    ensemble: str
+    temperatures: list[float]
+    target_temperature: Optional[float] = None
+    dt: float = 0.001
+    gamma: Optional[float] = None
+    alpha: Optional[float] = None
+    cell_alpha: Optional[float] = None
+    n_steps_npt: int = 0
+    n_steps_pt: int = 100
+    seed: int = 123
+    device: str = "cuda"
+    dtype: str = "float32"
+
+    def validate(self) -> None:
+        """Validate configuration parameters.
+
+        Raises:
+            ScriptInputError: If any parameter is invalid
+        """
+        if not self.founder:
+            raise ScriptInputError("founder cannot be empty")
+
+        if not self.model_path:
+            raise ScriptInputError("model_path cannot be empty")
+
+        valid_ensembles = {"nvt", "npt"}
+        if self.ensemble not in valid_ensembles:
+            raise ScriptInputError(
+                f"ensemble must be one of {valid_ensembles}, got '{self.ensemble}'"
+            )
+
+        if not self.temperatures:
+            raise ScriptInputError("temperatures cannot be empty")
+
+        if any(t <= 0 for t in self.temperatures):
+            raise ScriptInputError("all temperatures must be positive")
+
+        if self.ensemble == "nvt" and self.target_temperature is None:
+            raise ScriptInputError(
+                "target_temperature is required when ensemble='nvt'"
+            )
+
+        if self.dt <= 0:
+            raise ScriptInputError(f"dt must be positive, got {self.dt}")
+
+        if self.n_steps_pt <= 0:
+            raise ScriptInputError(
+                f"n_steps_pt must be positive, got {self.n_steps_pt}"
+            )
+
+        valid_dtypes = {"float32", "float64"}
+        if self.dtype not in valid_dtypes:
+            raise ScriptInputError(
+                f"dtype must be one of {valid_dtypes}, got '{self.dtype}'"
+            )

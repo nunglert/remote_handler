@@ -1,41 +1,14 @@
+"""Shared utilities for MACE training and finetuning scripts."""
+
 import logging
 import pathlib
 import subprocess
-import sys
-from pathlib import Path
 from typing import Optional
 
 import ase.io
 import numpy as np
 import yaml
 from ase import Atoms
-
-from remote_handler.scripts.input_models import MaceTrainingInput
-
-# Load and validate input configuration
-calcpath = Path(sys.argv[1])
-INPUTFILE = calcpath / "input_train.json"
-input_config = MaceTrainingInput.from_file(INPUTFILE)
-input_config.validate()
-
-rootpath = calcpath.parents[1]
-
-# Combine database files if multiple provided
-if len(input_config.database_files) > 1:
-    all_ats = []
-    for p in input_config.database_files:
-        ats = ase.io.read(rootpath / p, index=":")
-        if ats is Atoms:
-            all_ats.append(ats)
-        else:
-            all_ats.extend(ats)
-    combined_path = calcpath / "combined_db.extxyz"
-    ase.io.write(combined_path, all_ats)
-    database_path = combined_path
-else:
-    database_path = rootpath / input_config.database_files[0]
-
-config_path = calcpath / "mace_config.yaml"
 
 
 def make_dir(path: pathlib.Path, **kwargs) -> None:
@@ -48,6 +21,33 @@ def make_dir(path: pathlib.Path, **kwargs) -> None:
         path.mkdir(**kwargs)
     except FileExistsError:
         pass
+
+
+def combine_databases(
+    database_files: list[str], calcpath: pathlib.Path
+) -> pathlib.Path:
+    """Combine multiple database files into one, or return the single file.
+
+    Args:
+        database_files: List of database file paths (relative to calcpath)
+        calcpath: Base path to resolve relative database paths
+
+    Returns:
+        Path to the (possibly combined) database file
+    """
+    if len(database_files) > 1:
+        all_ats = []
+        for p in database_files:
+            ats = ase.io.read(calcpath / p, index=":")
+            if ats is Atoms:
+                all_ats.append(ats)
+            else:
+                all_ats.extend(ats)
+        combined_path = calcpath / "combined_db.extxyz"
+        ase.io.write(combined_path, all_ats)
+        return combined_path
+    else:
+        return calcpath / database_files[0]
 
 
 def split_db(
@@ -93,6 +93,7 @@ def merge_config_with_paths(
     train_file: pathlib.Path,
     valid_file: pathlib.Path,
     storage_dir: pathlib.Path,
+    **extra_config,
 ) -> dict:
     """Load user's YAML config and merge with generated paths.
 
@@ -103,6 +104,8 @@ def merge_config_with_paths(
         train_file: Path to file to read the training configurations from
         valid_file: Path to file to read the validation configurations from
         storage_dir: Directory to store the MACE training outputs in
+        **extra_config: Additional key-value pairs to add to the config
+            (e.g. foundation_model for finetuning)
 
     Returns:
         Dictionary with merged configuration
@@ -125,6 +128,8 @@ def merge_config_with_paths(
         }
     )
 
+    config.update(extra_config)
+
     return config
 
 
@@ -138,6 +143,7 @@ def run_training_from_config(
     train_runner: pathlib.Path,
     storage_dir: pathlib.Path,
     logger: Optional[logging.Logger] = None,
+    **extra_config,
 ) -> None:
     """Prepare a yaml configuration file for MACE training and train a model.
 
@@ -152,6 +158,8 @@ def run_training_from_config(
         storage_dir: Directory to store the MACE training outputs in.
             Trained models are serialized in storage_dir/models
         logger: Logger used to write additional output to
+        **extra_config: Additional key-value pairs passed to
+            merge_config_with_paths (e.g. foundation_model for finetuning)
     """
     # Create model directory beforehand if it does not exist
     # (Only output directory MACE does not create itself)
@@ -166,6 +174,7 @@ def run_training_from_config(
         train_file=train_file,
         valid_file=valid_file,
         storage_dir=storage_dir,
+        **extra_config,
     )
 
     # Write final config
@@ -195,26 +204,3 @@ def run_training_from_config(
             )
             logger.error(run_error.stderr.decode("utf-8"))
         raise RuntimeError(run_error)
-
-
-split = split_db(
-    database_path,
-    calcpath / "db.extxyz",
-    do_return_path=True,
-    validation_fraction=input_config.validation_fraction,
-    seed=input_config.seed,
-)
-train_path = split[0]
-valid_path = split[1]
-
-run_training_from_config(
-    config_file=config_path,
-    user_config_file=rootpath / input_config.config_file,
-    model_name=input_config.model_name,
-    seed=input_config.seed,
-    train_file=train_path,
-    valid_file=valid_path,
-    train_runner=input_config.train_runner,
-    storage_dir=calcpath,
-    logger=logging.getLogger(),
-)

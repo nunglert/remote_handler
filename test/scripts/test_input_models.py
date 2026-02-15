@@ -94,21 +94,6 @@ class TestMaceTrainingInput:
 
         assert "cannot be empty" in str(exc_info.value)
 
-    def test_validate_config_file_not_exists(self, tmp_path):
-        """Test validation when config file doesn't exist."""
-        config = MaceTrainingInput(
-            database_files=["data.xyz"],
-            train_runner=Path("mace_run_train"),
-            config_file=tmp_path / "nonexistent.yaml",
-            model_name="test",
-            seed=42,
-        )
-
-        with pytest.raises(ScriptInputError) as exc_info:
-            config.validate()
-
-        assert "does not exist" in str(exc_info.value)
-
     def test_validate_invalid_validation_fraction(self, tmp_path):
         """Test validation with invalid validation_fraction."""
         config_yaml = tmp_path / "config.yaml"

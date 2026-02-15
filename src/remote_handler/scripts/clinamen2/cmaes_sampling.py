@@ -6,7 +6,7 @@ from pathlib import Path
 
 from clinamen2.utils.file_handling import CMAFileHandler
 
-from remote_handler.scripts.cmaes_utils import run_evolution
+from remote_handler.scripts.clinamen2.cmaes_utils import run_evolution
 from remote_handler.scripts.input_models import CmaesSamplingInput
 
 # Load and validate input configuration
@@ -88,7 +88,9 @@ last_gen, _, _, _ = run_evolution(**evolution_args)
 import numpy as np
 from ase.io import write as ase_write
 
-from remote_handler.scripts.cmaes_optimize import dof_to_atoms_from_evo
+from remote_handler.scripts.clinamen2.cmaes_optimize import (
+    dof_to_atoms_from_evo,
+)
 
 winner_atoms, handler, opt_gen, transform_dof = dof_to_atoms_from_evo(
     label=input_config.label,
@@ -103,7 +105,9 @@ ase_write(winner_file, winner_atoms)
 print(f"Winner structure written to {winner_file}")
 
 if input_config.do_optimization:
-    from remote_handler.scripts.cmaes_optimize import create_optimize_fun
+    from remote_handler.scripts.clinamen2.cmaes_optimize import (
+        create_optimize_fun,
+    )
 
     print("\n--- Post-evolution optimization ---")
 

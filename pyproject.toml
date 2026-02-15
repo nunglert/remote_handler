@@ -41,7 +41,7 @@ docs = [
     "sphinx-autodoc-typehints",
     "sphinx-rtd-theme",
 ]
-torchsim = [
+torch_sim = [
     "mace-torch==0.3.14",
     "torch-sim-atomistic==0.5.1",
     "cuequivariance-torch==0.8.1",

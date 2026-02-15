@@ -11,7 +11,7 @@ Required Dependencies:
 - numpy: Numerical operations
 
 Optional Dependencies:
-- jaxnest: Nested sampling (for NSTrajectorySampler, MACETrainer)
+- jaxnest: Nested sampling (for NSTrajectorySampler)
   Only required when not using stub mode.
 
 Each component can run in stub mode for testing without actual execution.
@@ -21,10 +21,11 @@ from remote_handler.workflows.evaluators import VASPEvaluator
 from remote_handler.workflows.samplers import (
     LammpsSampler,
     NSTrajectorySampler,
+    TorchSimSampler,
 )
 from remote_handler.workflows.trainers import (
+    MaceFinetuningTrainer,
     MaceModelTrainer,
-    MACETrainer,
     NeuralilILTrainer,
 )
 
@@ -32,7 +33,8 @@ __all__ = [
     "VASPEvaluator",
     "LammpsSampler",
     "NSTrajectorySampler",
+    "TorchSimSampler",
+    "MaceFinetuningTrainer",
     "MaceModelTrainer",
-    "MACETrainer",
     "NeuralilILTrainer",
 ]

@@ -170,7 +170,7 @@ Run LAMMPS MD simulations with uncertainty-based sampling:
 
    # Create LAMMPS sampler
    lammps_sampler = LammpsSampler(
-       sampling_script="lammps_sampling.py",
+       sampling_script="lammps/lammps_sampling.py",
        template_path="lammps_template.in",
        data_path="initial_structure.data",
        remote_lammps_executable_path="/usr/local/bin/lmp",
@@ -204,7 +204,7 @@ Combine sampling, evaluation, and training into a complete active learning loop:
 
    # Configure components
    sampler = LammpsSampler(
-       sampling_script="lammps_sampling.py",
+       sampling_script="lammps/lammps_sampling.py",
        template_path="lammps.in.j2",
        data_path="start.data",
        remote_lammps_executable_path="/usr/local/bin/lmp",

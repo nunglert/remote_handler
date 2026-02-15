@@ -25,7 +25,10 @@ from remote_handler.exceptions import (
     DependencyError,
     WorkflowError,
 )
-from remote_handler.scripts.input_models import MaceTrainingInput
+from remote_handler.scripts.input_models import (
+    MaceFinetuningInput,
+    MaceTrainingInput,
+)
 
 from .active_learning_base import ModelTrainer
 
@@ -100,9 +103,14 @@ class MaceModelTrainer(ModelTrainer):
 
         # In stub mode, we don't need to create the task
         if not self.stub:
+            # Shared resources live in rootpath/, but scripts run in
+            # rootpath/calcdirs/N/. Prefix with ../../ so the script can
+            # resolve them relative to its own calcpath.
             script_input_shared = {
-                "database_files": [Path(p).name for p in self.db_files],
-                "config_file": Path(self.config_file).name,
+                "database_files": [
+                    f"../../{Path(p).name}" for p in self.db_files
+                ],
+                "config_file": f"../../{Path(self.config_file).name}",
                 "model_name": self.model_name,
                 "validation_fraction": self.validation_fraction,
                 "train_runner": Path(self.remote_mace_train_runner).as_posix(),
@@ -164,7 +172,7 @@ class MaceModelTrainer(ModelTrainer):
             os.makedirs(model_dir, exist_ok=True)
 
             # Create mock model file
-            model_path = model_dir / f"{self.model_name}_stagetwo.model"
+            model_path = model_dir / f"{self.model_name}.model"
 
             # Mock model content (simple dict with metadata)
             mock_model = {
@@ -210,9 +218,7 @@ class MaceModelTrainer(ModelTrainer):
             # Collect trained models
             model_paths = []
             for calcpath in grep(str(self.results_dir / "calcdirs"), ""):
-                model_path = (
-                    Path(calcpath) / f"models/{self.model_name}_stagetwo.model"
-                )
+                model_path = Path(calcpath) / f"models/{self.model_name}.model"
                 if model_path.exists():
                     model_paths.append(model_path)
                 else:
@@ -225,6 +231,200 @@ class MaceModelTrainer(ModelTrainer):
                 )
 
         logger.info(f"Collected {len(model_paths)} trained models")
+        return model_paths
+
+
+class MaceFinetuningTrainer(ModelTrainer):
+    """
+    Trainer for finetuning MACE models from a foundation model.
+
+    Similar to MaceModelTrainer but takes a pretrained foundation model
+    as an additional shared resource. Trains multiple finetuned models
+    in parallel using different random seeds.
+
+    Args:
+        remote_fs: FileSystemHandlerBase for the machine where training runs
+        training_script: Path to mace_finetuning.py or compatible script
+        config_file: Path to MACE YAML config file
+        foundation_model: Path to the pretrained foundation model file
+        remote_mace_train_runner: Path to MACE run_train.py on remote machine
+        num_models: Number of models to train per generation
+        validation_fraction: Fraction for train/validation split
+        remote_savepath: Path on remote machine for calculation files
+        loop_time: Interval (seconds) to poll for job completion
+        stub: If True, creates mock model outputs without training
+    """
+
+    def __init__(
+        self,
+        remote_fs: FileSystemHandlerBase,
+        cluster_config: ClusterConfig,
+        training_script: os.PathLike,
+        config_file: os.PathLike,
+        foundation_model: os.PathLike,
+        remote_mace_train_runner: os.PathLike,
+        num_models: int = 5,
+        validation_fraction: float = 0.1,
+        remote_savepath: Optional[os.PathLike] = None,
+        loop_time: float = 30,
+        stub: bool = False,
+    ):
+        super().__init__()
+        self.training_script = training_script
+        self.remote_fs = remote_fs
+        self.cluster_config = cluster_config
+        self.config_file = config_file
+        self.foundation_model = foundation_model
+        self.num_models = num_models
+        self.validation_fraction = validation_fraction
+        self.remote_mace_train_runner = remote_mace_train_runner
+        self.remote_savepath = remote_savepath
+        self.loop_time = loop_time
+        self.stub = stub
+        self.model_name = "Model"  # Default model name
+
+    def update(
+        self, calcdir: Path, trainer_input: Path | list[Path], **kwargs
+    ) -> None:
+        """
+        Prepare trainer for a new iteration.
+
+        Args:
+            calcdir: Directory for this AL iteration
+            trainer_input: Path(s) to database files with training data
+            **kwargs: Additional parameters
+        """
+        self.train_dir = calcdir / "train"
+        self.results_dir = self.train_dir / "results"
+        os.makedirs(self.train_dir, exist_ok=True)
+
+        self.db_files = (
+            [trainer_input]
+            if isinstance(trainer_input, Path)
+            else trainer_input
+        )
+
+        # In stub mode, we don't need to create the task
+        if not self.stub:
+            # Shared resources live in rootpath/, but scripts run in
+            # rootpath/calcdirs/N/. Prefix with ../../ so the script can
+            # resolve them relative to its own calcpath.
+            script_input_shared = {
+                "database_files": [
+                    f"../../{Path(p).name}" for p in self.db_files
+                ],
+                "config_file": f"../../{Path(self.config_file).name}",
+                "foundation_model": f"../../{Path(self.foundation_model).name}",
+                "model_name": self.model_name,
+                "validation_fraction": self.validation_fraction,
+                "train_runner": Path(self.remote_mace_train_runner).as_posix(),
+            }
+
+            # Validate input dict against the script's expected schema
+            MaceFinetuningInput.from_dict(script_input_shared | {"seed": 0})
+
+            # Create individual input files with different seeds
+            individual_resources = [
+                [
+                    DictJSON(
+                        content=script_input_shared
+                        | {"seed": np.random.randint(1e6)},
+                        filename="input_train.json",
+                        remote_fs=self.remote_fs,
+                    )
+                    for i in range(self.num_models)
+                ]
+            ]
+
+            self.training_task = ArrayScriptTask(
+                cluster_config=self.cluster_config,
+                local_savepath=self.results_dir,
+                remote_fs=self.remote_fs,
+                python_script_file=self.training_script,
+                individual_ressources=individual_resources,
+                shared_ressources=[self.config_file, self.foundation_model]
+                + self.db_files,
+                logfile="train.log",
+                remote_savepath=self.remote_savepath,
+                collect_only=False,
+                num_parallel=min(self.num_models, 5),
+                loop_time=self.loop_time,
+                jobname="finetune",
+            )
+
+            self.training_task.allocate_data()
+
+    def _create_stub_outputs(self) -> list[Path]:
+        """
+        Create mock finetuned MACE model files for testing.
+
+        Returns:
+            List of paths to mock model files
+        """
+        logger.info(f"Creating {self.num_models} stub finetuned MACE models")
+
+        # Create mock calcdirs structure
+        calcdirs = self.results_dir / "calcdirs"
+        os.makedirs(calcdirs, exist_ok=True)
+
+        model_paths = []
+        for i in range(self.num_models):
+            calcdir = calcdirs / f"job_{i}"
+            model_dir = calcdir / "models"
+            os.makedirs(model_dir, exist_ok=True)
+
+            model_path = model_dir / f"{self.model_name}.model"
+
+            mock_model = {
+                "model_type": "MACE_finetuned",
+                "seed": np.random.randint(1e6),
+                "foundation_model": str(self.foundation_model),
+                "training_loss": np.random.uniform(0.01, 0.05),
+                "validation_loss": np.random.uniform(0.02, 0.08),
+            }
+
+            with open(model_path, "wb") as f:
+                pickle.dump(mock_model, f)
+
+            model_paths.append(model_path)
+            logger.info(f"Created stub finetuned model: {model_path}")
+
+        return model_paths
+
+    def get_trained_model(self) -> list[Path]:
+        """
+        Run finetuning and collect model files.
+
+        Returns:
+            List of paths to finetuned model files
+
+        Raises:
+            WorkflowError: If no models were successfully trained
+        """
+        if self.stub:
+            logger.info(
+                "Running in stub mode - creating mock finetuned MACE models"
+            )
+            model_paths = self._create_stub_outputs()
+        else:
+            self.training_task.submit()
+            self.training_task.collect_results()
+
+            model_paths = []
+            for calcpath in grep(str(self.results_dir / "calcdirs"), ""):
+                model_path = Path(calcpath) / f"models/{self.model_name}.model"
+                if model_path.exists():
+                    model_paths.append(model_path)
+                else:
+                    logger.warning(f"Model not found at {model_path}")
+
+            if not model_paths:
+                raise WorkflowError(
+                    "No models were successfully finetuned\n"
+                    f"Check training logs in: {self.results_dir}"
+                )
+
+        logger.info(f"Collected {len(model_paths)} finetuned models")
         return model_paths
 
 

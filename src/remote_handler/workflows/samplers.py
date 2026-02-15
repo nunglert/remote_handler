@@ -25,6 +25,7 @@ from remote_handler.exceptions import (
 from remote_handler.scripts.input_models import (
     CmaesSamplingInput,
     LammpsSamplingInput,
+    TorchSimSamplingInput,
 )
 
 from .active_learning_base import Sampler
@@ -885,3 +886,214 @@ class NSTrajectorySampler(Sampler):
         logger.info(f"Wrote sampled configurations to {output_file}")
 
         return output_file
+
+
+class TorchSimSampler(Sampler):
+    """
+    Sampler using torch_sim parallel tempering with MACE models.
+
+    Runs parallel tempering MD (NVT or NPT ensemble) to explore configuration
+    space at multiple temperatures. Supports stub mode for testing without
+    actual GPU execution.
+
+    Args:
+        remote_fs: FileSystemHandlerBase for the machine where sampling runs
+        cluster_config: ClusterConfig with partition, conda env, template settings
+        sampling_script: Path to torch_sim_sampling.py or compatible script
+        founder_path: Path to founder structure file (ASE-readable)
+        ensemble: Ensemble type, "nvt" or "npt"
+        temperatures: List of replica temperatures in K
+        target_temperature: Target temperature in K (required for NVT ensemble)
+        model_path: MACE model identifier. Use "foundation" for MACE-MP
+            foundation model, or the filename of a model file that will be
+            copied to the remote machine.
+        dt: Integration timestep in ps (default: 0.001)
+        gamma: Friction coefficient for Langevin thermostat (optional)
+        alpha: Friction coefficient for particle Langevin (NPT, optional)
+        cell_alpha: Friction coefficient for cell Langevin (NPT, optional)
+        n_steps_npt: Number of NPT equilibration steps (default: 0)
+        n_steps_pt: Number of production PT steps (default: 100)
+        seed: Random seed (default: 123)
+        device: Torch device string (default: "cuda")
+        dtype: Torch dtype string (default: "float32")
+        remote_savepath: Path on remote machine for calculation files
+        loop_time: Interval (seconds) to poll for job completion
+    """
+
+    def __init__(
+        self,
+        remote_fs: FileSystemHandlerBase,
+        cluster_config: ClusterConfig,
+        sampling_script: os.PathLike,
+        founder_path: os.PathLike,
+        ensemble: str,
+        temperatures: list[float],
+        target_temperature: Optional[float] = None,
+        model_path: str = "foundation",
+        dt: float = 0.001,
+        gamma: Optional[float] = None,
+        alpha: Optional[float] = None,
+        cell_alpha: Optional[float] = None,
+        n_steps_npt: int = 0,
+        n_steps_pt: int = 100,
+        seed: int = 123,
+        device: str = "cuda",
+        dtype: str = "float32",
+        remote_savepath: Optional[os.PathLike] = None,
+        loop_time: float = 30,
+        stub: bool = False,
+    ):
+        super().__init__()
+        self.remote_fs = remote_fs
+        self.cluster_config = cluster_config
+        self.sampling_script = sampling_script
+        self.founder_path = founder_path
+        self.ensemble = ensemble
+        self.temperatures = temperatures
+        self.target_temperature = target_temperature
+        self.model_path = model_path
+        self.dt = dt
+        self.gamma = gamma
+        self.alpha = alpha
+        self.cell_alpha = cell_alpha
+        self.n_steps_npt = n_steps_npt
+        self.n_steps_pt = n_steps_pt
+        self.seed = seed
+        self.device = device
+        self.dtype = dtype
+        self.remote_savepath = remote_savepath
+        self.loop_time = loop_time
+        self.stub = stub
+
+    def update(
+        self, calcdir: Path, sampler_input: list[Path], **kwargs
+    ) -> None:
+        """
+        Prepare sampler for a new iteration.
+
+        Args:
+            calcdir: Directory for this AL iteration
+            sampler_input: List of model file paths. The first model is used
+                as the MACE model unless model_path is "foundation".
+            **kwargs: Additional parameters
+        """
+        self.sample_dir = calcdir / "sample"
+        self.results_dir = self.sample_dir / "results"
+        os.makedirs(self.sample_dir, exist_ok=True)
+        os.makedirs(self.results_dir, exist_ok=True)
+
+        self.model_files = sampler_input
+
+        if not self.stub:
+            # Determine model_path for the script
+            if self.model_path == "foundation":
+                script_model_path = "foundation"
+            else:
+                script_model_path = Path(self.model_files[0]).name
+
+            script_input = {
+                "founder": Path(self.founder_path).name,
+                "model_path": script_model_path,
+                "ensemble": self.ensemble,
+                "temperatures": self.temperatures,
+                "target_temperature": self.target_temperature,
+                "dt": self.dt,
+                "gamma": self.gamma,
+                "alpha": self.alpha,
+                "cell_alpha": self.cell_alpha,
+                "n_steps_npt": self.n_steps_npt,
+                "n_steps_pt": self.n_steps_pt,
+                "seed": self.seed,
+                "device": self.device,
+                "dtype": self.dtype,
+            }
+
+            # Validate input dict against the script's expected schema
+            TorchSimSamplingInput.from_dict(script_input)
+
+            self.script_input_file = self.results_dir / "input_torchsim.json"
+            with open(self.script_input_file, "w") as f:
+                f.write(json.dumps(script_input, indent=2))
+
+            self.sampling_task = SingleScriptTask(
+                local_savepath=self.results_dir,
+                input_file=self.script_input_file,
+                cluster_config=self.cluster_config,
+                remote_fs=self.remote_fs,
+                script_file=self.sampling_script,
+                remote_savepath=self.remote_savepath,
+                jobfile_name="run_torchsim.sh",
+                jobname="torchsim_sample",
+                logfile="torchsim_sample.log",
+                n_processors=1,
+                loop_time=self.loop_time,
+                collect_only=False,
+            )
+
+            self.sampling_task.allocate_data()
+
+            # Copy founder structure to remote
+            self.sampling_task.copy_file(self.founder_path)
+
+            # Copy model files to remote (unless using foundation model)
+            if self.model_path != "foundation":
+                for p in self.model_files:
+                    self.sampling_task.copy_file(p)
+
+    def _create_stub_outputs(self) -> list[Atoms]:
+        """
+        Create mock torch_sim sampling outputs for testing.
+
+        Returns:
+            List of Atoms objects with mock PT results
+        """
+        n_replicas = len(self.temperatures)
+        logger.info(f"Creating {n_replicas} stub torch_sim samples")
+
+        mock_samples = []
+        for i in range(n_replicas):
+            symbols = ["Si"] * 32 + ["C"] * 32 + ["Ti"] * 16
+            positions = np.random.uniform(0, 12, (len(symbols), 3))
+
+            atoms = Atoms(
+                symbols=symbols,
+                positions=positions,
+                cell=[12, 12, 24],
+                pbc=True,
+            )
+
+            atoms.info["replica"] = i
+            atoms.info["ensemble"] = self.ensemble
+            atoms.info["temperature"] = self.temperatures[i]
+            mock_samples.append(atoms)
+
+        return mock_samples
+
+    def get_sampled_configs(self) -> Path:
+        """
+        Run torch_sim parallel tempering and collect configurations.
+
+        Returns:
+            Path to extxyz file containing sampled configurations
+        """
+        if self.stub:
+            logger.info(
+                "Running in stub mode - creating mock torch_sim samples"
+            )
+            sampled_configs = self._create_stub_outputs()
+
+            output_dir = self.results_dir / "out"
+            os.makedirs(output_dir, exist_ok=True)
+            output_path = output_dir / "samples.extxyz"
+            ase.io.write(output_path, sampled_configs)
+        else:
+            self.sampling_task.submit()
+            self.sampling_task.collect_results()
+            output_path = (
+                Path(self.sampling_task.local_savepath) / "out/samples.extxyz"
+            )
+
+        logger.info(
+            f"Torch_sim sampled configurations written to {output_path}"
+        )
+        return output_path

@@ -78,7 +78,7 @@ class TestCmaesSamplingIntegration:
             [
                 sys.executable,
                 "-m",
-                "remote_handler.scripts.cmaes_sampling",
+                "remote_handler.scripts.clinamen2.cmaes_sampling",
                 str(input_file),
             ],
             capture_output=True,
@@ -129,7 +129,7 @@ class TestCmaesSamplingIntegration:
             [
                 sys.executable,
                 "-m",
-                "remote_handler.scripts.cmaes_sampling",
+                "remote_handler.scripts.clinamen2.cmaes_sampling",
                 str(input_file),
             ],
             capture_output=True,
@@ -172,7 +172,9 @@ class TestCmaesSamplingIntegration:
 
         # Resolve the actual script file path from the installed package
         script_path = (
-            Path(input_models_module.__file__).parent / "cmaes_sampling.py"
+            Path(input_models_module.__file__).parent
+            / "clinamen2"
+            / "cmaes_sampling.py"
         )
 
         # Use a temp dir as "remote" savepath for local execution
@@ -240,7 +242,9 @@ class TestCmaesSamplingIntegration:
 
         # Resolve the actual script file path from the installed package
         script_path = (
-            Path(input_models_module.__file__).parent / "cmaes_sampling.py"
+            Path(input_models_module.__file__).parent
+            / "clinamen2"
+            / "cmaes_sampling.py"
         )
 
         # Use a temp dir as "remote" savepath for local execution
@@ -317,7 +321,7 @@ class TestCmaesSamplingIntegration:
         model_files = [Path(model)]
 
         scripts_dir = Path(input_models_module.__file__).parent
-        sampling_script = scripts_dir / "cmaes_sampling.py"
+        sampling_script = scripts_dir / "clinamen2" / "cmaes_sampling.py"
 
         remote_savepath = integration_temp_dir / "remote_batch_cmaes"
         if remote_savepath.exists():
