@@ -573,9 +573,15 @@ class BatchCMAESSampler(CMAESSampler):
 
             results_dir = Path(task.local_savepath)
             if self.do_optimization:
-                output_paths.append(
+                winner_poscar = (
                     results_dir / "optimized" / f"POSCAR_{label}_winner_end"
                 )
+                winner_extxyz = (
+                    results_dir / "optimized" / f"{label}_winner_end.extxyz"
+                )
+                at = ase.io.read(winner_poscar, format="vasp")
+                ase.io.write(winner_extxyz, at)
+                output_paths.append(winner_extxyz)
             else:
                 output_paths.append(results_dir / f"{label}_winner.extxyz")
 
