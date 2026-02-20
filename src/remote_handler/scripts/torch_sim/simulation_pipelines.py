@@ -165,7 +165,7 @@ def interface_pt_simulation(
         at_equil = at
 
     state = ts.io.atoms_to_state(
-        at_equil * n_batch, device=device, dtype=dtype
+        [at_equil] * n_batch, device=device, dtype=dtype
     )
 
     # ------------------------------------------------------------------
