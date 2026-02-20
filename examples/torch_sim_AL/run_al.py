@@ -122,7 +122,7 @@ torchsim_sampler = TorchSimSampler(
         1950,
         2100,
     ],
-    model_path="foundation",
+    model_paths=["foundation"],
     dt=0.001,
     n_steps_pt=100,
     seed=42,

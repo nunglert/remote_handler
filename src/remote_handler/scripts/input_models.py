@@ -511,8 +511,10 @@ class TorchSimSamplingInput(ScriptInput):
 
     Attributes:
         founder: Filename of the founder structure (ASE-readable format)
-        model_path: Path to a MACE model file, or "foundation" to use the
-            MACE-MP foundation model
+        model_paths: List of MACE model file paths.  Use ``["foundation"]``
+            for the MACE-MP foundation model.  A single-element list runs a
+            standard single-model simulation; multiple entries activate the
+            ``MaceEnsembleModel`` (shared-body ensemble with uncertainty).
         ensemble: Ensemble type, "nvt" or "npt"
         temperatures: List of replica temperatures in K
         target_temperature: Target temperature in K (used for initial NPT
@@ -533,7 +535,7 @@ class TorchSimSamplingInput(ScriptInput):
     """
 
     founder: str
-    model_path: str
+    model_paths: list[str]
     ensemble: str
     temperatures: list[float]
     target_temperature: Optional[float] = None
@@ -556,8 +558,13 @@ class TorchSimSamplingInput(ScriptInput):
         if not self.founder:
             raise ScriptInputError("founder cannot be empty")
 
-        if not self.model_path:
-            raise ScriptInputError("model_path cannot be empty")
+        if not self.model_paths:
+            raise ScriptInputError("model_paths cannot be empty")
+
+        if len(self.model_paths) > 1 and "foundation" in self.model_paths:
+            raise ScriptInputError(
+                "Cannot mix 'foundation' with other model paths in ensemble mode"
+            )
 
         valid_ensembles = {"nvt", "npt"}
         if self.ensemble not in valid_ensembles:

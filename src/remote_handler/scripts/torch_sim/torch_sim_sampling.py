@@ -37,13 +37,18 @@ from remote_handler.scripts.torch_sim.simulation_pipelines import (
 # Load founder structure
 at = ase.io.read(calcpath / input_config.founder)
 
-# Load MACE model
-if input_config.model_path == "foundation":
+# Load MACE model(s)
+if len(input_config.model_paths) > 1:
+    # Ensemble mode — pass list of paths; MaceEnsembleModel handles loading
+    mace = [calcpath / p for p in input_config.model_paths]
+elif input_config.model_paths[0] == "foundation":
     from mace.calculators.foundations_models import mace_mp
 
     mace = mace_mp(model="small", return_raw_model=True)
 else:
-    mace = torch.load(calcpath / input_config.model_path, map_location="cpu")
+    mace = torch.load(
+        calcpath / input_config.model_paths[0], map_location="cpu"
+    )
 
 # Resolve dtype
 dtype_map = {"float32": torch.float32, "float64": torch.float64}

@@ -911,9 +911,10 @@ class TorchSimSampler(Sampler):
         ensemble: Ensemble type, "nvt" or "npt"
         temperatures: List of replica temperatures in K
         target_temperature: Target temperature in K (required for NVT ensemble)
-        model_path: MACE model identifier. Use "foundation" for MACE-MP
-            foundation model, or the filename of a model file that will be
-            copied to the remote machine.
+        model_paths: List of MACE model identifiers. Use ["foundation"] for
+            the MACE-MP foundation model. A single-element list runs a
+            standard simulation; multiple entries activate the
+            MaceEnsembleModel (shared-body ensemble with uncertainty).
         dt: Integration timestep in ps (default: 0.001)
         gamma: Friction coefficient for Langevin thermostat (optional)
         alpha: Friction coefficient for particle Langevin (NPT, optional)
@@ -939,7 +940,7 @@ class TorchSimSampler(Sampler):
         ensemble: str,
         temperatures: list[float],
         target_temperature: Optional[float] = None,
-        model_path: str = "foundation",
+        model_paths: Optional[list[str]] = None,
         dt: float = 0.001,
         gamma: Optional[float] = None,
         alpha: Optional[float] = None,
@@ -962,7 +963,9 @@ class TorchSimSampler(Sampler):
         self.ensemble = ensemble
         self.temperatures = temperatures
         self.target_temperature = target_temperature
-        self.model_path = model_path
+        self.model_paths = (
+            model_paths if model_paths is not None else ["foundation"]
+        )
         self.dt = dt
         self.gamma = gamma
         self.alpha = alpha
@@ -985,8 +988,10 @@ class TorchSimSampler(Sampler):
 
         Args:
             calcdir: Directory for this AL iteration
-            sampler_input: List of model file paths. The first model is used
-                as the MACE model unless model_path is "foundation".
+            sampler_input: List of model file paths. When ``model_paths`` is
+                ``["foundation"]`` the models in *sampler_input* are ignored.
+                Otherwise the filenames from *sampler_input* are used to
+                populate the ``model_paths`` field in the script input JSON.
             **kwargs: Additional parameters
         """
         self.sample_dir = calcdir / "sample"
@@ -997,15 +1002,16 @@ class TorchSimSampler(Sampler):
         self.model_files = sampler_input
 
         if not self.stub:
-            # Determine model_path for the script
-            if self.model_path == "foundation":
-                script_model_path = "foundation"
+            # Build model_paths for the script input
+            is_foundation = self.model_paths == ["foundation"]
+            if is_foundation:
+                script_model_paths = ["foundation"]
             else:
-                script_model_path = Path(self.model_files[0]).name
+                script_model_paths = [Path(p).name for p in self.model_files]
 
             script_input = {
                 "founder": Path(self.founder_path).name,
-                "model_path": script_model_path,
+                "model_paths": script_model_paths,
                 "ensemble": self.ensemble,
                 "temperatures": self.temperatures,
                 "target_temperature": self.target_temperature,
@@ -1048,7 +1054,7 @@ class TorchSimSampler(Sampler):
             self.sampling_task.copy_file(self.founder_path)
 
             # Copy model files to remote (unless using foundation model)
-            if self.model_path != "foundation":
+            if not is_foundation:
                 for p in self.model_files:
                     self.sampling_task.copy_file(p)
 

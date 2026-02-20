@@ -23,8 +23,10 @@ Example:
     >>> selector = QUESTSSelector(n_configs=20, reference=train_atoms)
 """
 
+import json
 import logging
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Union
 
 import numpy as np
@@ -299,6 +301,9 @@ class QUESTSSelector(ConfigSelector):
         cutoff: Cutoff radius in Angstroms for descriptor.
         bandwidth: Kernel bandwidth for entropy estimation. If None,
             estimated automatically from the volume per atom.
+        pca_output: If set, save a JSON file with PCA-projected
+            descriptor data for visualization. Contains per-structure
+            2D coordinates, selection status, and explained variance.
     """
 
     def __init__(
@@ -309,6 +314,7 @@ class QUESTSSelector(ConfigSelector):
         k: int = 32,
         cutoff: float = 5.0,
         bandwidth: float | None = None,
+        pca_output: Path | str | None = None,
     ):
         self.n_configs = n_configs
         self.method = method
@@ -316,6 +322,7 @@ class QUESTSSelector(ConfigSelector):
         self.k = k
         self.cutoff = cutoff
         self.bandwidth = bandwidth
+        self.pca_output = Path(pca_output) if pca_output is not None else None
 
     def set_reference(self, reference: list[Atoms]) -> None:
         """Update the reference dataset for novelty scoring.
@@ -352,6 +359,56 @@ class QUESTSSelector(ConfigSelector):
         counts = np.array([len(at) for at in atoms_list])
         return np.cumsum(counts)
 
+    def _save_pca_json(self, flat: list[Atoms], selected: list[Atoms]) -> None:
+        """Compute PCA on per-structure mean descriptors and save to JSON."""
+        from sklearn.decomposition import PCA
+
+        atom_desc = self._compute_descriptors(flat)
+        cum_counts = self._atom_counts(flat)
+        starts = np.concatenate([[0], cum_counts[:-1]])
+        struct_desc = np.array(
+            [atom_desc[s:e].mean(axis=0) for s, e in zip(starts, cum_counts)]
+        )
+
+        pca = PCA(
+            n_components=min(2, struct_desc.shape[0], struct_desc.shape[1])
+        )
+        proj = pca.fit_transform(struct_desc)
+
+        selected_ids = set(id(at) for at in selected)
+        mode = "novelty" if self.reference else "diversity"
+
+        structures = []
+        for i, at in enumerate(flat):
+            is_selected = id(at) in selected_ids
+            entry = {
+                "index": i,
+                "pc1": float(proj[i, 0]),
+                "pc2": float(proj[i, 1]) if proj.shape[1] > 1 else 0.0,
+                "selected": is_selected,
+                "n_atoms": len(at),
+                "formula": at.get_chemical_formula(),
+            }
+            if is_selected and "quests_novelty_score" in at.info:
+                entry["novelty_score"] = at.info["quests_novelty_score"]
+            structures.append(entry)
+
+        data = {
+            "mode": mode,
+            "method": self.method,
+            "n_total": len(flat),
+            "n_selected": len(selected),
+            "k": self.k,
+            "cutoff": self.cutoff,
+            "explained_variance_ratio": pca.explained_variance_ratio_.tolist(),
+            "structures": structures,
+        }
+
+        self.pca_output.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.pca_output, "w") as f:
+            json.dump(data, f, indent=2)
+        logger.info(f"QUESTSSelector: saved PCA data to {self.pca_output}")
+
     def select(self, configs: Configs) -> list[Atoms]:
         flat = _flatten(configs)
         n_total = len(flat)
@@ -366,6 +423,9 @@ class QUESTSSelector(ConfigSelector):
             selected = self._select_by_novelty(flat, n_select, h)
         else:
             selected = self._select_by_diversity(flat, n_select, h)
+
+        if self.pca_output is not None:
+            self._save_pca_json(flat, selected)
 
         logger.info(
             f"QUESTSSelector: selected {len(selected)} from "

@@ -83,7 +83,7 @@ class TestTorchSimScriptIntegration:
         input_file = root_dir / "input_torchsim.json"
         input_data = {
             "founder": str(founder_bulk),
-            "model_path": model,
+            "model_paths": [model],
             "ensemble": "npt",
             "temperatures": [300.0, 600.0],
             "dt": 0.001,
@@ -148,7 +148,7 @@ class TestTorchSimScriptIntegration:
         input_file = root_dir / "input_torchsim.json"
         input_data = {
             "founder": str(founder_with_frozen_layer),
-            "model_path": model,
+            "model_paths": [model],
             "ensemble": "nvt",
             "temperatures": [300.0, 600.0],
             "target_temperature": 300.0,
@@ -205,7 +205,7 @@ class TestTorchSimScriptIntegration:
         input_file = root_dir / "input_torchsim.json"
         input_data = {
             "founder": str(founder_bulk),
-            "model_path": model,
+            "model_paths": [model],
             "ensemble": "npt",
             "temperatures": [300.0, 500.0],
             "dt": 0.001,
@@ -253,7 +253,7 @@ class TestTorchSimScriptIntegration:
         input_file = root_dir / "input_torchsim.json"
         input_data = {
             "founder": str(founder_bulk),
-            "model_path": "foundation",
+            "model_paths": ["foundation"],
             "ensemble": "npt",
             "temperatures": [300.0, 500.0],
             "dt": 0.001,
@@ -343,7 +343,7 @@ class TestTorchSimSamplerIntegration:
             founder_path=founder_bulk,
             ensemble="npt",
             temperatures=[300.0, 600.0],
-            model_path=Path(model).name,
+            model_paths=[Path(model).name],
             dt=0.001,
             n_steps_pt=5,
             seed=42,
@@ -410,7 +410,7 @@ class TestTorchSimSamplerIntegration:
             ensemble="nvt",
             temperatures=[300.0, 600.0],
             target_temperature=300.0,
-            model_path=Path(model).name,
+            model_paths=[Path(model).name],
             dt=0.001,
             n_steps_pt=5,
             seed=42,
@@ -522,7 +522,7 @@ class TestTorchSimSamplerIntegration:
             founder_path=founder_bulk,
             ensemble="npt",
             temperatures=[300.0, 500.0],
-            model_path="foundation",
+            model_paths=["foundation"],
             dt=0.001,
             n_steps_pt=5,
             seed=42,
@@ -541,7 +541,7 @@ class TestTorchSimSamplerIntegration:
 
         config = TorchSimSamplingInput.from_file(sampler.script_input_file)
         config.validate()
-        assert config.model_path == "foundation"
+        assert config.model_paths == ["foundation"]
 
         output_path = sampler.get_sampled_configs()
 

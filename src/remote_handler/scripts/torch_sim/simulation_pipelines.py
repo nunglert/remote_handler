@@ -34,6 +34,34 @@ from remote_handler.scripts.torch_sim.create_interface import (
 SerializedTorch = Any
 
 
+def _make_model(mace, device, dtype, compute_forces, compute_stress):
+    """Create the appropriate model wrapper.
+
+    If ``mace`` is a list (of paths or modules), returns a
+    ``MaceEnsembleModel`` (shared-body ensemble). Otherwise wraps a single
+    raw MACE module in ``MaceModel``.
+    """
+    if isinstance(mace, list):
+        from remote_handler.scripts.torch_sim.mace_ensemble import (
+            MaceEnsembleModel,
+        )
+
+        return MaceEnsembleModel(
+            models=mace,
+            device=device,
+            dtype=dtype,
+            compute_forces=compute_forces,
+            compute_stress=compute_stress,
+        )
+    return MaceModel(
+        model=mace,
+        device=device,
+        dtype=dtype,
+        compute_forces=compute_forces,
+        compute_stress=compute_stress,
+    )
+
+
 def interface_pt_simulation(
     at,
     calcpath: Path,
@@ -55,8 +83,8 @@ def interface_pt_simulation(
         model that is used to create the torch_sim model via ts.MaceModel
     temperatures (torch.Tensor): Target temperature in K with shape
         [n_systems]
-    dt (torch.Tensor): Integration timestep, either scalar or shape
-        [n_systems]
+    dt (torch.Tensor): Integration timestep in picoseconds, either scalar
+        or shape [n_systems]
     gamma: Friction coefficient for Langevin thermostat,
         either scalar or with shape [n_systems]. Defaults to 1/(100*dt).
     alpha (torch.Tensor, optional): Friction coefficient for particle
@@ -101,12 +129,8 @@ def interface_pt_simulation(
         ~frozen_mask
     ).any(), "All atoms were frozen — check constraint logic."
 
-    model = MaceModel(
-        model=mace,
-        device=device,
-        dtype=dtype,
-        compute_forces=True,
-        compute_stress=True,
+    model = _make_model(
+        mace, device, dtype, compute_forces=True, compute_stress=True
     )
 
     constraint = FixAtoms(atom_mask=frozen_mask)
@@ -171,12 +195,8 @@ def interface_pt_simulation(
     # ------------------------------------------------------------------
     # Run NVT simulation
     # ------------------------------------------------------------------
-    model = MaceModel(
-        model=mace,
-        device=device,
-        dtype=dtype,
-        compute_forces=True,
-        compute_stress=False,
+    model = _make_model(
+        mace, device, dtype, compute_forces=True, compute_stress=False
     )
     state.constraints = [constraint]
 
@@ -221,8 +241,6 @@ def interface_pt_simulation(
         reporter_args=reporter_args,
         start_step=n_steps_npt,
     )
-
-    reporter.close()
 
     with Path(calcpath / "pt_swaps.json").open("w") as f:
         json.dump(swap_log, f)
@@ -291,12 +309,8 @@ def pt_simulation_npt(
     # ------------------------------------------------------------------
     # Run NVT simulation
     # ------------------------------------------------------------------
-    model = MaceModel(
-        model=mace,
-        device=device,
-        dtype=dtype,
-        compute_forces=True,
-        compute_stress=True,
+    model = _make_model(
+        mace, device, dtype, compute_forces=True, compute_stress=True
     )
 
     state, kT, P, swap_log = parallel_tempering.parallel_tempering(

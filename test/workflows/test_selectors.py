@@ -1,5 +1,7 @@
 """Tests for configuration selectors."""
 
+import json
+
 import numpy as np
 import pytest
 from ase import Atoms
@@ -522,6 +524,55 @@ class TestQUESTSSelector:
         selector = QUESTSSelector(n_configs=3, method="msc", bandwidth=0.02)
         result = selector.select(configs)
         assert len(result) == 3
+
+    def test_pca_output_diversity(self, tmp_path):
+        """PCA JSON is written with correct structure in diversity mode."""
+        configs = _make_varied_configs(10)
+        out = tmp_path / "pca.json"
+        selector = QUESTSSelector(n_configs=3, method="msc", pca_output=out)
+        result = selector.select(configs)
+
+        assert out.exists()
+        data = json.loads(out.read_text())
+
+        assert data["mode"] == "diversity"
+        assert data["method"] == "msc"
+        assert data["n_total"] == 10
+        assert data["n_selected"] == 3
+        assert len(data["structures"]) == 10
+        assert len(data["explained_variance_ratio"]) == 2
+        assert sum(1 for s in data["structures"] if s["selected"]) == 3
+
+        for s in data["structures"]:
+            assert "pc1" in s
+            assert "pc2" in s
+            assert "index" in s
+            assert "formula" in s
+
+    def test_pca_output_novelty(self, tmp_path):
+        """PCA JSON includes novelty scores in novelty mode."""
+        reference = _make_varied_configs(5, rng_seed=0)
+        candidates = _make_varied_configs(10, rng_seed=100)
+        out = tmp_path / "pca_novelty.json"
+        selector = QUESTSSelector(
+            n_configs=3, reference=reference, pca_output=out
+        )
+        selector.select(candidates)
+
+        data = json.loads(out.read_text())
+        assert data["mode"] == "novelty"
+
+        selected = [s for s in data["structures"] if s["selected"]]
+        assert len(selected) == 3
+        for s in selected:
+            assert "novelty_score" in s
+
+    def test_pca_not_written_when_none(self, tmp_path):
+        """No JSON file when pca_output is None."""
+        configs = _make_varied_configs(10)
+        selector = QUESTSSelector(n_configs=3, method="msc")
+        selector.select(configs)
+        assert not list(tmp_path.iterdir())
 
 
 # ---------------------------------------------------------------------------

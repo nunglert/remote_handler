@@ -253,14 +253,20 @@ def parallel_tempering(
     while steps_done < n_total_steps:
         block = min(md_steps_per_exchange, n_total_steps - steps_done)
 
-        integrate_kwargs["n_steps"] = block
-
+        # Create a fresh reporter per block because ts.integrate() closes
+        # file handles on return.  First block uses mode="w"; subsequent
+        # blocks append with mode="a".
         if reporter_args is not None:
-            integrate_kwargs["trajectory_reporter"] = TrajectoryReporter(
-                **reporter_args
-            )
+            mode = "w" if steps_done == 0 else "a"
+            ra = dict(reporter_args)
+            tk = ra.pop("trajectory_kwargs", {})
+            tk["mode"] = mode
+            ra["trajectory_kwargs"] = tk
+            integrate_kwargs["trajectory_reporter"] = TrajectoryReporter(**ra)
         else:
             integrate_kwargs["trajectory_reporter"] = None
+
+        integrate_kwargs["n_steps"] = block
 
         state = ts.integrate(**integrate_kwargs)
         steps_done += block
@@ -449,26 +455,28 @@ def parallel_tempering_nvt(
         # How many MD steps in this block
         block = min(md_steps_per_exchange, n_total_steps - steps_done)
 
-        # propagate block steps
-        for t in range(block):
-            if reporter_args is not None:
-                trajectory_reporter = TrajectoryReporter(**reporter_args)
-            else:
-                trajectory_reporter = None
+        # Fresh reporter per block (ts.integrate closes file handles on return).
+        # First block: mode="w"; subsequent blocks: mode="a".
+        if reporter_args is not None:
+            mode = "w" if steps_done == 0 else "a"
+            ra = dict(reporter_args)
+            tk = ra.pop("trajectory_kwargs", {})
+            tk["mode"] = mode
+            ra["trajectory_kwargs"] = tk
+            reporter = TrajectoryReporter(**ra)
+        else:
+            reporter = None
 
-            state = ts.integrate(
-                system=state,
-                model=model,
-                integrator=ts.Integrator.nvt_langevin,
-                n_steps=1,
-                temperature=temperatures,
-                timestep=dt,
-                trajectory_reporter=trajectory_reporter,
-                gamma=gamma,
-            )
-
-            # if trajectory_reporter is not None:
-            #     trajectory_reporter.report(state, start_step + steps_done + t, model=model)
+        state = ts.integrate(
+            system=state,
+            model=model,
+            integrator=ts.Integrator.nvt_langevin,
+            n_steps=block,
+            temperature=temperatures,
+            timestep=dt,
+            trajectory_reporter=reporter,
+            gamma=gamma,
+        )
 
         steps_done += block
 
