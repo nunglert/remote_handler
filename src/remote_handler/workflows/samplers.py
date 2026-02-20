@@ -27,6 +27,7 @@ from remote_handler.scripts.input_models import (
     LammpsSamplingInput,
     TorchSimSamplingInput,
 )
+from remote_handler.workflows.selectors import ConfigSelector
 
 from .active_learning_base import Sampler
 
@@ -924,6 +925,9 @@ class TorchSimSampler(Sampler):
         dtype: Torch dtype string (default: "float32")
         remote_savepath: Path on remote machine for calculation files
         loop_time: Interval (seconds) to poll for job completion
+        selector: Optional ConfigSelector strategy for choosing which
+            configurations from the PT trajectories to return. If None,
+            the script's default output (final frame per replica) is used.
     """
 
     def __init__(
@@ -948,6 +952,7 @@ class TorchSimSampler(Sampler):
         remote_savepath: Optional[os.PathLike] = None,
         loop_time: float = 30,
         stub: bool = False,
+        selector: Optional[ConfigSelector] = None,
     ):
         super().__init__()
         self.remote_fs = remote_fs
@@ -970,6 +975,7 @@ class TorchSimSampler(Sampler):
         self.remote_savepath = remote_savepath
         self.loop_time = loop_time
         self.stub = stub
+        self.selector = selector
 
     def update(
         self, calcdir: Path, sampler_input: list[Path], **kwargs
@@ -1079,6 +1085,11 @@ class TorchSimSampler(Sampler):
         """
         Run torch_sim parallel tempering and collect configurations.
 
+        If a ``selector`` was provided, trajectory h5md files are passed
+        to the selector which picks configurations according to its
+        strategy. Otherwise the script's default output (final frame per
+        replica) is returned.
+
         Returns:
             Path to extxyz file containing sampled configurations
         """
@@ -1095,9 +1106,40 @@ class TorchSimSampler(Sampler):
         else:
             self.sampling_task.submit()
             self.sampling_task.collect_results()
-            output_path = (
-                Path(self.sampling_task.local_savepath) / "out/samples.extxyz"
-            )
+
+            if self.selector is not None:
+                # Read all trajectory frames and pass to selector
+                results_path = Path(self.sampling_task.local_savepath)
+                traj_paths = sorted(results_path.glob("trajectory_*.h5md"))
+                if not traj_paths:
+                    logger.warning(
+                        "No trajectory_*.h5md files found in %s, "
+                        "falling back to script output",
+                        results_path,
+                    )
+                    output_path = results_path / "out/samples.extxyz"
+                else:
+                    from torch_sim.trajectory import TorchSimTrajectory
+
+                    grouped_frames: list[list[Atoms]] = []
+                    for traj_path in traj_paths:
+                        traj = TorchSimTrajectory(str(traj_path), mode="r")
+                        frames = traj.get_atoms()
+                        traj.close()
+                        if not isinstance(frames, list):
+                            frames = [frames]
+                        grouped_frames.append(frames)
+
+                    selected = self.selector.select(grouped_frames)
+                    output_dir = results_path / "out"
+                    os.makedirs(output_dir, exist_ok=True)
+                    output_path = output_dir / "samples.extxyz"
+                    ase.io.write(output_path, selected)
+            else:
+                output_path = (
+                    Path(self.sampling_task.local_savepath)
+                    / "out/samples.extxyz"
+                )
 
         logger.info(
             f"Torch_sim sampled configurations written to {output_path}"

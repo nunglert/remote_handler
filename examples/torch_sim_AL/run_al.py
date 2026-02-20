@@ -26,7 +26,6 @@ import os
 # Ensure writable TMPDIR (Slurm nodes may restrict /tmp)
 _tmpdir = os.path.expanduser("~/tmp")
 os.makedirs(_tmpdir, exist_ok=True)
-os.environ["TMPDIR"] = _tmpdir
 
 import logging
 import sys

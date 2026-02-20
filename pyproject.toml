@@ -53,7 +53,9 @@ mace = [
 clinamen = [
     "Clinamen2"
 ]
-
+quests = [
+    "quests==2025.9.29"
+]
 
 [project.urls]
 "Homepage" = "https://gitlab.tuwien.ac.at/e165-03-1_theoretische_materialchemie/madsen-s-research-group/remote_handler"
