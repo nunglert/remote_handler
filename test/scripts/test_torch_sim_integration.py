@@ -243,6 +243,94 @@ class TestTorchSimScriptIntegration:
         sampled = read(samples_file, index=":")
         assert len(sampled) == 2
 
+    def test_script_npt_ensemble_model(
+        self, integration_temp_dir, founder_bulk
+    ):
+        """Test NPT parallel tempering with a MaceEnsembleModel.
+
+        Uses two copies of the same foundation model to form an ensemble.
+        With identical members the mean should match single-model output
+        and uncertainty should be near zero.  Also checks that uncertainty
+        arrays are written to the h5md trajectory files.
+        """
+        root_dir = integration_temp_dir / "test_script_npt_ensemble_model"
+        if root_dir.exists():
+            shutil.rmtree(root_dir)
+        root_dir.mkdir()
+
+        model = os.getenv("FOUNDATION_MODEL")
+
+        input_file = root_dir / "input_torchsim.json"
+        input_data = {
+            "founder": str(founder_bulk),
+            "model_paths": [model, model],
+            "ensemble": "npt",
+            "temperatures": [300.0, 600.0],
+            "dt": 0.001,
+            "n_steps_npt": 0,
+            "n_steps_pt": 5,
+            "seed": 42,
+            "device": "cuda",
+            "dtype": "float64",
+        }
+        input_file.write_text(json.dumps(input_data))
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "remote_handler.scripts.torch_sim.torch_sim_sampling",
+                str(input_file),
+            ],
+            capture_output=True,
+            text=True,
+            cwd=root_dir,
+            check=True,
+        )
+        print(result.stdout)
+        print(result.stderr)
+
+        assert result.returncode == 0, (
+            f"Script failed with return code {result.returncode}:\n"
+            f"{result.stderr}"
+        )
+
+        # Verify output samples
+        samples_file = root_dir / "out" / "samples.extxyz"
+        assert samples_file.exists(), f"Samples file not found: {samples_file}"
+
+        sampled = read(samples_file, index=":")
+        assert len(sampled) == 2, f"Expected 2 replicas, got {len(sampled)}"
+
+        # Verify h5md trajectory files contain uncertainty arrays
+        from torch_sim.trajectory import TorchSimTrajectory
+
+        for i in range(2):
+            traj_path = root_dir / f"trajectory_{i}.h5md"
+            assert (
+                traj_path.exists()
+            ), f"Trajectory file not found: {traj_path}"
+
+            traj = TorchSimTrajectory(str(traj_path), mode="r")
+            energy_unc = traj.get_array("energy_uncertainty")
+            forces_unc = traj.get_array("forces_uncertainty")
+            traj.close()
+
+            assert (
+                energy_unc is not None
+            ), "energy_uncertainty not in trajectory"
+            assert (
+                forces_unc is not None
+            ), "forces_uncertainty not in trajectory"
+
+            # Identical ensemble members → uncertainty ≈ 0
+            assert np.allclose(
+                energy_unc, 0.0, atol=1e-4
+            ), f"Energy uncertainty should be ~0 for identical models, got {energy_unc}"
+
+        # Verify PT swap log exists
+        assert (root_dir / "pt_swaps.json").exists()
+
     def test_script_foundation_model(self, integration_temp_dir, founder_bulk):
         """Test using the MACE-MP foundation model via 'foundation' keyword."""
         root_dir = integration_temp_dir / "test_script_foundation"

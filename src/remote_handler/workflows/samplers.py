@@ -895,6 +895,49 @@ class NSTrajectorySampler(Sampler):
         return output_file
 
 
+def _read_trajectory_frames(traj) -> list[Atoms]:
+    """Read all frames from a TorchSimTrajectory, attaching custom properties.
+
+    ``TorchSimTrajectory.get_atoms`` only returns basic structural data
+    (positions, cell, numbers, pbc).  This helper additionally reads any
+    custom arrays stored by ``TrajectoryReporter`` (e.g. from
+    ``prop_calculators``) and attaches them to each ``Atoms`` object:
+
+    * Scalar-per-frame arrays (like ``energy_uncertainty``) are placed in
+      ``atoms.info[name]``.
+    * Per-atom arrays whose first dimension matches the atom count (like
+      ``forces_uncertainty`` with shape ``[n_atoms, 3]``) are placed in
+      ``atoms.arrays[name]``.
+    """
+    n_frames = traj._file.root.data.positions.shape[0]
+    frames = [traj.get_atoms(frame=i) for i in range(n_frames)]
+
+    # State arrays written by write_state — skip these when attaching props
+    _state_keys = {"positions", "cell", "masses", "atomic_numbers", "pbc"}
+    prop_names = [k for k in traj.array_registry if k not in _state_keys]
+
+    for name in prop_names:
+        try:
+            arr = traj.get_array(name)
+        except Exception:
+            continue
+
+        for i, at in enumerate(frames):
+            if i >= arr.shape[0]:
+                break
+            val = arr[i]
+            if val.ndim == 0 or (val.ndim == 1 and val.shape[0] == 1):
+                # Scalar → atoms.info
+                at.info[name] = float(val)
+            elif val.ndim >= 1 and val.shape[0] == len(at):
+                # Per-atom array → atoms.arrays
+                at.arrays[name] = np.ascontiguousarray(val)
+            else:
+                at.info[name] = val
+
+    return frames
+
+
 class TorchSimSampler(Sampler):
     """
     Sampler using torch_sim parallel tempering with MACE models.
@@ -980,6 +1023,27 @@ class TorchSimSampler(Sampler):
         self.stub = stub
         self.selector = selector
 
+        # UncertaintySelector requires an ensemble model (multiple model_paths)
+        # to produce the energy_uncertainty / forces_uncertainty it relies on.
+        if selector is not None and len(self.model_paths) < 2:
+            from remote_handler.workflows.selectors import (
+                PipelineSelector,
+                UncertaintySelector,
+            )
+
+            needs_ensemble = isinstance(selector, UncertaintySelector)
+            if isinstance(selector, PipelineSelector):
+                needs_ensemble = any(
+                    isinstance(s, UncertaintySelector)
+                    for s in selector.selectors
+                )
+            if needs_ensemble:
+                raise ValueError(
+                    f"UncertaintySelector requires an ensemble model "
+                    f"(model_paths with >= 2 entries) to produce uncertainty "
+                    f"estimates. Got model_paths={self.model_paths!r}."
+                )
+
     def update(
         self, calcdir: Path, sampler_input: list[Path], **kwargs
     ) -> None:
@@ -988,10 +1052,11 @@ class TorchSimSampler(Sampler):
 
         Args:
             calcdir: Directory for this AL iteration
-            sampler_input: List of model file paths. When ``model_paths`` is
-                ``["foundation"]`` the models in *sampler_input* are ignored.
-                Otherwise the filenames from *sampler_input* are used to
-                populate the ``model_paths`` field in the script input JSON.
+            sampler_input: Path or list of paths to model files. The filenames
+                are used to populate the ``model_paths`` field in the script
+                input JSON. When the AL handler provides finetuned model files
+                (from training), those override the initial ``model_paths``
+                setting (e.g. ``["foundation"]``).
             **kwargs: Additional parameters
         """
         self.sample_dir = calcdir / "sample"
@@ -999,15 +1064,19 @@ class TorchSimSampler(Sampler):
         os.makedirs(self.sample_dir, exist_ok=True)
         os.makedirs(self.results_dir, exist_ok=True)
 
-        self.model_files = sampler_input
+        self.model_files = (
+            sampler_input
+            if isinstance(sampler_input, list)
+            else [sampler_input]
+        )
 
         if not self.stub:
-            # Build model_paths for the script input
-            is_foundation = self.model_paths == ["foundation"]
-            if is_foundation:
-                script_model_paths = ["foundation"]
-            else:
-                script_model_paths = [Path(p).name for p in self.model_files]
+            # Build model_paths for the script input.
+            # self.model_paths is the *initial* setting (e.g. ["foundation"]).
+            # When the AL handler provides finetuned model files (from
+            # training), those take precedence over the initial setting.
+            script_model_paths = [Path(p).name for p in self.model_files]
+            is_foundation = script_model_paths == ["foundation"]
 
             script_input = {
                 "founder": Path(self.founder_path).name,
@@ -1130,10 +1199,8 @@ class TorchSimSampler(Sampler):
                     grouped_frames: list[list[Atoms]] = []
                     for traj_path in traj_paths:
                         traj = TorchSimTrajectory(str(traj_path), mode="r")
-                        frames = traj.get_atoms()
+                        frames = _read_trajectory_frames(traj)
                         traj.close()
-                        if not isinstance(frames, list):
-                            frames = [frames]
                         grouped_frames.append(frames)
 
                     selected = self.selector.select(grouped_frames)

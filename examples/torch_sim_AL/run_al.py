@@ -26,6 +26,7 @@ import os
 # Ensure writable TMPDIR (Slurm nodes may restrict /tmp)
 _tmpdir = os.path.expanduser("~/tmp")
 os.makedirs(_tmpdir, exist_ok=True)
+os.environ["TMPDIR"] = _tmpdir
 
 import logging
 import sys
@@ -39,6 +40,11 @@ from remote_handler.scripts import input_models
 from remote_handler.workflows.active_learning_base import ActiveLearningHandler
 from remote_handler.workflows.evaluators import VASPEvaluator
 from remote_handler.workflows.samplers import TorchSimSampler
+from remote_handler.workflows.selectors import (
+    PipelineSelector,
+    QUESTSSelector,
+    UncertaintySelector,
+)
 from remote_handler.workflows.trainers import MaceFinetuningTrainer
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
@@ -79,28 +85,24 @@ dft_cluster_config = ClusterConfig(
     template="lugus.sh.j2",
 )
 
-
 # ---------------------------------------------------------------------------
 # Inputs  (adjust to your system)
 # ---------------------------------------------------------------------------
-def create_founder(founder_path):
-    """Create a bulk Si 2x2x2 supercell (64 atoms) as founder structure."""
-    from ase.build import bulk
-    from ase.io import write
-
-    si_bulk = bulk("Si", "diamond", a=5.43, cubic=True) * (2, 2, 2)
-    write(founder_path, si_bulk, format="vasp")
-    return founder_path
-
-
-founder_poscar = create_founder(inputs_dir / "POSCAR_si_bulk")
-
+founder_poscar = inputs_dir / "Cu8S4_mp-618991.extxyz"
 mace_template = config_dir / "mace_config.yaml"
 foundation_model = inputs_dir / "2023-12-10-mace-128-L0_energy_epoch-249.model"
 
 # ---------------------------------------------------------------------------
 # 1. Sampler: TorchSimSampler (NPT parallel tempering)
 # ---------------------------------------------------------------------------
+# Selector for the AL loop: first pick 100 by uncertainty, then 10 diverse by QUESTS
+al_selector = PipelineSelector(
+    [
+        UncertaintySelector(n_configs=100),
+        QUESTSSelector(n_configs=10, method="msc"),
+    ]
+)
+
 torchsim_sampler = TorchSimSampler(
     remote_fs=gpu_fs,
     cluster_config=gpu_cluster_config,
@@ -124,12 +126,13 @@ torchsim_sampler = TorchSimSampler(
     ],
     model_paths=["foundation"],
     dt=0.001,
-    n_steps_pt=100,
+    n_steps_pt=1000,
     seed=42,
     device="cuda",
     dtype="float64",
     remote_savepath=Path("/home/nico.unglert/dump/remote_handler"),
-    loop_time=1,
+    loop_time=10,
+    selector=al_selector,
 )
 
 # ---------------------------------------------------------------------------
@@ -155,7 +158,7 @@ vasp_evaluator = VASPEvaluator(
         "lreal": False,
         "ncore": 8,
     },
-    loop_time=1,
+    loop_time=10,
 )
 
 # ---------------------------------------------------------------------------
@@ -172,20 +175,56 @@ mace_trainer = MaceFinetuningTrainer(
     foundation_model=foundation_model,
     num_models=2,
     remote_savepath=Path("/home/nico.unglert/dump/remote_handler"),
-    loop_time=1,
+    loop_time=10,
 )
 
 # ---------------------------------------------------------------------------
 # Initial data collection: PT sampling with foundation model
 # ---------------------------------------------------------------------------
+initial_torchsim_sampler = TorchSimSampler(
+    remote_fs=gpu_fs,
+    cluster_config=gpu_cluster_config,
+    sampling_script=scripts_dir / "torch_sim" / "torch_sim_sampling.py",
+    founder_path=founder_poscar,
+    ensemble="npt",
+    temperatures=[
+        300.0,
+        450.0,
+        600.0,
+        750.0,
+        900.0,
+        1050,
+        1200,
+        1350,
+        1500,
+        1650,
+        1800,
+        1950,
+        2100,
+    ],
+    model_paths=["foundation"],
+    dt=0.001,
+    n_steps_pt=1000,
+    seed=42,
+    device="cuda",
+    dtype="float64",
+    remote_savepath=Path("/home/nico.unglert/dump/remote_handler"),
+    loop_time=10,
+    selector=QUESTSSelector(n_configs=20, method="msc"),
+)
 initial_sample_file = calchome / "initial_samples.extxyz"
 if os.path.exists(initial_sample_file):
     initial_atoms = ase.io.read(initial_sample_file, index=":")
 else:
-    torchsim_sampler.update(calchome / "initial_samples", [foundation_model])
-    output_path = torchsim_sampler.get_sampled_configs()
+    initial_torchsim_sampler.update(
+        calchome / "initial_samples", [foundation_model]
+    )
+    output_path = initial_torchsim_sampler.get_sampled_configs()
     initial_atoms = ase.io.read(output_path, index=":")
     ase.io.write(initial_sample_file, initial_atoms)
+
+initial_selected_file = calchome / "initial_samples_selected.extxyz"
+ase.io.write(initial_selected_file, initial_atoms)
 
 # ---------------------------------------------------------------------------
 # Active Learning Loop
@@ -198,7 +237,7 @@ al_handler = ActiveLearningHandler(
     num_iterations=10,
     cycle_entry_point="evaluation",
     cycle_exit_point="training",
-    initial_sampler_out=initial_sample_file,
+    initial_sampler_out=initial_selected_file,
     initial_evaluator_out=None,
     initial_trainer_out=None,
     combine_evaluator_outputs=True,

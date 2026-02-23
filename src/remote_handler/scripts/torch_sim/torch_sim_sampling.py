@@ -13,8 +13,20 @@ Supports two modes:
   - ``npt``: NPT parallel tempering (pt_simulation_npt).
 """
 
+import os
 import sys
 from pathlib import Path
+
+# Redirect temp files to ~/tmp unconditionally.  Some GPU nodes have a
+# non-writable /tmp which causes NVIDIA's NVRTC compiler (used by warp for
+# CUDA kernel compilation) to fail with "cannot open temporary file
+# /tmp/edg20_*".  NVRTC's EDG frontend reads TMPDIR to locate its temp
+# directory, so setting it here before any CUDA imports fixes the issue.
+_tmp_fallback = Path.home() / "tmp"
+_tmp_fallback.mkdir(exist_ok=True)
+os.environ["TMPDIR"] = str(_tmp_fallback)
+os.environ["TEMP"] = str(_tmp_fallback)
+os.environ["TMP"] = str(_tmp_fallback)
 
 INPUTFILE = Path(sys.argv[1])
 calcpath = INPUTFILE.parent
@@ -23,8 +35,6 @@ from remote_handler.scripts.input_models import TorchSimSamplingInput
 
 input_config = TorchSimSamplingInput.from_file(INPUTFILE)
 input_config.validate()
-
-import os
 
 import ase.io
 import torch
