@@ -23,8 +23,6 @@ TAG = input_args["tag"]
 DATABASE = calcpath / input_args["DATABASE"] # Initial file with structures 
 
 do_optimization = input_args["do_optimization"]
-do_steinhardt = input_args["do_steinhardt"]
-do_rdf = input_args["do_rdf"]
 
 
 if not os.path.exists(DATABASE):
@@ -60,10 +58,11 @@ for idx, at in enumerate(ats):
     try:
         is_finished = False
         
+        at.calc = calc
+
         if do_optimization:
             if not "is_converged" in at.info:
                 print(f"Optimizing...")
-                at.calc = calc
 
                 if calc_args.get("pressure", None) is not None:
                     ecf = ExpCellFilter(at, pressure=calc_args["pressure"])
@@ -72,7 +71,12 @@ for idx, at in enumerate(ats):
 
                 opt = LBFGS(ecf)
                 is_converged = opt.run(fmax=opt_args["fmax"], steps=opt_args["steps"])
-                at.info["is_converged"] = is_converged
+                at.info["is_converged"] = is_converged    
+            is_finished = True
+        
+        else:
+            at.get_potential_energy()
+            at.get_forces()
             is_finished = True
 
         at.info["shard_idx"] = idx
