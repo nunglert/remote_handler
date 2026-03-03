@@ -50,6 +50,7 @@ if os.path.exists(processed_file):
 path, filename = os.path.split(DATABASE)
 
 calc_args = input_args["calculator_args"]
+opt_args = input_args["optimization_args"]
 calc = MACECalculator(model_paths=calc_args["pickle_file"], device="cpu")
 
 for idx, at in enumerate(ats):
@@ -62,13 +63,15 @@ for idx, at in enumerate(ats):
         if do_optimization:
             if not "is_converged" in at.info:
                 print(f"Optimizing...")
-                # if calc_args.get("pressure", None) is not None:
-                #     ecf = ExpCellFilter(at, pressure=calc_args["pressure"])
-                # else:
-                #     ecf = at
                 at.calc = calc
-                opt = LBFGS(at)
-                is_converged = opt.run(fmax=0.01, steps=200)
+
+                if calc_args.get("pressure", None) is not None:
+                    ecf = ExpCellFilter(at, pressure=calc_args["pressure"])
+                else:
+                    ecf = at
+
+                opt = LBFGS(ecf)
+                is_converged = opt.run(fmax=opt_args["fmax"], steps=opt_args["steps"])
                 at.info["is_converged"] = is_converged
             is_finished = True
 
