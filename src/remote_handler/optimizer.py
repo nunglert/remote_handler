@@ -162,7 +162,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         self.python_script_file = python_script_path
 
         self.shared_ressources = []
-        if optimization_backend == "NNFF":
+        if optimization_backend == "NNFF" or optimization_backend == "MACE":
             self.shared_ressources.append(pickle_file)
 
         if not collect_only:
@@ -182,10 +182,11 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
             json_config["calculator_args"]["pickle_file"] = (
                 (Path(self.savepath) / pickle_file).resolve().__str__()
             )
-
+            
             config_files.append(
                 tasks.DictJSON(json_config, "input_opt.json", self.remote_fs)
             )
+
             atoms_batches.append(
                 tasks.AtomsBatch(
                     self.shards[calc_idx], "opt.extxyz", self.remote_fs
