@@ -7,6 +7,9 @@ from mace.calculators import MACECalculator
 from ase.filters import ExpCellFilter
 from ase.optimize import LBFGS
 import ase.io
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 calcpath = Path(sys.argv[1])
 INPUTFILE = calcpath / "input_opt.json"
@@ -62,7 +65,6 @@ for idx, at in enumerate(ats):
 
         if do_optimization:
             if not "is_converged" in at.info:
-                print(f"Optimizing...")
 
                 if calc_args.get("pressure", None) is not None:
                     ecf = ExpCellFilter(at, pressure=calc_args["pressure"])
@@ -71,18 +73,23 @@ for idx, at in enumerate(ats):
 
                 opt = LBFGS(ecf)
                 is_converged = opt.run(fmax=opt_args["fmax"], steps=opt_args["steps"])
+                if is_converged:
+                    logging.info(f"Structure {idx} converged.")
+                    print(f"Structure {idx} converged.")
                 at.info["is_converged"] = is_converged    
             is_finished = True
         
         else:
+
             at.get_potential_energy()
             at.get_forces()
             is_finished = True
+
 
         at.info["shard_idx"] = idx
         at.info["is_finished"] = is_finished
         ase.io.write(processed_file, at, append=True)
 
     except Exception as e:
-        print(f"Error processing structure {idx}: {e}")
+        logging.error(f"Error processing structure {idx}: {e}")
         continue
