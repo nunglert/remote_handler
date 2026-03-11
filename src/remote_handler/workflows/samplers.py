@@ -1218,3 +1218,93 @@ class TorchSimSampler(Sampler):
             f"Torch_sim sampled configurations written to {output_path}"
         )
         return output_path
+<<<<<<< HEAD
+=======
+
+
+class SSPDSampler(Sampler):
+    def __init__(
+        self,
+        remote_fs: FileSystemHandlerBase,
+        sampling_script: os.PathLike,  # SSPD_sampling.py
+        data_path: os.PathLike,  # path to .xyz for starting configuration
+        cluster_config: ClusterConfig,
+        remote_savepath: Optional[os.PathLike] = None,
+        loop_time: float = 30,
+    ):
+        """
+        Args:
+            remote_fs: `FileSystemHandlerBase` for the machine on which the sampling
+                should be run
+            sampling_script: Path to SSPD_sampling.py or another compatible sampling
+                script
+            remote_savepath: Path in which files for the remote calculations are stored
+            loop_time: interval (in seconds) at which to poll if the sampling slurm job
+                has finished
+        """
+        super().__init__()
+        self.remote_fs = remote_fs
+        self.sampling_script = sampling_script
+        self.data_path = data_path
+        self.remote_savepath = remote_savepath
+        self.loop_time = loop_time
+        self.cluster_config = cluster_config
+
+    def update(
+        self, calcdir: Path, sampler_input: list[Path], **kwargs
+    ) -> None:
+        self.sample_dir = calcdir / "sample"
+        self.results_dir = self.sample_dir / "results"
+        os.makedirs(self.sample_dir, exist_ok=True)
+        os.makedirs(self.results_dir, exist_ok=True)
+
+        self.model_files = sampler_input
+
+        script_input = {
+            "input_struct_path": Path(self.data_path).name,
+            "threshold": kwargs["threshold"],
+            "inv_beta": kwargs["inv_beta"],
+            "max_acceptance": 1.0,
+            "min_acceptance": 0.5,
+            "initial_timestep": 0.00075,
+            "num_iterations": 100,
+            "sampling_threshold": kwargs["sampling_threshold"],
+            "sampling_frequency": 10,
+            "N": 100,
+            "model_file": Path(self.model_files).name,
+            "seed": np.random.randint(1e6),
+        }
+
+        self.script_input_file = (
+            self.results_dir / "input_sample.json"
+        )  # script input file
+        with open(self.script_input_file, "w") as f:
+            f.write(json.dumps(script_input))
+
+        self.sampling_task = SingleScriptTask(
+            local_savepath=self.results_dir,
+            input_file=self.script_input_file,
+            cluster_config=self.cluster_config,
+            remote_fs=self.remote_fs,
+            script_file=self.sampling_script,
+            remote_savepath=self.remote_savepath,
+            jobfile_name="run_sample.sh",
+            jobname="sample",
+            logfile="sample.log",
+            n_processors=1,
+            loop_time=self.loop_time,
+            collect_only=False,
+        )
+
+        self.sampling_task.allocate_data()  # moves script and input files
+
+        self.sampling_task.copy_file(self.data_path)
+        self.sampling_task.copy_file(self.model_files)
+
+
+    def get_sampled_configs(self) -> Path:
+        self.sampling_task.submit()
+        self.sampling_task.collect_results()
+
+        return Path(self.sampling_task.local_savepath) / "out/samples.xyz"
+>>>>>>> a8ce50f (Including objects needed for doing SSPD active learning)

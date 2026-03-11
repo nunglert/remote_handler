@@ -219,3 +219,120 @@ class VASPEvaluator(GroundTruthEvaluator):
         )
 
         return output_path
+<<<<<<< HEAD
+=======
+
+
+class ORCAEvaluator(GroundTruthEvaluator):
+    def __init__(
+        self,
+        singlepoint_script: os.PathLike,
+        cluster_config: ClusterConfig,
+        remote_fs: FileSystemHandlerBase,
+        num_parallel: int,
+        orcasimpleinput: str,
+        remote_savepath: Optional[os.PathLike] = None,
+        loop_time: float = 30,
+        required_fraction: float = 0.8,
+        n_processors: int = 2,
+    ):
+        """
+        Args:
+            singlepoint_script: Path to dft_singlepoint.py or another compatible
+                evaluation script
+            remote_fs: `FileSystemHandlerBase` for the machine on which the evaluation
+                should be run
+            num_parallel: number of parallel slurm jobs to queue
+            orcasimpleinput: simple input for the ASE ORCA calculator
+            remote_savepath: Path in which file for remote calculations are stored
+            loop_time: interval (in seconds) at which to poll if the evaluation slurm
+                jobs have finished
+            required_fraction: fraction of samples for which DFT must succeed to
+                progress to the next step
+            n_processors: number of CPU cores to run each ORCA job on
+        """
+        super().__init__()
+        self.singlepoint_script = singlepoint_script
+        self.orcasimpleinput = orcasimpleinput
+        self.remote_fs = remote_fs
+        self.cluster_config = cluster_config
+        self.num_parallel = num_parallel
+        self.loop_time = loop_time
+        self.required_fraction = required_fraction
+        self.remote_savepath = Path(remote_savepath)
+        self.n_processors = n_processors
+
+    def update(
+        self, calcdir: Path, evaluator_input: Path | list[Path], **kwargs
+    ) -> None:
+        self.dft_dir = Path(calcdir) / "dft"
+        self.results_dir = self.dft_dir / "results"
+        os.makedirs(self.dft_dir, exist_ok=True)
+        it = str(calcdir).split("/")[-1]
+
+        from remote_handler.dft_runner import ORCAHandler
+
+
+        traj_files = (
+            [str(evaluator_input)]
+            if isinstance(evaluator_input, Path)
+            else [str(p) for p in evaluator_input]
+        )
+
+        self.orca_handler = ORCAHandler(
+            loop_time=self.loop_time,
+            cluster_config=self.cluster_config,
+            jobname="dft",
+            every=1,
+            start=None,
+            end=None,
+            logfile="dft.log",
+            tag="dft",
+            collect_only=False,
+            remote_fs=self.remote_fs,
+            savepath=str(self.remote_savepath)
+            if self.remote_savepath
+            else "/tmp",
+            local_savepath=self.results_dir,
+            traj_files=traj_files,
+            python_script_path=self.singlepoint_script,
+            num_parallel=self.num_parallel,
+            n_processors=self.n_processors,
+            orcasimpleinput=self.orcasimpleinput,
+        )
+
+    def get_evaluated_configs(self) -> Path:
+        self.orca_handler.run()
+
+        if not self.orca_handler.finish_check(self.required_fraction):
+            raise Exception(
+                f"Less than {self.required_fraction * 100}% ran successfully. "
+                "Something probably went wrong. Otherwise, lower the "
+                "required_fraction parameter."
+            )
+
+        all_ats = []
+        for calcpath in grep(str(self.results_dir / "calcdirs"), ""):
+            try:
+                at = ase.io.read(Path(calcpath) / "dft_dft.extxyz")
+                logger.info(f"ORCA run succesfull for {calcpath=}")
+                all_ats.append(at)
+            except:
+                logger.info(f"ORCA run failed for {calcpath=}")
+
+        for s in all_ats:
+            s.info["REF_energy"] = s.get_potential_energy()
+            s.arrays["REF_forces"] = s.get_forces()
+            s.calc = None
+
+
+        # Write results to file
+        os.makedirs(self.results_dir, exist_ok=True)
+        output_path = self.results_dir / "evaluated_configs.extxyz"
+        ase.io.write(output_path, all_ats)
+        logger.info(
+            f"Wrote {len(all_ats)} evaluated configurations to {output_path}"
+        )
+
+        return output_path
+>>>>>>> a8ce50f (Including objects needed for doing SSPD active learning)
