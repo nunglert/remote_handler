@@ -1218,8 +1218,6 @@ class TorchSimSampler(Sampler):
             f"Torch_sim sampled configurations written to {output_path}"
         )
         return output_path
-<<<<<<< HEAD
-=======
 
 
 class SSPDSampler(Sampler):
@@ -1307,4 +1305,3 @@ class SSPDSampler(Sampler):
         self.sampling_task.collect_results()
 
         return Path(self.sampling_task.local_savepath) / "out/samples.xyz"
->>>>>>> a8ce50f (Including objects needed for doing SSPD active learning)

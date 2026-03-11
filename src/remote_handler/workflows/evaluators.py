@@ -219,8 +219,6 @@ class VASPEvaluator(GroundTruthEvaluator):
         )
 
         return output_path
-<<<<<<< HEAD
-=======
 
 
 class ORCAEvaluator(GroundTruthEvaluator):
@@ -335,4 +333,3 @@ class ORCAEvaluator(GroundTruthEvaluator):
         )
 
         return output_path
->>>>>>> a8ce50f (Including objects needed for doing SSPD active learning)

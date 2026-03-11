@@ -176,8 +176,6 @@ class VASPHandler(RemoteAtomsHandler):
         self.submit()
         # self.collect_and_harvest()
         self.collect_results()
-<<<<<<< HEAD
-=======
 
 
 class ORCAHandler(RemoteAtomsHandler):
@@ -317,4 +315,3 @@ class ORCAHandler(RemoteAtomsHandler):
         # self.collect_and_harvest()
         self.collect_results()
 
->>>>>>> a8ce50f (Including objects needed for doing SSPD active learning)
