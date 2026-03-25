@@ -10,6 +10,12 @@ Each script has a corresponding Input dataclass that can be loaded from JSON:
     >>> from remote_handler.scripts.input_models import MaceTrainingInput
     >>> config = MaceTrainingInput.from_file(Path("input.json"))
     >>> config.validate()
+
+# TODO NU: Currently the validation here is a bit useless, because we were trying
+# to perform the validation already on the "driver" machine and not only at the 
+# beginning of scripts, which operate in the remote machine and where all paths
+# should already be final and reachable. 
+# Could at least do more careful type checks?
 """
 
 import dataclasses
@@ -298,6 +304,45 @@ class DftSinglepointInput(ScriptInput):
 
         if not isinstance(self.INCAR_kwargs, dict):
             raise ScriptInputError("INCAR_kwargs must be a dictionary")
+
+
+@dataclass
+class OrcaSinglepointInput(ScriptInput):
+    """Input configuration for orca_singlepoint.py script.
+
+    Attributes:
+        DATABASE: Path to input structure file (extxyz or ASE-readable format)
+        orca_binary: Full path to ORCA executable
+        orcasimpleinput: Simple input line (functional, basis set, method)
+        orcablocks: ORCA block input for advanced settings (e.g. parallelization)
+
+    Example:
+        >>> config = OrcaSinglepointInput.from_file(Path("input_dft.json"))
+        >>> config.validate()
+    """
+
+    DATABASE: str
+    orca_binary: str
+    orcasimpleinput: str
+    orcablocks: str
+
+    def validate(self) -> None:
+        """Validate configuration parameters.
+
+        Raises:
+            ScriptInputError: If any parameter is invalid
+        """
+        if not self.DATABASE:
+            raise ScriptInputError("DATABASE cannot be empty")
+
+        if not self.orca_binary:
+            raise ScriptInputError("orca_binary cannot be empty")
+
+        if not self.orcasimpleinput:
+            raise ScriptInputError("orcasimpleinput cannot be empty")
+
+        if not self.orcablocks:
+            raise ScriptInputError("orcablocks cannot be empty")
 
 
 @dataclass
