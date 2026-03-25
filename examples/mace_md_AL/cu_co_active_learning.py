@@ -7,11 +7,6 @@ from typing import Optional
 import ase.io
 import numpy as np
 
-from remote_handler.core.active_learning_base import (
-    GroundTruthEvaluator,
-    ModelTrainer,
-    Sampler,
-)
 from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.core.tasks import (
     ArrayScriptTask,
@@ -20,6 +15,11 @@ from remote_handler.core.tasks import (
 )
 from remote_handler.core.utils import grep
 from remote_handler.dft_runner import VASPHandler
+from remote_handler.workflows.active_learning_base import (
+    GroundTruthEvaluator,
+    ModelTrainer,
+    Sampler,
+)
 
 logger = logging.getLogger(__name__)
 

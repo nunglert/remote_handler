@@ -11,8 +11,8 @@ from jaxnest.active_learning import ns_active_learning
 from jaxnest.input_parser import update_default_args
 
 import remote_handler
-from remote_handler.core import active_learning_base
 from remote_handler.core.file_handler import LocalFileSystem, RemoteFileSystem
+from remote_handler.workflows import active_learning_base
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
@@ -30,14 +30,10 @@ remote_handler.core.slurm_utils.TEMPLATE_DIRS.append(
 )
 
 # Instance local file systems (with SLURM configurations)
-local_fs = LocalFileSystem(
-    slurm_config_file="dirona.json"
-)
+local_fs = LocalFileSystem(slurm_config_file="dirona.json")
 
 # Instance remote file system (with SLURM configurations)
-remote_fs = RemoteFileSystem(
-    slurm_config_file="datalab.json"
-)
+remote_fs = RemoteFileSystem(slurm_config_file="datalab.json")
 
 # Settings for the active learning loop
 cycle_entry_point = "evaluation"
@@ -51,7 +47,9 @@ loop_time = 1
 
 # Decide whether to use the stub executable or the real one
 if stub:
-    ns_exe = "/home/aserafini/code/jaxns/test/data/active_learning/ns_run_stub.py"
+    ns_exe = (
+        "/home/aserafini/code/jaxns/test/data/active_learning/ns_run_stub.py"
+    )
 else:
     ns_exe = "/home/aserafini/code/jaxns/src/jaxnest/ns_run.py"
 
@@ -135,6 +133,7 @@ neuralil_trainer = ns_active_learning.NeuralILTrainer(
 
 # SAMPLER SCHEDULE
 
+
 # Schedule for the nested sampling trajectory sampler which changes the
 # number of walkers and the MC_cell_P parameter in the ns.inp file
 # as the active learning loop progresses
@@ -165,6 +164,7 @@ num_iterations = 20
 # Instantiate the sampler schedule with the desired number of iterations
 sampler_schedule = SamplerSchedule(num_iterations)
 
+
 # Function to update the ns.inp file with the new parameters from the schedule
 def kwargs_consumer(kwargs):
     ns_params = deepcopy(ns_traj_sampler.ns_params)
@@ -174,22 +174,23 @@ def kwargs_consumer(kwargs):
         args_dict=ns_params, n_gpu_parallel=n_gpu_parallel, parse_only=True
     )
 
+
 # Test the kwargs consumer function and visualize the schedule
 sampler_schedule.test(kwargs_consumer)
 sampler_schedule.visualize()
 
 
 al_handler = active_learning_base.ActiveLearningHandler(
-    sampler=ns_traj_sampler,                 # Where to get new samples from (Nested sampling trajectories)
-    evaluator=vasp_evaluator,                # How to evaluate the samples (DFT single point calculations)
-    trainer=neuralil_trainer,                # How to train the model (NeuralIL)
-    sampler_schedule=sampler_schedule,       # How to change the sampler parameters as the AL loop progresses
-    calchome=homepath,                       # Home directory where the AL loop is run from
-    initial_model_file=initial_model_file,   # Initial model file (None if starting from scratch)
-    initial_db_file=initial_db_file,         # Initial database file (None if starting from scratch)
-    initial_sample_file=initial_sample_file, # Initial sample file (extxyz with structures to add to the initial database)
-    num_iterations=num_iterations,           # Number of active learning iterations
-    cycle_entry_point=cycle_entry_point      # Entry point for the active learning cycle ("sampling" or "evaluation")
+    sampler=ns_traj_sampler,  # Where to get new samples from (Nested sampling trajectories)
+    evaluator=vasp_evaluator,  # How to evaluate the samples (DFT single point calculations)
+    trainer=neuralil_trainer,  # How to train the model (NeuralIL)
+    sampler_schedule=sampler_schedule,  # How to change the sampler parameters as the AL loop progresses
+    calchome=homepath,  # Home directory where the AL loop is run from
+    initial_model_file=initial_model_file,  # Initial model file (None if starting from scratch)
+    initial_db_file=initial_db_file,  # Initial database file (None if starting from scratch)
+    initial_sample_file=initial_sample_file,  # Initial sample file (extxyz with structures to add to the initial database)
+    num_iterations=num_iterations,  # Number of active learning iterations
+    cycle_entry_point=cycle_entry_point,  # Entry point for the active learning cycle ("sampling" or "evaluation")
 )
 
 al_handler.run()

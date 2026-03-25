@@ -8,7 +8,6 @@ import numpy as np
 import pytest
 from ase import Atoms
 from ase.calculators.calculator import compare_atoms
-from pytest_lazyfixture import lazy_fixture
 
 from remote_handler import atoms_handler, dft_runner
 
@@ -42,8 +41,33 @@ def local_dir(data_dir):
     return data_dir / "temp/dft_runner/local_dir"
 
 
+@pytest.fixture(
+    params=[
+        pytest.param("remote", marks=[pytest.mark.remote]),
+        pytest.param("local", marks=[pytest.mark.local]),
+    ]
+)
+def fs_config_savepath(
+    request,
+    remote_fs,
+    remote_cluster_config,
+    local_fs,
+    local_cluster_config,
+    tmp_path,
+):
+    """Provide resolved filesystem, cluster_config, and savepath for parametrized tests."""
+    if request.param == "remote":
+        return remote_fs, remote_cluster_config, remote_cluster_config.savepath
+    else:
+        return (
+            local_fs,
+            local_cluster_config,
+            str(tmp_path / "local_slurm_test"),
+        )
+
+
 @pytest.fixture
-def default_params(filesystem, data_dir, dummy_trajectory):
+def default_params(fs_config_savepath, data_dir, dummy_trajectory):
     """
     Variables:
         asset_dir: Path with static files required for test
@@ -52,6 +76,7 @@ def default_params(filesystem, data_dir, dummy_trajectory):
         local_results: Path where the directory from the remote machine will be
             copied to in order to investigate the resulting files.
     """
+    filesystem, cluster_config, savepath = fs_config_savepath
 
     asset_dir = data_dir / "assets/dft_runner/"
     temp_dir = data_dir / "temp/dft_runner"
@@ -84,7 +109,8 @@ def default_params(filesystem, data_dir, dummy_trajectory):
 
     params = dict(
         traj_files=traj_files,
-        savepath=filesystem.slurm_config["savepath"],
+        cluster_config=cluster_config,
+        savepath=savepath,
         num_parallel=5,
         python_script_path=python_script_path,
         loop_time=5,
@@ -128,6 +154,7 @@ def instance(default_params):
     return handler, params
 
 
+@pytest.mark.heavy
 def test_init(instance):
     handler, params = instance
 
@@ -135,6 +162,7 @@ def test_init(instance):
     assert handler.remote_fs.exists(handler.savepath / "calcdirs")
 
 
+@pytest.mark.heavy
 def test_allocate_data(instance):
     handler, params = instance
 

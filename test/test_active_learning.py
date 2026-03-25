@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 
-from remote_handler.core.active_learning_base import (
+from remote_handler.workflows.active_learning_base import (
     ActiveLearningHandler,
     GroundTruthEvaluator,
     ModelTrainer,

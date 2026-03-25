@@ -1,3 +1,4 @@
+import logging
 import os
 from abc import ABC, abstractmethod
 from copy import deepcopy
@@ -7,6 +8,9 @@ from typing import Any, Optional, Union
 
 from remote_handler.atoms_handler import RemoteAtomsHandler
 from remote_handler.core import cluster_handler, file_handler, tasks
+from remote_handler.core.cluster_handler import ClusterConfig
+
+logger = logging.getLogger(__name__)
 
 
 class RemoteOptimizationHandler(RemoteAtomsHandler):
@@ -22,6 +26,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
 
     Args:
         traj_files (str): Path to the trajectory files to be optimized.
+        cluster_config (ClusterConfig): ClusterConfig instance containing cluster-specific settings.
         remote_fs (file_handler.FileSystemHandlerBase): Remote file system handler.
         shard_size (int): Number of configurations per shard.
         savepath (str): Path to save the optimized trajectory files.
@@ -61,7 +66,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         nbins (int, optional): Number of bins for the Steinhardt calculation.
         do_optimization (bool, optional): If True, perform the optimization.
         do_steinhardt (bool, optional): If True, compute the Steinhardt parameters.
-        optimization_backend (str, optional): Backend to use for the optimization. 
+        optimization_backend (str, optional): Backend to use for the optimization.
             Either "NNFF" or "LJ". Defaults to "NNFF".
         steinhardt_backend (str, optional): Backend to use for the Steinhardt
             calculation. Either "pyscal" or "quip". Defaults to "quip".
@@ -73,6 +78,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
     def __init__(
         self,
         traj_files: str,
+        cluster_config: ClusterConfig,
         remote_fs: file_handler.FileSystemHandlerBase,
         n_processors: int,
         shard_size: int,
@@ -89,7 +95,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         tag: str = "opt",
         python_script_path: str = "/home/aserafini/code/jaxnest/scripts/utility/optimize_traj.py",
         stub: bool = False,
-        pickle_file: str = None,  #= "/home/nunglert/nnff_trainings/velo/si_bartok_gpu7/run11_r2scan_rerun/model_params_plain_ensemble_VELO_8E04F5B1.pkl",
+        pickle_file: str = None,  # = "/home/nunglert/nnff_trainings/velo/si_bartok_gpu7/run11_r2scan_rerun/model_params_plain_ensemble_VELO_8E04F5B1.pkl",
         supercell_trafo: list[int] = [3, 3, 3],
         max_neighbors_list: list[int] = [20, 30, 40, 50, 60],
         max_neighbors_offset: int = 3,
@@ -106,6 +112,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
     ):
         super().__init__(
             traj_files,
+            cluster_config,
             remote_fs,
             shard_size,
             savepath,
@@ -123,9 +130,6 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
             slurm_header_add="module load openblas",
         )
 
-        # Set up logger
-        self.logger = tasks.SimpleLogger(logfile)
-        
         # Store parameters
         self.do_optimization = do_optimization
         self.pickle_file = pickle_file
@@ -154,7 +158,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
             "general_args": dict(
                 nbins=nbins,
                 cutoff=rmax,
-            )
+            ),
         }
 
         # Since we did not initialize the python_script_file, shared_ressources
@@ -162,7 +166,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         self.python_script_file = python_script_path
 
         self.shared_ressources = []
-        if optimization_backend == "NNFF":
+        if optimization_backend == "NNFF" or optimization_backend == "MACE":
             self.shared_ressources.append(pickle_file)
 
         if not collect_only:
@@ -174,7 +178,6 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
 
         # For each shard, create a config file and an atoms batch
         for calc_idx in range(self.num_array_tasks):
-
             json_config = deepcopy(self.json_args)
             json_config["DATABASE"] = f"opt.extxyz"
 
@@ -186,6 +189,7 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
             config_files.append(
                 tasks.DictJSON(json_config, "input_opt.json", self.remote_fs)
             )
+
             atoms_batches.append(
                 tasks.AtomsBatch(
                     self.shards[calc_idx], "opt.extxyz", self.remote_fs
@@ -198,7 +202,6 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         self.individual_ressources = [config_files, atoms_batches]
 
     def run(self):
-        self.allocate_data() # From ArrayScriptTask
-        self.submit() # From ArrayScriptTask
-        self.collect_and_harvest() # From RemoteAtomsHandler
-
+        self.allocate_data()  # From ArrayScriptTask
+        self.submit()  # From ArrayScriptTask
+        self.collect_and_harvest()  # From RemoteAtomsHandler

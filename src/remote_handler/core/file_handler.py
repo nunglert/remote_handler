@@ -6,68 +6,39 @@ import os
 import posixpath
 import random
 import shutil
+import socket
 import string
 import tempfile
 import time
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from datetime import datetime
-
 from pathlib import Path
-
 from stat import S_ISDIR
 from typing import Optional
 
 import ase.io
-
 import paramiko
 from ase import Atoms
 
-# Create a logger with the module name
+from remote_handler.core.file_utils import tag_path as tag_path_util
+from remote_handler.core.ssh_connection import (
+    ConfigBasedSSHClientProvider,
+    SSHClientProvider,
+)
+from remote_handler.exceptions import FileSystemError, RemoteConnectionError
+
 logger = logging.getLogger(__name__)
-
-# Load directory where config files for slurm are stored from environment variable
-CONFIG_DIR = Path(os.environ.get("REMOTE_HANDLER_CONFIG_DIR"))
-
-
-def tag_path(part0: str, part1: str, is_directory: bool = False):
-    """
-    Append a timestamp to a filename or directory name to create a unique path.
-    Parameters:
-        part0 (str): The directory path where the file or directory is located.
-        part1 (str): The filename or directory name to which the timestamp will be appended.
-        is_directory (bool, optional): If True, indicates that part1 is a directory name.
-            Defaults to False.
-        Returns:
-            str: The new path with the timestamp appended to the filename or directory name.
-    """
-    # Get the current date and time
-    date_str = datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
-    
-    if not is_directory:
-        file_parts = part1.split(".")
-        # If there's an extension, insert the date before it
-        new_filename = (
-            "".join(file_parts[:-1]) + "_" + date_str + "." + file_parts[-1]
-        )
-    else:
-        # If it's a directory, just append the date
-        new_filename = part1 + "_" + date_str
-
-    save_file = Path(part0) / new_filename
-    return save_file
 
 
 class FileSystemHandlerBase(ABC):
     """
     Interface for handling file operations and directory management on a
     file system.
-    Args:
-        slurm_config_file (str, optional): Path to a SLURM configuration file.
-            If provided, the configuration will be loaded and stored in the
-            `slurm_config` attribute. Defaults to None.
-    Attributes:
-        slurm_config (dict or None): The loaded SLURM configuration if a
-            configuration file is provided, otherwise None.
+
+    This class provides an abstract interface for common file operations
+    that can work with both local and remote file systems.
+
     Methods:
         get(remote, local): Abstract method to copy a file from a remote
             machine to the local machine.
@@ -76,37 +47,10 @@ class FileSystemHandlerBase(ABC):
         makedirs(path, exist_ok=False): Abstract method to create a directory
             at the specified path, including any necessary parent directories.
         mkdir(path): Abstract method to create a directory at the specified
-            path.       
+            path.
     """
 
-    def __init__(self, slurm_config_file: Optional[str] = None):
-        self.slurm_config = None
-
-        if slurm_config_file is not None:
-            if os.path.isabs(slurm_config_file):
-                if not os.path.exists(slurm_config_file):
-                    raise Exception(
-                        f"{slurm_config_file} does not exist!"
-                    )
-                slurm_config_path = slurm_config_file
-            
-            else:
-                if CONFIG_DIR is None:
-                    raise Exception(
-                        "If slurm_config_file is not an absolute path, "
-                        "Set REMOTE_HANDLER_CONFIG_DIR environment variable, "
-                        "where config files for different clusters are stored."
-                    )
-                slurm_config_path = CONFIG_DIR / slurm_config_file
-                if not os.path.exists(slurm_config_path):
-                    raise Exception(
-                        f"{slurm_config_file} does not exist in your "
-                        f"REMOTE_HANDLER_CONFIG_DIR={CONFIG_DIR}"
-                    )
-
-            with open(slurm_config_path, "r") as f:
-                self.slurm_config = json.load(f)
-
+    def __init__(self):
         super().__init__()
 
     @abstractmethod
@@ -127,7 +71,7 @@ class FileSystemHandlerBase(ABC):
 
         Args:
             local (str): The path of the file or directory to copy.
-            remote (str): The path where the file or directory should be copied to. 
+            remote (str): The path where the file or directory should be copied to.
         """
         pass
 
@@ -240,16 +184,16 @@ class FileSystemHandlerBase(ABC):
         Parameters:
             savepath (str): The full path where the file or directory is located.
         Returns:
-            str: The new path with the random string appended to the filename or directory name.    
+            str: The new path with the random string appended to the filename or directory name.
         """
 
         # Generate a random string of fixed length
         random_string = "".join(
             random.choices(string.ascii_letters + string.digits, k=10)
-        ) 
+        )
         # Append a timestamp to ensure uniqueness
         working_dir, filename = os.path.split(savepath)
-        savetag = tag_path(working_dir, filename, is_directory=True)
+        savetag = tag_path_util(working_dir, filename, is_directory=True)
         return Path(str(savetag) + random_string)
 
     def secure_path(
@@ -266,13 +210,13 @@ class FileSystemHandlerBase(ABC):
             str: A unique file or directory path.
         """
         # Delete the last slash if present if is_directory is True
-        if is_directory:  
+        if is_directory:
             path = str(Path(path))
 
         parentpath, childname = os.path.split(path)
         # If the path already exists, append a timestamp to make it unique
         if self.exists(path):
-            path = tag_path(parentpath, childname, is_directory)
+            path = tag_path_util(parentpath, childname, is_directory)
 
         return path
 
@@ -281,14 +225,10 @@ class LocalFileSystem(FileSystemHandlerBase):
     """
     LocalFileSystem is a concrete implementation of FileSystemHandlerBase for
     handling file operations on the local filesystem.
-    Args:
-        slurm_config_file (str, optional): Path to a SLURM configuration file.
-            If provided, the configuration will be loaded and stored in the
-            `slurm_config` attribute. Defaults to None.
     """
 
-    def __init__(self, slurm_config_file=None):
-        super().__init__(slurm_config_file)
+    def __init__(self):
+        super().__init__()
 
     def copy(self, source: os.PathLike, destination: os.PathLike) -> None:
         """
@@ -426,6 +366,7 @@ class LocalFileSystem(FileSystemHandlerBase):
         """
         os.remove(path)
 
+
 def reconnect_on_failure(func):
     """
     Decorator to reconnect if SSH/SFTP operation fails.
@@ -454,46 +395,70 @@ class RemoteFileSystem(FileSystemHandlerBase):
 
     Args:
         remote_alias (str): The alias for the remote host as defined in the SSH config.
+        identityfile (str, optional): Path to SSH identity file to use.
         remote_temp_path (str, optional): Path on the remote system to use for
             temporary files.
         local_temp_path (str, optional): Path on the local system to use for
             temporary files.
-        slurm_config_file (str, optional): Path to a SLURM configuration file.
-            If provided, the configuration will be loaded and stored in the
-            `slurm_config` attribute. 
+        ssh_client_provider (SSHClientProvider, optional): Custom provider for
+            SSH/SFTP clients. If None, uses ConfigBasedSSHClientProvider. This
+            parameter is primarily for testing.
     """
 
     def __init__(
         self,
-        remote_alias: Optional[str] = None,
+        remote_alias: str,
+        identityfile: Optional[str] = None,
         remote_temp_path: Optional[str] = None,
         local_temp_path: Optional[str] = None,
-        slurm_config_file: Optional[str] = None,
+        ssh_client_provider: Optional[SSHClientProvider] = None,
     ):
-        super().__init__(slurm_config_file)
+        super().__init__()
 
-        if slurm_config_file is None:
-            if remote_alias is None:
-                raise Exception(
-                    "Need either slurm_config_file or remote_alias!"
-                )
-            # Get remote alias from argument
-            self.remote_alias = remote_alias
-        else:
-            # Get remote alias from slurm config file
-            self.remote_alias = self.slurm_config["remote_machine"]
-
+        self.remote_alias = remote_alias
+        self.identityfile = identityfile
         self.ssh_client = None
         self.sftp_client = None
 
-        self._connect()
+        # Store the client provider - use config-based by default
+        if ssh_client_provider is None:
+            # Default: use config-based provider (backward compatible)
+            self.ssh_client_provider = ConfigBasedSSHClientProvider(
+                remote_alias=remote_alias, identityfile=identityfile
+            )
+        else:
+            # Test injection: use provided mock provider
+            self.ssh_client_provider = ssh_client_provider
+
+        try:
+            self._connect()
+        except socket.gaierror:
+            available = []
+            if hasattr(self.ssh_client_provider, "config_parser"):
+                available = (
+                    self.ssh_client_provider.config_parser.get_available_hosts()
+                )
+            hosts_str = ", ".join(available) if available else "(none found)"
+            raise RemoteConnectionError(
+                f"Could not resolve hostname for alias '{remote_alias}'. "
+                f"The host may be unreachable or misspelled.\n"
+                f"Available SSH hosts: {hosts_str}"
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed connecting SSH client. Try providing the key file "
+                "explicitly. Assure it does not have a passphrase!"
+            )
+            raise e
 
         if remote_temp_path is None:
             self.remote_tempdir = Path("/tmp")
         else:
             self.remote_tempdir = Path(remote_temp_path)
             if not self.exists(self.remote_tempdir):
-                raise Exception("`remote_temp_path` must already exist!")
+                raise FileSystemError(
+                    f"Remote temp path does not exist: {remote_temp_path}"
+                )
 
         # local_tempdir is only required to temporarily create extxyz files
         # for reading and writing ase objects and succesively move them via
@@ -502,90 +467,21 @@ class RemoteFileSystem(FileSystemHandlerBase):
             local_temp_path = Path("/tmp")
         else:
             if not os.path.exists(local_temp_path):
-                raise Exception("`local_temp_path` must already exist!")
+                raise FileSystemError(
+                    f"Local temp path does not exist: {local_temp_path}"
+                )
 
         self.local_tempdir = self.tag_path(Path(local_temp_path) / "ase_temp")
         os.mkdir(self.local_tempdir)
 
     def _connect(self) -> None:
-        ssh_config_file = os.path.expanduser("~/.ssh/config")
-        ssh_config = paramiko.SSHConfig()
-        with open(ssh_config_file) as f:
-            ssh_config.parse(f)
-
-        # Get the config option dictionary for the specified host
-        host_config = ssh_config.lookup(self.remote_alias)
-
-        # Extract relevant connection details
-        hostname = host_config.get("hostname")
-        username = host_config.get("user")
-        # Get the first IdentityFile if available, else None
-        identityfiles = host_config.get("identityfile", [None])
-        if len(identityfiles) > 1:
-            print("Warning: Found more than 1 key, using the first one: {}.".format(identityfiles[0]))
-        identityfile = identityfiles[0]
-        proxyjump = host_config.get("proxyjump")
-
-        if proxyjump:
-            # Step 1: Connect to jump host
-
-            # Get jump host config
-            jump_config = ssh_config.lookup(proxyjump)
-            jump_host = jump_config.get("hostname")
-            jump_user = jump_config.get("user")
-            jump_key = jump_config.get("identityfile", [None])[0]
-            # Connect to jump host
-            jump_client = paramiko.SSHClient()
-
-            # Automatically add the jump host's SSH key if missing
-            jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            
-            # Connect to jump host
-            jump_client.connect(
-                jump_host,
-                username=jump_user,
-                key_filename=jump_key,
-            )
-
-            # Step 2: Create a tunnel from jump host to target
-            jump_transport = jump_client.get_transport()
-            # Define the destination and local addresses
-            dest_addr = (hostname, 22)
-            local_addr = ("localhost", 0)
-            # Open a channel through the jump host of type "direct-tcpip"
-            channel = jump_transport.open_channel(
-                "direct-tcpip", dest_addr, local_addr
-            )
-
-            # Step 3: Connect final client using this channel as a socket
-
-            # Create the SSH client for the target host
-            self.ssh_client = paramiko.SSHClient()
-            # Automatically add the target host's SSH key if missing
-            self.ssh_client.set_missing_host_key_policy(
-                paramiko.AutoAddPolicy()
-            )
-            # Connect to the target host using the channel from the jump host
-            self.ssh_client.connect(
-                hostname,
-                username=username,
-                key_filename=identityfile,
-                sock=channel,
-            )
-        else:
-            # Direct connection
-            self.ssh_client = paramiko.SSHClient()
-            self.ssh_client.set_missing_host_key_policy(
-                paramiko.AutoAddPolicy()
-            )
-            self.ssh_client.connect(
-                hostname,
-                username=username,
-                key_filename=identityfile,
-            )
-        
-        # Open an SFTP client session on the SSH server
-        self.sftp_client = self.ssh_client.open_sftp()
+        """
+        Establish SSH and SFTP connections using the configured client provider.
+        """
+        (
+            self.ssh_client,
+            self.sftp_client,
+        ) = self.ssh_client_provider.create_connection()
 
     def _disconnect(self) -> None:
         """Close the SSH and SFTP connections."""
@@ -594,6 +490,10 @@ class RemoteFileSystem(FileSystemHandlerBase):
             self.sftp_client.close()
         if self.ssh_client:
             self.ssh_client.close()
+
+        # Cleanup provider resources (e.g., jump client)
+        if hasattr(self.ssh_client_provider, "cleanup"):
+            self.ssh_client_provider.cleanup()
 
     def _reconnect(self) -> None:
         self._disconnect()
@@ -604,7 +504,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
         """SFTP put with automatic reconnect on failure.
         Args:
             local (str): The path of the file or directory to copy.
-            remote (str): The path where the file or directory should be copied to. 
+            remote (str): The path where the file or directory should be copied to.
         """
         local, remote = str(local), str(remote)
         self.sftp_client.put(local, remote)
@@ -614,7 +514,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
         """SFTP get with automatic reconnect on failure.
         Args:
             remote (str): The path of the file or directory to copy.
-            local (str): The path where the file or directory should be copied to. 
+            local (str): The path where the file or directory should be copied to.
         """
         remote, local = str(remote), str(local)
         self.sftp_client.get(remote, local)
@@ -636,7 +536,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
     @reconnect_on_failure
     def mkdir(self, path: os.PathLike) -> None:
         """SFTP mkdir with automatic reconnect on failure.
-        
+
         Args:
             path (str): The directory path to create."""
         path = str(path)
@@ -645,7 +545,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
     @reconnect_on_failure
     def rmtree(self, remotepath: os.PathLike, level=0) -> None:
         """Recursively delete a directory on the remote system via SFTP.
-        
+
         Args:
             remotepath (str): The path of the directory to delete.
             level (int, optional): The current recursion level (used for
@@ -677,7 +577,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
 
         # Check if local_dir is a directory
         if not local_dir.is_dir():
-            raise ValueError(f"Local path '{local_dir}' is not a directory.")
+            raise FileSystemError(f"Path is not a directory: {local_dir}")
 
         # Create remote directory if it doesn't exist
         if not self.exists(remote_dir):
@@ -754,7 +654,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
     @reconnect_on_failure
     def read_ase(self, filepath: os.PathLike, **kwargs) -> list[Atoms]:
         """
-        Read an ASE file from the specified file path on the remote system by 
+        Read an ASE file from the specified file path on the remote system by
         temporarily downloading it to the local system.
         Args:
             filepath (str): The path of the ASE file to read.
@@ -767,7 +667,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
         # Clean up temporary file
         os.remove(local_temp)
         return atoms
-    
+
     @reconnect_on_failure
     def read_str_from_file(self, filepath: os.PathLike) -> str:
         """
@@ -835,4 +735,6 @@ class RemoteFileSystem(FileSystemHandlerBase):
         try:
             self.sftp_client.remove(path)
         except IOError as e:
-            raise Exception(f"Failed to remove remote file: {path}") from e
+            raise FileSystemError(
+                f"Failed to remove remote file: {path}"
+            ) from e

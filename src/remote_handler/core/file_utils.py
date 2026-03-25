@@ -4,16 +4,20 @@ from datetime import datetime
 from pathlib import Path
 
 
-def tag_path(part0, part1, is_directory=False):
-    """Provided a path to a file, this modifies the path by inserting a
-    timestamp in front of the file format.
+def tag_path(part0: str, part1: str, is_directory: bool = False) -> Path:
+    """Append a timestamp to a filename or directory name to create a unique path.
 
     Args:
-        part0: path to the directory
-        part1: filename (with extension)
-        is_directory: whether the path is a directory
+        part0: Path to the directory
+        part1: Filename (with extension) or directory name
+        is_directory: Whether the path is a directory
+
     Returns:
-        new path with timestamp inserted
+        New path with timestamp inserted
+
+    Example:
+        >>> tag_path("/home/user", "data.csv", False)
+        Path('/home/user/data_2024-01-15_14_30_45.csv')
     """
     date_str = datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
     if not is_directory:
@@ -28,26 +32,33 @@ def tag_path(part0, part1, is_directory=False):
     return save_file
 
 
-def secure_path(save_file, is_directory=False):
-    """
-    Provided a path to a file, this checks whether such a file already
-    exists. If not, it leaves the path unchanged. If there is already such a
-    file in the specified path, this routine modifies the path by inserting a
-    timestamp in front of the file format.
+def secure_path(save_file: str, is_directory: bool = False) -> str:
+    """Check if a path exists and add timestamp if it does.
 
-    Note: atm this works only for files with a single dot (E.g.: prefix.outfix
-        works, but for pre.fix.outfix the tagged path will only consider the
-        last dot)
+    If a file/directory already exists at the given path, this modifies the path
+    by inserting a timestamp to avoid overwriting.
 
-    Examples:
-        "/home/gerrit/kek.lel" -> "/home/gerrit/kek_2024-06-11_15_11_26.lel"
+    Args:
+        save_file: Path to the file or directory to check
+        is_directory: Whether the path is a directory
+
+    Returns:
+        Original path if it doesn't exist, or path with timestamp if it does
+
+    Note:
+        Currently works only for files with a single dot (e.g., prefix.ext works,
+        but for pre.fix.ext only the last dot is considered)
+
+    Example:
+        >>> secure_path("/home/user/data.csv")
+        '/home/user/data_2024-01-15_14_30_45.csv'  # if data.csv exists
     """
     if is_directory:  # delete trailing slash
         save_file = str(Path(save_file))
 
     working_dir, filename = os.path.split(save_file)
     if os.path.exists(save_file):
-        save_file = tag_path(working_dir, filename, is_directory)
+        save_file = str(tag_path(working_dir, filename, is_directory))
 
     return save_file
 

@@ -2,16 +2,16 @@ import logging
 import os
 import re
 import subprocess
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 from jinja2 import Environment, FileSystemLoader
 
-from remote_handler import DEFAULT_TEMPLATE_DIR
+from remote_handler.config import get_config
+from remote_handler.exceptions import TaskError
 
 logger = logging.getLogger(__name__)
-
-TEMPLATE_DIRS = [DEFAULT_TEMPLATE_DIR]
 
 
 def submit_job(script_path, output_path, ssh_command=None, cwd=None) -> str:
@@ -45,14 +45,18 @@ def submit_job(script_path, output_path, ssh_command=None, cwd=None) -> str:
 
     # Execute the submission command and capture the output
     result = subprocess.run(
-        submit_cmd, shell=True, capture_output=True, text=True
+        submit_cmd, shell=True, capture_output=True, text=True, check=True
     )
     # In the stdout, we expect to find the job ID
     match = re.search("(\d+)", result.stdout)
     if match is not None:
         return match.groups()[0]
     else:
-        raise Exception(result.stderr)
+        raise TaskError(
+            f"SLURM job submission failed\n"
+            f"Command: {submit_cmd}\n"
+            f"Error: {result.stderr}"
+        )
 
 
 def submit_job_array(
@@ -94,7 +98,7 @@ def submit_job_array(
 
     # Execute the submission command and capture the output
     result = subprocess.run(
-        submit_cmd, shell=True, capture_output=True, text=True
+        submit_cmd, shell=True, capture_output=True, text=True, check=True
     )
 
     # Extract and return the job ID from the output
@@ -124,9 +128,14 @@ def check_job_status_sacct(job_ids, ssh_command="ssh lugus"):
             pid_str += str(a) + ","
         pid_str += str(job_ids[-1])
 
-        status_cmd = f"{ssh_command} 'sacct -j {pid_str} --format=JobID,State'"
+        if ssh_command is None:
+            status_cmd = f"sacct -j {pid_str} --format=JobID,State"
+        else:
+            status_cmd = (
+                f"{ssh_command} 'sacct -j {pid_str} --format=JobID,State'"
+            )
         result = subprocess.run(
-            status_cmd, shell=True, capture_output=True, text=True
+            status_cmd, shell=True, capture_output=True, text=True, check=True
         )
         logger.debug(result["stderr"])
         status = [s.split()[-1] for s in result.stdout.split("\n")[2:-1]]
@@ -149,12 +158,15 @@ def check_job_status_squeue(job_id, ssh_command="ssh lugus"):
         ssh_command (str, optional): SSH command to be used for remote checking.
             Defaults to "ssh lugus".
     Returns:
-        bool: True if the job is still running, False if it has finished.
+        bool: False if the job is still running, True if it has finished.
     """
     pid_str = str(job_id)
-    status_cmd = f"{ssh_command} 'squeue -j {pid_str}'"
+    if ssh_command is None:
+        status_cmd = f"squeue -j {pid_str}"
+    else:
+        status_cmd = f"{ssh_command} 'squeue -j {pid_str}'"
     result = subprocess.run(
-        status_cmd, shell=True, capture_output=True, text=True
+        status_cmd, shell=True, capture_output=True, text=True, check=True
     )
     res = result.stdout.split("\n")
     if len(res) > 2:
@@ -182,6 +194,7 @@ def get_array_slurm_str(
     partition="normal",
     n_processors=8,
     conda_env="jaxnest",
+    conda_source="~/miniconda3/etc/profile.d/conda.sh",
     map_indices=None,
     header_template="lugus.sh.j2",
     job_type_template="body_array.sh.j2",
@@ -214,7 +227,9 @@ def get_array_slurm_str(
         map_indices = np.arange(num_array_tasks)
 
     # Create a Jinja2 environment with the custom loader to have logging
-    env = Environment(loader=LoggingFileSystemLoader(TEMPLATE_DIRS))
+    config = get_config()
+    template_dirs = config.get_template_dirs()
+    env = Environment(loader=LoggingFileSystemLoader(template_dirs))
     template = env.get_template(header_template)
     # Render the template with the provided parameters
     slurm_str = template.render(
@@ -226,6 +241,7 @@ def get_array_slurm_str(
         partition=partition,
         n_cores=n_processors,
         conda_env=conda_env,
+        conda_source=conda_source,
         map_indices=map_indices,
         slurm_header_add=slurm_header_add,
         job_type_template=job_type_template,
@@ -242,6 +258,7 @@ def get_slurm_str(
     partition="normal",
     n_cores=8,
     conda_env="jaxnest",
+    conda_source="/home/user/miniconda3",
     header_template="dirona.sh.j2",
     job_type_template="body_single.sh.j2",
     slurm_header_add="",
@@ -268,7 +285,9 @@ def get_slurm_str(
     """
 
     # Create a Jinja2 environment with the custom loader to have logging
-    env = Environment(loader=LoggingFileSystemLoader(TEMPLATE_DIRS))
+    config = get_config()
+    template_dirs = config.get_template_dirs()
+    env = Environment(loader=LoggingFileSystemLoader(template_dirs))
 
     # Load the specified header template
     template = env.get_template(header_template)
@@ -281,6 +300,7 @@ def get_slurm_str(
         partition=partition,
         n_cores=n_cores,
         conda_env=conda_env,
+        conda_source=conda_source,
         slurm_header_add=slurm_header_add,
         job_type_template=job_type_template,
         exclude_nodes=exclude_nodes,

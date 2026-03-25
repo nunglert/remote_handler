@@ -10,7 +10,7 @@ authors = [
     { name = "Nico Unglert", email = "nico.unglert@tuwien.ac.at" }
 ]
 description = "Package for streamlining active learning workflows"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
@@ -26,17 +26,36 @@ dependencies = [
     "paramiko==3.5.1",
     "natsort==8.4.0",
     "ase==3.25.0",
+    "pyyaml>=6.0",
 ]
 readme = "README.md"
 dynamic = ["version"]
 
 [project.optional-dependencies]
 dev = [
-    "pytest==7.4.0", 
-    "pytest-lazy-fixture",
+    "pytest==7.4.0",
     "pre-commit"
 ]
-doc = ["sphinx", "sphinx-autodoc-typehints", "sphinx-rtd-theme"]
+docs = [
+    "sphinx>=7.0",
+    "sphinx-autodoc-typehints",
+    "sphinx-rtd-theme",
+]
+torch_sim = [
+    "mace-torch==0.3.14",
+    "torch-sim-atomistic==0.5.1",
+    "cuequivariance-torch==0.8.1",
+]
+mace = [
+    "mace-torch==0.3.14",
+    "cuequivariance-torch==0.8.1",
+]
+clinamen = [
+    "Clinamen2"
+]
+quests = [
+    "quests==2025.9.29"
+]
 
 [project.urls]
 "Homepage" = "https://gitlab.tuwien.ac.at/e165-03-1_theoretische_materialchemie/madsen-s-research-group/remote_handler"

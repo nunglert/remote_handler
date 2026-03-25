@@ -1,0 +1,7 @@
+{
+    "remote_machine": "datalab",
+    "partition": "GPU-a40",
+    "savepath": "/home/michael.ketter/active_learning_SSPD",
+    "conda_env": "JAX-MACE",
+    "template": "datalab.sh.j2"
+}
