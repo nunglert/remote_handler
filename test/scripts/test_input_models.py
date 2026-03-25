@@ -12,6 +12,7 @@ from remote_handler.scripts.input_models import (
     LammpsSamplingInput,
     MaceTrainingInput,
     OptimizeTrajInput,
+    OrcaSinglepointInput,
     ScriptInput,
 )
 
@@ -278,6 +279,84 @@ class TestDftSinglepointInput:
             config.validate()
 
         assert "must be a dictionary" in str(exc_info.value)
+
+
+class TestOrcaSinglepointInput:
+    """Tests for OrcaSinglepointInput."""
+
+    def test_from_file_valid(self, tmp_path):
+        """Test loading from valid JSON file."""
+        input_file = tmp_path / "input.json"
+        input_data = {
+            "DATABASE": "dft.extxyz",
+            "orca_binary": "/opt/orca/orca",
+            "orcasimpleinput": "wB97X 6-31G(d) ENGRAD",
+            "orcablocks": "%pal nprocs 8 end",
+        }
+        input_file.write_text(json.dumps(input_data))
+
+        config = OrcaSinglepointInput.from_file(input_file)
+
+        assert config.DATABASE == "dft.extxyz"
+        assert config.orca_binary == "/opt/orca/orca"
+        assert config.orcasimpleinput == "wB97X 6-31G(d) ENGRAD"
+        assert config.orcablocks == "%pal nprocs 8 end"
+
+    def test_validate_empty_database(self):
+        """Test validation with empty DATABASE."""
+        config = OrcaSinglepointInput(
+            DATABASE="",
+            orca_binary="/opt/orca/orca",
+            orcasimpleinput="wB97X 6-31G(d) ENGRAD",
+            orcablocks="%pal nprocs 8 end",
+        )
+
+        with pytest.raises(ScriptInputError) as exc_info:
+            config.validate()
+
+        assert "DATABASE cannot be empty" in str(exc_info.value)
+
+    def test_validate_empty_orca_binary(self):
+        """Test validation with empty orca_binary."""
+        config = OrcaSinglepointInput(
+            DATABASE="dft.extxyz",
+            orca_binary="",
+            orcasimpleinput="wB97X 6-31G(d) ENGRAD",
+            orcablocks="%pal nprocs 8 end",
+        )
+
+        with pytest.raises(ScriptInputError) as exc_info:
+            config.validate()
+
+        assert "orca_binary cannot be empty" in str(exc_info.value)
+
+    def test_validate_empty_orcasimpleinput(self):
+        """Test validation with empty orcasimpleinput."""
+        config = OrcaSinglepointInput(
+            DATABASE="dft.extxyz",
+            orca_binary="/opt/orca/orca",
+            orcasimpleinput="",
+            orcablocks="%pal nprocs 8 end",
+        )
+
+        with pytest.raises(ScriptInputError) as exc_info:
+            config.validate()
+
+        assert "orcasimpleinput cannot be empty" in str(exc_info.value)
+
+    def test_validate_empty_orcablocks(self):
+        """Test validation with empty orcablocks."""
+        config = OrcaSinglepointInput(
+            DATABASE="dft.extxyz",
+            orca_binary="/opt/orca/orca",
+            orcasimpleinput="wB97X 6-31G(d) ENGRAD",
+            orcablocks="",
+        )
+
+        with pytest.raises(ScriptInputError) as exc_info:
+            config.validate()
+
+        assert "orcablocks cannot be empty" in str(exc_info.value)
 
 
 class TestOptimizeTrajInput:
