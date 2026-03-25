@@ -55,6 +55,6 @@ pages:
     paths:
       - public
     expire_in: 1 week
-  # only:
-  #   - main  # Only deploy docs from main branch
+  only:
+    - main  # Only deploy docs from main branch
   dependencies: []
