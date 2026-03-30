@@ -270,6 +270,7 @@ class SingleScriptTask(RemoteTask):
         cluster_config: ClusterConfig,
         remote_fs: FileSystemHandlerBase,
         logfile: os.PathLike = "task.log",
+        additional_files: Optional[list[os.PathLike]] = [],
         remote_savepath: Optional[os.PathLike] = None,
         collect_only: bool = False,
         loop_time: float = 30.0,
@@ -297,6 +298,12 @@ class SingleScriptTask(RemoteTask):
 
         self.script_file = script_file
         self.input_file = input_file
+        self.additional_files = additional_files
+        if not isinstance(self.additional_files, list):
+            logger.warning(
+                f"additional_files should be a list of paths, but got {type(self.additional_files)}. Converting to list."
+            )
+            self.additional_files = [self.additional_files]
         self.loop_time = loop_time
         self.local_savepath = local_savepath
 
@@ -344,6 +351,11 @@ class SingleScriptTask(RemoteTask):
 
         self.input_file_remote = self.copy_file(self.input_file)
 
+        if self.additional_files:
+            self.remote_fs.makedirs(self.calcdir / "additional_files", exist_ok=True)
+            for additional_file in self.additional_files:
+                self.remote_fs.put(additional_file, self.calcdir / "additional_files" / os.path.basename(additional_file))
+    
         # After copying the files, write the slurm job script on the remote machine
         self.slurm_handler.write_jobfile(
             self.input_file_remote, self.script_file_remote

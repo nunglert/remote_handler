@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+import os
 
 import ase.io
 from ase.calculators.singlepoint import SinglePointCalculator
@@ -35,7 +36,8 @@ VASP_calculator_args = {
 }
 
 VASP_config = {**VASP_calculator_args, **input_config.INCAR_kwargs}
-
+paw_path = os.environ.get("VASP_PP_PATH", None)
+print(f"Using PAW potentials from: {paw_path}")
 Vasp.xc_defaults["r2scan"] = {"metagga": "R2SCAN"}
 atoms.calc = Vasp(directory=calcpath, **VASP_config)
 

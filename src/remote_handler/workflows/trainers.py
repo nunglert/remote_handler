@@ -9,6 +9,8 @@ import os
 import pickle
 from pathlib import Path
 from typing import Optional
+from copy import deepcopy
+import json
 
 import numpy as np
 
@@ -443,12 +445,39 @@ class NeuralilILTrainer(ModelTrainer):
         stub: If True, creates mock model outputs without training
         loop_time: Interval (seconds) to poll for job completion
     """
+    
+    default_training_kwargs: dict = {
+        "r_cut": 4.0,
+        "training_fraction": 0.75,
+        "supercell_diag": [3, 3, 3],
+        "high_energy_penalty": -5.0,
+        "n_ensemble": 30,
+        "save_reduced": 5,
+        "n_batch": 32,
+        "n_max": 6,
+        "embed_d": 1,
+        "core_widths": [128, 64, 32],
+        "morse": False,
+        "n_eval_batch": 64,
+        "n_epochs": 100,
+        "energy_weight": 0.5,
+        "log_cosh_parameter_energy": 0.200,
+        "log_cosh_parameter_forces": 2.000,
+        "seed": None,
+        "stub": False,
+        "optimizer_type": "VeLO",
+        "learning_rate_kwargs": dict(
+            max_learning_rate=1e-2,
+            min_learning_rate=1e-3,
+            fin_learning_rate=1e-5,
+        )
+    }
 
     def __init__(
         self,
-        training_script: os.PathLike,
         remote_fs: FileSystemHandlerBase,
         cluster_config: ClusterConfig,
+        training_script: os.PathLike,
         remote_savepath: Optional[os.PathLike] = None,
         training_kwargs: dict = None,
         stub: bool = False,
@@ -458,6 +487,10 @@ class NeuralilILTrainer(ModelTrainer):
         self.training_script = training_script
         self.cluster_config = cluster_config
         self.training_kwargs = training_kwargs or {}
+        for key, value in self.training_kwargs.items():
+            self.default_training_kwargs[key] = value
+        self.training_kwargs = deepcopy(self.default_training_kwargs)
+
         self.remote_fs = remote_fs
         self.loop_time = loop_time
         self.remote_savepath = (
@@ -466,36 +499,40 @@ class NeuralilILTrainer(ModelTrainer):
         self.stub = stub
         self.training_kwargs["stub"] = stub
 
+        self.input_file = Path(os.getcwd()) / "input_nnff.json"  # Local path for input file
+        with open(self.input_file, "w") as f:
+            json.dump(self.training_kwargs, f)
+
     def update(
-        self, calcdir: os.PathLike, db_files: list[os.PathLike], **kwargs
+        self, calcdir: os.PathLike, trainer_input: Path | list[os.PathLike], **kwargs
     ) -> None:
         """
         Prepare trainer for a new iteration.
 
         Args:
             calcdir: Directory for this AL iteration
-            db_files: List of database files with training data
+            trainer_input: Path(s) to database files with training data
             **kwargs: Additional parameters
         """
         self.train_dir = Path(calcdir) / "training"
         self.results_dir = self.train_dir / "results"
-
-        if os.path.exists(self.train_dir):
-            logger.warning("Training path already exists, take care!")
-
         os.makedirs(self.train_dir, exist_ok=True)
-        self.db_files = db_files
+
+        self.db_files = (
+            [trainer_input]
+            if isinstance(trainer_input, Path)
+            else trainer_input
+        )
         it = str(calcdir).split("/")[-1]
 
         # In stub mode, we don't need to create the task
         if not self.stub:
             # Create JSON input file for training script
-            input_file = self.results_dir / "input_nnff.json"
 
             self.train_task = SingleScriptTask(
                 cluster_config=self.cluster_config,
                 script_file=self.training_script,
-                input_file=input_file,
+                input_file=self.input_file,
                 local_savepath=self.results_dir,
                 remote_fs=self.remote_fs,
                 logfile="train.log",
@@ -503,14 +540,18 @@ class NeuralilILTrainer(ModelTrainer):
                 collect_only=False,
                 loop_time=self.loop_time,
                 jobname="NeuralIL_training",
+                n_processors=1,
             )
 
             # Prepare training configuration
             # Copy database files to remote
             remote_dbs = []
-            for db_file in db_files:
+            for db_file in self.db_files:
                 remote_dbs.append(str(self.train_task.copy_file(db_file)))
 
+            with open(self.input_file, "r") as f:
+                self.training_kwargs = json.load(f)
+                
             self.training_kwargs["structure_databases"] = remote_dbs
             self.training_kwargs["filepath"] = str(self.train_task.calcdir)
             self.training_kwargs["pickle_file_name"] = str(
@@ -518,11 +559,8 @@ class NeuralilILTrainer(ModelTrainer):
             )
 
             # Write JSON input file to remote
-            self.remote_fs.write_dict_to_json(
-                self.train_task.calcdir / "input_nnff.json",
-                self.training_kwargs,
-            )
-
+            with open(self.input_file, "w") as f:
+                json.dump(self.training_kwargs, f)
             # Allocate data (copies script and writes jobfile)
             self.train_task.allocate_data()
 
@@ -591,7 +629,7 @@ class NeuralilILTrainer(ModelTrainer):
             model_file = (
                 self.results_dir
                 / os.path.split(
-                    self.train_task.training_kwargs["pickle_file_name"]
+                    self.training_kwargs["pickle_file_name"]
                 )[-1]
             )
 

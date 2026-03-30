@@ -598,7 +598,7 @@ class NSTrajectorySampler(Sampler):
     Supports stub mode for testing without actual NS execution.
 
     Args:
-        ns_exe: Path to JAXNEST executable on remote machine
+        sampling_script: Path to JAXNEST executable on remote machine
         remote_fs: FileSystemHandlerBase for the machine where sampling runs
         initial_input_file: Path to NS input file
         n_gpu_parallel: Number of GPUs to use in parallel
@@ -614,27 +614,29 @@ class NSTrajectorySampler(Sampler):
 
     def __init__(
         self,
-        ns_exe: os.PathLike,
         remote_fs: FileSystemHandlerBase,
+        cluster_config: ClusterConfig,
+        sampling_script: os.PathLike,
         initial_input_file: os.PathLike,
         n_gpu_parallel: int,
         sample_size: int = 100,
         resample_size: Optional[int] = None,
-        remote_savepath: Optional[os.PathLike] = None,
-        loop_time: float = 30,
         energy_uncty_weight: float = 1.0,
         force_uncty_weight: float = 1.0,
         optimize_traj: Optional[Callable] = None,
         optimize_walkers: Optional[Callable] = None,
+        remote_savepath: Optional[os.PathLike] = None,
+        additional_files: Optional[list[os.PathLike]] = [],
+        loop_time: float = 30,
         stub: bool = False,
     ):
         super().__init__()
-        self.ns_exe = ns_exe
+        self.sampling_script = sampling_script
         self.remote_fs = remote_fs
+        self.cluster_config = cluster_config
         self.n_gpu_parallel = n_gpu_parallel
-        self.remote_savepath = (
-            Path(remote_savepath) if remote_savepath else None
-        )
+        self.initial_input_file = initial_input_file
+        self.additional_files = additional_files
         self.sample_size = sample_size
         self.resample_size = resample_size
         self.loop_time = loop_time
@@ -642,14 +644,29 @@ class NSTrajectorySampler(Sampler):
         self.optimize_walkers = optimize_walkers
         self.energy_uncty_weight = energy_uncty_weight
         self.force_uncty_weight = force_uncty_weight
-        self.initial_input_file = initial_input_file
-        self.stub = stub
+        self.stub = stub  
+        self.remote_savepath = (
+            Path(remote_savepath) if remote_savepath else None
+        )
 
         if self.resample_size and self.resample_size > self.sample_size:
             raise WorkflowError(
                 f"Invalid resample configuration: resample_size ({self.resample_size}) "
                 f"must be <= sample_size ({self.sample_size})"
             )
+        if not self.stub:
+            try:
+                from jaxnest import input_parser
+            except ImportError:
+                raise DependencyError(
+                    "jaxnest",
+                    "NSTrajectorySampler requires the 'jaxnest' package. "
+                    "Install it according to the guide on the JAXNEST gitlab repo\n"
+                    "Or use stub=True for testing.",
+                )
+                # Read the initial ns.inp file
+            with open(initial_input_file, "r") as f:
+                self.ns_params = input_parser.input_str_to_dict(f.read())
 
     def update(
         self, calcdir: os.PathLike, model_file: os.PathLike, **kwargs
@@ -681,23 +698,10 @@ class NSTrajectorySampler(Sampler):
                     "Or use stub=True for testing.",
                 )
 
-            # Verify ns_exe exists on remote
-            if not self.remote_fs.exists(self.ns_exe):
-                raise FileSystemError(
-                    f"Nested sampling executable not found on remote system: {self.ns_exe}"
-                )
-
-            from remote_handler.core.cluster_handler import ClusterConfig
-
-            cluster_config = ClusterConfig(
-                jobfile_name="run_slurm.sh",
-                n_processors=self.n_gpu_parallel,
-                job_type_template="body_ns.sh.j2",
-            )
-
             self.ns_task = SingleScriptTask(
-                cluster_config=cluster_config,
-                script_file=self.ns_exe,
+                cluster_config=self.cluster_config,
+                n_processors=self.n_gpu_parallel,
+                script_file=self.sampling_script,
                 input_file=self.initial_input_file,
                 local_savepath=self.results_dir,
                 remote_fs=self.remote_fs,
@@ -706,6 +710,8 @@ class NSTrajectorySampler(Sampler):
                 collect_only=False,
                 loop_time=self.loop_time,
                 jobname=f"AL_NS_{it}",
+                additional_files = self.additional_files,
+                job_type_template="body_ns.sh.j2",
             )
 
             # Prepare NS input file with model file path

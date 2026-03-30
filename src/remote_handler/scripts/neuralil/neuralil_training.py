@@ -18,7 +18,7 @@ from remote_handler.scripts.neuralil.train_model import (
     evaluate_data_processor,
 )
 
-inputfile = Path(sys.argv[1]) / "input_nnff.json"
+inputfile = Path(sys.argv[1])
 input_args = json.load(open(inputfile, "r"))
 
 # Load the input arguments
@@ -42,7 +42,7 @@ except:
     n_batch = 32
 
 # Set up the random seed
-run_seed = input_args["seed"]
+run_seed = input_args.get("seed")
 if run_seed is None:
     run_seed = draw_urandom_int32()
 

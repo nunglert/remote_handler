@@ -65,7 +65,7 @@ class VASPHandler(RemoteAtomsHandler):
         python_script_path: str = "/home/nico.unglert/code/remote_handler/src/remote_handler/scripts/dft_singlepoint.py",
         stub: bool = False,
         launcher: str = "mpiexec -np",
-        slurm_header_add: str = "#SBATCH --time=0-02:00:00\nmodule purge\nmodule load vasp/6.4.2_intel\nsource /opt/intel/oneapi/setvars.sh --force\nexport VASP_PP_PATH=/home/nunglert/cellar/vasp/paw",
+        slurm_header_add: str = "#SBATCH --time=0-02:00:00\nmodule purge\nmodule load vasp/6.4.2_intel\nsource /opt/intel/oneapi/setvars.sh --force\nexport VASP_PP_PATH=/home/aserafini/cellar/vasp/paw",
         vasp_binary: str = "vasp_std",
         n_processors: int = 8,
         incar_kwargs: dict = {

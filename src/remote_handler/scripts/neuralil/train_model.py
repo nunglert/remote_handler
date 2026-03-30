@@ -130,8 +130,8 @@ def transform_atoms_list(
         atoms = all_atoms[i]
         # Extract ground truth data if required
         if parse_ground_truth:
-            at_forces = atoms.get_forces(apply_constraint=False)
-            at_energy = atoms.get_potential_energy()
+            at_forces = atoms.arrays["REF_forces"]
+            at_energy = atoms.info["REF_energy"]
 
         # Safety patch to avoid configs with only a single atom
         if len(atoms) == 1:
@@ -180,8 +180,8 @@ def dont_transform_atoms(all_atoms):
     symbols = []
     positions = []
     for at in all_atoms:
-        forces.append(at.get_forces())
-        energies.append(at.get_potential_energy())
+        forces.append(at.arrays["REF_forces"])
+        energies.append(at.info["REF_energy"])
         cells.append(at.cell[...])
         symbols.append(at.get_chemical_symbols())
         positions.append(at.positions)
