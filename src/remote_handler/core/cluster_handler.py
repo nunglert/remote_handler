@@ -254,11 +254,11 @@ class SlurmHandlerBase(ABC):
                 "We currently do not support '~', write the full path!\n"
                 f"Remote machine: {self.cluster_config.remote_machine}"
             )
-        if not self.remote_fs.exists(miniconda_home / "envs" / self.conda_env) or not self.remote_fs.exists(os.path.join(os.path.expanduser('~'), ".conda/envs", self.conda_env)):
+        if not self.remote_fs.exists(miniconda_home / "envs" / self.conda_env) and not self.remote_fs.exists(os.path.join(os.path.expanduser('~'), ".conda/envs", self.conda_env)):
             raise ConfigurationError(
                 f"Conda environment '{self.conda_env}' not found on "
                 f"{self.cluster_config.remote_machine}\n"
-                f"Expected path: {miniconda_home / 'envs' / self.conda_env}"
+                f"Expected path: {miniconda_home / 'envs' / self.conda_env} or {os.path.join(os.path.expanduser('~'), '.conda/envs', self.conda_env)}"
             )
 
     @abstractmethod
