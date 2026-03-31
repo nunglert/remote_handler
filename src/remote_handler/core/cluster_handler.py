@@ -239,7 +239,7 @@ class SlurmHandlerBase(ABC):
             miniconda_home = Path(self.conda_source)
             self.conda_source = Path(self.conda_source) / "bin/activate"
         elif "micromamba" in self.conda_source:
-            miniconda_home = Path(self.conda_source)
+            miniconda_home = self.conda_source
             self.conda_source = 'eval "$(micromamba shell hook --shell bash)"' # run `eval "$(micromamba shell hook --shell bash)"` instead in the config, no path should be needed
         elif "bin/activate" in self.conda_source:
             miniconda_home = Path(self.conda_source).parents[1]
@@ -250,7 +250,7 @@ class SlurmHandlerBase(ABC):
                 "Expected format: /home/user/miniconda3/ or /path/to/bin/activate\n"
                 "Note: Only miniconda3 is currently supported"
             )
-        if "micromamba" not in self.conda_source:
+        if "micromamba" not in str(self.conda_source):
             if not self.remote_fs.exists(self.conda_source):
                 raise FileSystemError(
                     f"Conda activation script not found at: {self.conda_source}. "
