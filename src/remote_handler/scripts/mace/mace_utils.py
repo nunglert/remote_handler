@@ -179,19 +179,22 @@ def run_training_from_config(
 
     # Write final config
     with open(config_file.resolve(), "w") as f:
-        yaml.safe_dump(
-            final_config, f, default_flow_style=False, sort_keys=False
-        )
+        yaml.safe_dump(final_config, f, default_flow_style=False, sort_keys=False)
 
     # Run training
     try:
-        subprocess.run(
-            [
+        # check if the provided train_runner is the executable and not a full path
+        if "mace_run_train" in str(train_runner):
+            cmd = [str(train_runner), "--config", str(config_file.resolve())]
+        else:
+            cmd = [
                 "python",
                 str(train_runner),
                 "--config",
                 str(config_file.resolve()),
-            ],
+            ]
+        subprocess.run(
+            cmd,
             check=True,
             stderr=subprocess.PIPE,
             stdout=subprocess.PIPE,
