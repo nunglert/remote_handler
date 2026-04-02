@@ -1259,21 +1259,24 @@ class SSPDSampler(Sampler):
         os.makedirs(self.results_dir, exist_ok=True)
 
         self.model_files = sampler_input
-
+        # suggestion: go over everything in kwargs and just write it in there, 
+        # implement defaults for each omission
+        # see the nested sampling sampler above
         script_input = {
             "input_struct_path": Path(self.data_path).name,
             "threshold": kwargs["threshold"],
             "inv_beta": kwargs["inv_beta"],
             "max_acceptance": 1.0,
             "min_acceptance": 0.5,
-            "initial_timestep": 0.00075,
+            "initial_timestep": kwargs["initial_timestep"],
             "num_iterations": kwargs["num_iterations"],
             "sampling_threshold": kwargs["sampling_threshold"],
             "sampling_frequency": kwargs["sampling_frequency"],
-            "N": 100,
+            "N": kwargs["N"],
             "model_file": Path(self.model_files).name,
             "seed": np.random.randint(1e6),
             "num_iterations_OL": kwargs.get("num_iterations_OL"),
+            "hessian_method": kwargs["hessian_method"],
         }
 
         self.script_input_file = (
