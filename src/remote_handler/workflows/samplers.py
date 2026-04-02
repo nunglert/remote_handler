@@ -1229,10 +1229,11 @@ class SSPDSampler(Sampler):
         cluster_config: ClusterConfig,
         remote_savepath: Optional[os.PathLike] = None,
         loop_time: float = 30,
+        selector: Optional[ConfigSelector] = None,
     ):
         """
         Args:
-            remote_fs: `FileSystemHandlerBase` for the machine on which the sampling
+            remote_fs:FileSystemHandlerBase` for the machine on which the sampling
                 should be run
             sampling_script: Path to SSPD_sampling.py or another compatible sampling
                 script
@@ -1240,13 +1241,14 @@ class SSPDSampler(Sampler):
             loop_time: interval (in seconds) at which to poll if the sampling slurm job
                 has finished
         """
-        super().__init__()
+        super().init()
         self.remote_fs = remote_fs
         self.sampling_script = sampling_script
         self.data_path = data_path
         self.remote_savepath = remote_savepath
         self.loop_time = loop_time
         self.cluster_config = cluster_config
+        self.selector = selector
 
     def update(
         self, calcdir: Path, sampler_input: list[Path], **kwargs
@@ -1265,12 +1267,13 @@ class SSPDSampler(Sampler):
             "max_acceptance": 1.0,
             "min_acceptance": 0.5,
             "initial_timestep": 0.00075,
-            "num_iterations": 100,
+            "num_iterations": kwargs["num_iterations"],
             "sampling_threshold": kwargs["sampling_threshold"],
-            "sampling_frequency": 10,
+            "sampling_frequency": kwargs["sampling_frequency"],
             "N": 100,
             "model_file": Path(self.model_files).name,
             "seed": np.random.randint(1e6),
+            "num_iterations_OL": kwargs.get("num_iterations_OL"),
         }
 
         self.script_input_file = (
@@ -1304,4 +1307,36 @@ class SSPDSampler(Sampler):
         self.sampling_task.submit()
         self.sampling_task.collect_results()
 
-        return Path(self.sampling_task.local_savepath) / "out/samples.xyz"
+        if self.selector is not None:
+            # Read all trajectory frames and pass to selector
+            results_path = Path(self.sampling_task.local_savepath)
+            results_path = results_path / "out/"
+            traj_paths = sorted(results_path.glob("*.xyz"))
+            if not traj_paths:
+                logger.warning(
+                    "No *.xyz files found in %s, "
+                    "falling back to script output",
+                    results_path,
+                )
+                output_path = results_path / "out/samples.extxyz"
+            else:
+                grouped_frames: list[list[Atoms]] = []
+                for traj_path in traj_paths:
+                    traj = ase.io.read(str(traj_path), index=":")
+                    grouped_frames.append(traj)
+
+                selected = self.selector.select(grouped_frames)
+                output_dir = results_path / "out"
+                os.makedirs(output_dir, exist_ok=True)
+                output_path = output_dir / "samples.extxyz"
+                ase.io.write(output_path, selected)
+        else:
+            output_path = (
+                Path(self.sampling_task.local_savepath)
+                / "out/samples.extxyz"
+            )
+
+        logger.info(
+            f"SSPD sampled configurations written to {output_path}"
+        )
+        return output_path
