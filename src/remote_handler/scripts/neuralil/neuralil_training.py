@@ -91,7 +91,7 @@ else:
     if len(all_atoms_pre) > 0:
         # Divide by number of atoms to get energy per atom
         energies = np.array(
-            [at.get_potential_energy() / len(at) for at in all_atoms_pre]
+            [at.info["REF_energy"] / len(at) for at in all_atoms_pre]
         )
         energy_min = np.min(energies)
         keep_inds = np.where(energies < (energy_min + 6))[0]
