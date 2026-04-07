@@ -65,7 +65,7 @@ def write_with_keys(
         energy_key: Key to use for energy, default is MACE default
         forces_key: Key to use for forces, default is MACE default
     """
-    ase.io.write(file_name.resolve(), alist)
+    ase.io.write(file_name, alist)
     cmd = f"sed -i 's/energy/{energy_key}/g' " + file_name
     subprocess.call(cmd, shell=True)
     cmd = f"sed -i 's/forces/{forces_key}/g' " + file_name
@@ -103,8 +103,8 @@ def split_db(
     out_suffix = out_file.suffix
     train_file = out_file.parent / (out_stem + "_train" + out_suffix)
     valid_file = out_file.parent / (out_stem + "_val" + out_suffix)
-    write_with_keys(train_file, training_set)
-    write_with_keys(valid_file, validation_set)
+    write_with_keys(train_file.resolve(), training_set)
+    write_with_keys(valid_file.resolve(), validation_set)
     return (train_file, valid_file) if do_return_path else None
 
 
