@@ -1241,7 +1241,7 @@ class SSPDSampler(Sampler):
             loop_time: interval (in seconds) at which to poll if the sampling slurm job
                 has finished
         """
-        super().init()
+        super().__init__()
         self.remote_fs = remote_fs
         self.sampling_script = sampling_script
         self.data_path = data_path
