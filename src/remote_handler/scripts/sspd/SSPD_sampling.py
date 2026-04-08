@@ -99,6 +99,7 @@ def run_SSPD(simulator, input_args, model):
 
     np.random.seed(input_args["seed"])
     dt = input_args["initial_timestep"]
+    E_init = None
     for i in range(num_iter):
         print("Currently at iteration " + str(i))
         dt, ratio = simulator.PerformIteration(dt)
