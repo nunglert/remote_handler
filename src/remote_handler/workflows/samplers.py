@@ -89,9 +89,7 @@ class LammpsSampler(Sampler):
         self.loop_time = loop_time
         self.stub = stub
 
-    def update(
-        self, calcdir: Path, sampler_input: list[Path], **kwargs
-    ) -> None:
+    def update(self, calcdir: Path, sampler_input: list[Path], **kwargs) -> None:
         """
         Prepare sampler for a new iteration.
 
@@ -110,9 +108,7 @@ class LammpsSampler(Sampler):
         # In stub mode, we don't need to create the task
         if not self.stub:
             script_input = {
-                "lammps_path": Path(
-                    self.remote_lammps_executable_path
-                ).as_posix(),
+                "lammps_path": Path(self.remote_lammps_executable_path).as_posix(),
                 "template_file": Path(self.template_path).name,
                 "data_file": Path(self.data_path).name,
                 "model_files": [p.name for p in self.model_files],
@@ -212,9 +208,7 @@ class LammpsSampler(Sampler):
             # Run actual LAMMPS sampling
             self.sampling_task.submit()
             self.sampling_task.collect_results()
-            output_path = (
-                Path(self.sampling_task.local_savepath) / "out/samples.xyz"
-            )
+            output_path = Path(self.sampling_task.local_savepath) / "out/samples.xyz"
 
         logger.info(f"Sampled configurations written to {output_path}")
         return output_path
@@ -310,9 +304,7 @@ class CMAESSampler(Sampler):
         self.bulk_terminate = bulk_terminate
         self.opt_optimizer = opt_optimizer
 
-    def update(
-        self, calcdir: Path, sampler_input: list[Path], **kwargs
-    ) -> None:
+    def update(self, calcdir: Path, sampler_input: list[Path], **kwargs) -> None:
         """
         Prepare sampler for a new iteration.
 
@@ -506,9 +498,7 @@ class BatchCMAESSampler(CMAESSampler):
         )
         self.batch_size = batch_size
 
-    def update(
-        self, calcdir: Path, sampler_input: list[Path], **kwargs
-    ) -> None:
+    def update(self, calcdir: Path, sampler_input: list[Path], **kwargs) -> None:
         """
         Prepare N CMA-ES evolution tasks with different random seeds.
 
@@ -534,9 +524,7 @@ class BatchCMAESSampler(CMAESSampler):
             self.label = f"{_orig_label}_{run_idx}"
 
             run_calcdir = Path(calcdir) / f"run_{run_idx}"
-            super().update(
-                calcdir=run_calcdir, sampler_input=sampler_input, **kwargs
-            )
+            super().update(calcdir=run_calcdir, sampler_input=sampler_input, **kwargs)
 
             if not self.stub:
                 self.sampling_tasks.append(self.sampling_task)
@@ -555,9 +543,7 @@ class BatchCMAESSampler(CMAESSampler):
             logger.info("Running in stub mode - creating mock batch samples")
             output_paths = []
             for run_idx in range(self.batch_size):
-                run_dir = (
-                    self.base_calcdir / f"run_{run_idx}" / "sample" / "results"
-                )
+                run_dir = self.base_calcdir / f"run_{run_idx}" / "sample" / "results"
                 output_dir = run_dir / "out"
                 os.makedirs(output_dir, exist_ok=True)
                 mock_samples = self._create_stub_outputs()
@@ -574,12 +560,8 @@ class BatchCMAESSampler(CMAESSampler):
 
             results_dir = Path(task.local_savepath)
             if self.do_optimization:
-                winner_poscar = (
-                    results_dir / "optimized" / f"POSCAR_{label}_winner_end"
-                )
-                winner_extxyz = (
-                    results_dir / "optimized" / f"{label}_winner_end.extxyz"
-                )
+                winner_poscar = results_dir / "optimized" / f"POSCAR_{label}_winner_end"
+                winner_extxyz = results_dir / "optimized" / f"{label}_winner_end.extxyz"
                 at = ase.io.read(winner_poscar, format="vasp")
                 ase.io.write(winner_extxyz, at)
                 output_paths.append(winner_extxyz)
@@ -632,9 +614,7 @@ class NSTrajectorySampler(Sampler):
         self.ns_exe = ns_exe
         self.remote_fs = remote_fs
         self.n_gpu_parallel = n_gpu_parallel
-        self.remote_savepath = (
-            Path(remote_savepath) if remote_savepath else None
-        )
+        self.remote_savepath = Path(remote_savepath) if remote_savepath else None
         self.sample_size = sample_size
         self.resample_size = resample_size
         self.loop_time = loop_time
@@ -651,9 +631,7 @@ class NSTrajectorySampler(Sampler):
                 f"must be <= sample_size ({self.sample_size})"
             )
 
-    def update(
-        self, calcdir: os.PathLike, model_file: os.PathLike, **kwargs
-    ) -> None:
+    def update(self, calcdir: os.PathLike, model_file: os.PathLike, **kwargs) -> None:
         """
         Prepare sampler for a new iteration.
 
@@ -716,9 +694,7 @@ class NSTrajectorySampler(Sampler):
 
             kwargs["pickle_file"] = str(model_file_remote)
             update_default_args(kwargs, input_kwargs)
-            input_parser.write_ns_inputfile(
-                self.initial_input_file, input_kwargs
-            )
+            input_parser.write_ns_inputfile(self.initial_input_file, input_kwargs)
 
             # Allocate data (copies input file and writes jobfile)
             self.ns_task.allocate_data()
@@ -785,8 +761,7 @@ class NSTrajectorySampler(Sampler):
 
         # Compute weighted score
         score = (
-            self.force_uncty_weight * funcs_norm
-            + self.energy_uncty_weight * euncs_norm
+            self.force_uncty_weight * funcs_norm + self.energy_uncty_weight * euncs_norm
         )
         score = score / np.sum(score)
 
@@ -1006,9 +981,7 @@ class TorchSimSampler(Sampler):
         self.ensemble = ensemble
         self.temperatures = temperatures
         self.target_temperature = target_temperature
-        self.model_paths = (
-            model_paths if model_paths is not None else ["foundation"]
-        )
+        self.model_paths = model_paths if model_paths is not None else ["foundation"]
         self.dt = dt
         self.gamma = gamma
         self.alpha = alpha
@@ -1034,8 +1007,7 @@ class TorchSimSampler(Sampler):
             needs_ensemble = isinstance(selector, UncertaintySelector)
             if isinstance(selector, PipelineSelector):
                 needs_ensemble = any(
-                    isinstance(s, UncertaintySelector)
-                    for s in selector.selectors
+                    isinstance(s, UncertaintySelector) for s in selector.selectors
                 )
             if needs_ensemble:
                 raise ValueError(
@@ -1044,9 +1016,7 @@ class TorchSimSampler(Sampler):
                     f"estimates. Got model_paths={self.model_paths!r}."
                 )
 
-    def update(
-        self, calcdir: Path, sampler_input: list[Path], **kwargs
-    ) -> None:
+    def update(self, calcdir: Path, sampler_input: list[Path], **kwargs) -> None:
         """
         Prepare sampler for a new iteration.
 
@@ -1065,9 +1035,7 @@ class TorchSimSampler(Sampler):
         os.makedirs(self.results_dir, exist_ok=True)
 
         self.model_files = (
-            sampler_input
-            if isinstance(sampler_input, list)
-            else [sampler_input]
+            sampler_input if isinstance(sampler_input, list) else [sampler_input]
         )
 
         if not self.stub:
@@ -1169,9 +1137,7 @@ class TorchSimSampler(Sampler):
             Path to extxyz file containing sampled configurations
         """
         if self.stub:
-            logger.info(
-                "Running in stub mode - creating mock torch_sim samples"
-            )
+            logger.info("Running in stub mode - creating mock torch_sim samples")
             sampled_configs = self._create_stub_outputs()
 
             output_dir = self.results_dir / "out"
@@ -1210,13 +1176,10 @@ class TorchSimSampler(Sampler):
                     ase.io.write(output_path, selected)
             else:
                 output_path = (
-                    Path(self.sampling_task.local_savepath)
-                    / "out/samples.extxyz"
+                    Path(self.sampling_task.local_savepath) / "out/samples.extxyz"
                 )
 
-        logger.info(
-            f"Torch_sim sampled configurations written to {output_path}"
-        )
+        logger.info(f"Torch_sim sampled configurations written to {output_path}")
         return output_path
 
 
@@ -1250,33 +1213,31 @@ class SSPDSampler(Sampler):
         self.cluster_config = cluster_config
         self.selector = selector
 
-    def update(
-        self, calcdir: Path, sampler_input: list[Path], **kwargs
-    ) -> None:
+    def update(self, calcdir: Path, sampler_input: list[Path], **kwargs) -> None:
         self.sample_dir = calcdir / "sample"
         self.results_dir = self.sample_dir / "results"
         os.makedirs(self.sample_dir, exist_ok=True)
         os.makedirs(self.results_dir, exist_ok=True)
 
         self.model_files = sampler_input
-        # suggestion: go over everything in kwargs and just write it in there, 
+        # suggestion: go over everything in kwargs and just write it in there,
         # implement defaults for each omission
         # see the nested sampling sampler above
         script_input = {
             "input_struct_path": Path(self.data_path).name,
-            "threshold": kwargs["threshold"],
-            "inv_beta": kwargs["inv_beta"],
+            "threshold": kwargs.get("threshold"),
+            "inv_beta": kwargs.get("inv_beta", 0.05),
             "max_acceptance": 1.0,
             "min_acceptance": 0.5,
-            "initial_timestep": kwargs["initial_timestep"],
-            "num_iterations": kwargs["num_iterations"],
-            "sampling_threshold": kwargs["sampling_threshold"],
-            "sampling_frequency": kwargs["sampling_frequency"],
-            "N": kwargs["N"],
+            "initial_timestep": kwargs.get("initial_timestep", 0.01),
+            "num_iterations": kwargs.get("num_iterations", 10000),
+            "sampling_threshold": kwargs.get("sampling_threshold", 0),
+            "sampling_frequency": kwargs.get("sampling_frequency", 50),
+            "N": kwargs.get("N", 100),
             "model_file": Path(self.model_files).name,
             "seed": np.random.randint(1e6),
             "num_iterations_OL": kwargs.get("num_iterations_OL"),
-            "hessian_method": kwargs["hessian_method"],
+            "hessian_method": kwargs.get("hessian_method", "hessian"),
         }
 
         self.script_input_file = (
@@ -1305,7 +1266,6 @@ class SSPDSampler(Sampler):
         self.sampling_task.copy_file(self.data_path)
         self.sampling_task.copy_file(self.model_files)
 
-
     def get_sampled_configs(self) -> Path:
         self.sampling_task.submit()
         self.sampling_task.collect_results()
@@ -1317,8 +1277,7 @@ class SSPDSampler(Sampler):
             traj_paths = sorted(results_path.glob("*.xyz"))
             if not traj_paths:
                 logger.warning(
-                    "No *.xyz files found in %s, "
-                    "falling back to script output",
+                    "No *.xyz files found in %s, " "falling back to script output",
                     results_path,
                 )
                 output_path = results_path / "out/samples.extxyz"
@@ -1334,12 +1293,7 @@ class SSPDSampler(Sampler):
                 output_path = output_dir / "samples.extxyz"
                 ase.io.write(output_path, selected)
         else:
-            output_path = (
-                Path(self.sampling_task.local_savepath)
-                / "out/samples.extxyz"
-            )
+            output_path = Path(self.sampling_task.local_savepath) / "out/samples.extxyz"
 
-        logger.info(
-            f"SSPD sampled configurations written to {output_path}"
-        )
+        logger.info(f"SSPD sampled configurations written to {output_path}")
         return output_path

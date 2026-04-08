@@ -66,10 +66,10 @@ def write_with_keys(
         forces_key: Key to use for forces, default is MACE default
     """
     ase.io.write(file_name, alist)
-    cmd = f"sed -i 's/energy/{energy_key}/g' " + file_name
-    subprocess.call(cmd, shell=True)
-    cmd = f"sed -i 's/forces/{forces_key}/g' " + file_name
-    subprocess.call(cmd, shell=True)
+    cmd = ["sed","-i", f"s/energy/{energy_key}/g", f"{file_name}"]
+    subprocess.call(cmd)
+    cmd = ["sed","-i", f"s/forces/{forces_key}/g", f"{file_name}"]
+    subprocess.call(cmd)
 
 
 def split_db(
