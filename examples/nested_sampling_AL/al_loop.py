@@ -7,33 +7,56 @@ from pathlib import Path
 
 import jax
 from jaxnest import input_parser
-from jaxnest.active_learning import ns_active_learning
+from remote_handler.workflows import evaluators, samplers, trainers
 from jaxnest.input_parser import update_default_args
 
 import remote_handler
-from remote_handler.core.file_handler import LocalFileSystem, RemoteFileSystem
 from remote_handler.workflows import active_learning_base
+from remote_handler.core.file_handler import LocalFileSystem, RemoteFileSystem
+from remote_handler.core.cluster_handler import ClusterConfig
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
 # Directory paths
-data_dir = Path("/home/aserafini/code/jaxns/test/data")
+data_dir = Path("/home/aserafini/code/remote_handler/src/remote_handler/scripts")
 homepath = Path(os.getcwd())
-print(f"Running from {homepath}")
 
-remote_dir = homepath / "remote_dirs" / "remote_dir"
-os.makedirs(remote_dir.parent, exist_ok=True)
 
 # Add custom template directory for SLURM scripts
-remote_handler.core.slurm_utils.TEMPLATE_DIRS.append(
-    str(data_dir / "active_learning/config_files")
-)
+CONFIG_DIR = Path(homepath / "config_files")
+
+os.environ["REMOTE_HANDLER_CONFIG_DIR"] = str(CONFIG_DIR)
+os.environ["REMOTE_HANDLER_SLURM_TEMPLATES"] = str(CONFIG_DIR)
 
 # Instance local file systems (with SLURM configurations)
-local_fs = LocalFileSystem(slurm_config_file="dirona.json")
+local_fs = LocalFileSystem()
 
 # Instance remote file system (with SLURM configurations)
-remote_fs = RemoteFileSystem(slurm_config_file="datalab.json")
+remote_fs = RemoteFileSystem(
+    remote_alias="datalab",
+)
+
+local_config_dict = {
+    "remote_machine": "dirona",
+    "partition": "normal",
+    "savepath": "/home/aserafini/remote_jobs/al/test/",
+    "conda_env": "jaxnest",
+    "conda_source": "/home/aserafini/miniconda3",
+    "template": "dirona.sh.j2"
+}
+
+local_cluster_config = ClusterConfig.from_dict(local_config_dict)
+
+remote_config_dict = {
+    "remote_machine": "datalab",
+    "partition": "GPU-a100,GPU-a40,GPU-a100s",
+    "savepath": "/home/alessandro.serafini/remote_jobs/al/test/",
+    "conda_env": "jaxnest",
+    "conda_source": "/home/alessandro.serafini/miniconda3",
+    "template": "datalab.sh.j2"
+}
+
+remote_cluster_config = ClusterConfig.from_dict(remote_config_dict)
 
 # Settings for the active learning loop
 cycle_entry_point = "evaluation"
@@ -43,18 +66,16 @@ initial_db_file = None
 
 
 stub = False
-loop_time = 1
+loop_time = 10
 
 # Decide whether to use the stub executable or the real one
 if stub:
-    ns_exe = (
-        "/home/aserafini/code/jaxns/test/data/active_learning/ns_run_stub.py"
-    )
+    ns_exe = "/home/aserafini/code/jaxns/test/data/active_learning/ns_run_stub.py"
 else:
     ns_exe = "/home/aserafini/code/jaxns/src/jaxnest/ns_run.py"
 
 # Trial parse the ns.inp to avoid it crashing on the remote machine
-n_gpu_parallel = 2
+n_gpu_parallel = 1
 temp = input_parser.raw_parse(
     filename=homepath / "ns.inp",
     n_gpu_parallel=n_gpu_parallel,
@@ -69,25 +90,26 @@ temp = input_parser.raw_parse(
 
 # Nested sampling trajectory sampler which runs jaxnest.ns_run.py on the remote machine
 # and collects samples from the nested sampling trajectories for the active learning loop
-ns_traj_sampler = ns_active_learning.NSTrajectorySampler(
-    ns_exe=ns_exe,
+ns_traj_sampler = samplers.NSTrajectorySampler(
     remote_fs=remote_fs,
+    cluster_config=remote_cluster_config,
+    sampling_script=ns_exe,
     initial_input_file=homepath / "ns.inp",
     n_gpu_parallel=n_gpu_parallel,
     sample_size=100,
-    remote_savepath=remote_fs.slurm_config["savepath"],
     loop_time=loop_time,
+    remote_savepath=remote_config_dict["savepath"]
 )
 
 # EVALUATOR
 
 # VASP evaluator which runs single point DFT calculations on the remote machine
 # to evaluate the energies of the collected samples
-vasp_evaluator = ns_active_learning.VASPEvaluator(
-    singlepoint_script=data_dir / "active_learning" / "dft_singlepoint.py",
+vasp_evaluator = evaluators.VASPEvaluator(
+    singlepoint_script=data_dir / "dft_singlepoint.py",
     remote_fs=local_fs,
+    cluster_config=local_cluster_config,
     num_parallel=25,
-    remote_savepath=remote_dir,
     incar_kwargs={
         # "istart": 0,
         # "icharg": 2,
@@ -108,16 +130,17 @@ vasp_evaluator = ns_active_learning.VASPEvaluator(
     },
     stub=stub,
     loop_time=loop_time,
+    remote_savepath=local_config_dict["savepath"]
 )
 
 # TRAINER
 
 # NeuralIL trainer which runs training of a NeuralIL model on the remote machine
 # using the structures evaluated with DFT in the active learning loop
-neuralil_trainer = ns_active_learning.NeuralILTrainer(
-    training_script=data_dir / "active_learning" / "train_nnff.py",
+neuralil_trainer = trainers.NeuralilILTrainer(
+    training_script=data_dir / "neuralil" / "neuralil_training.py",
     remote_fs=remote_fs,
-    remote_savepath=remote_fs.slurm_config["savepath"],
+    cluster_config=remote_cluster_config,   
     training_kwargs={
         "r_cut": 4.0,
         "training_fraction": 0.75,
@@ -129,10 +152,10 @@ neuralil_trainer = ns_active_learning.NeuralILTrainer(
     },
     stub=stub,
     loop_time=loop_time,
+    remote_savepath=remote_config_dict["savepath"]
 )
 
 # SAMPLER SCHEDULE
-
 
 # Schedule for the nested sampling trajectory sampler which changes the
 # number of walkers and the MC_cell_P parameter in the ns.inp file
@@ -143,7 +166,7 @@ class SamplerSchedule(active_learning_base.Schedule):
             kwargs = {
                 "n_walkers": 400,
                 "gpu_n_batch": 200,
-                "MC_cell_P": "3 7 11 15",
+                "MC_cell_P": "2 4 6 8 10 12 14 16",
             }
         if iteration_idx > 0:
             kwargs = {
@@ -154,7 +177,7 @@ class SamplerSchedule(active_learning_base.Schedule):
         if iteration_idx > 3:
             kwargs = {
                 "n_walkers": 200,
-                "gpu_n_batch": 600,
+                "gpu_n_batch": 400,
                 "MC_cell_P": "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16",
             }
         return kwargs
@@ -164,33 +187,32 @@ num_iterations = 20
 # Instantiate the sampler schedule with the desired number of iterations
 sampler_schedule = SamplerSchedule(num_iterations)
 
-
 # Function to update the ns.inp file with the new parameters from the schedule
-def kwargs_consumer(kwargs):
-    ns_params = deepcopy(ns_traj_sampler.ns_params)
-    update_default_args(kwargs, ns_params)
+if not stub:
+    def kwargs_consumer(kwargs):
+        ns_params = deepcopy(ns_traj_sampler.ns_params)
+        update_default_args(kwargs, ns_params)
 
-    input_parser.raw_parse(
-        args_dict=ns_params, n_gpu_parallel=n_gpu_parallel, parse_only=True
-    )
+        input_parser.raw_parse(
+            args_dict=ns_params, n_gpu_parallel=n_gpu_parallel, parse_only=True
+        )
 
-
-# Test the kwargs consumer function and visualize the schedule
-sampler_schedule.test(kwargs_consumer)
-sampler_schedule.visualize()
+    # Test the kwargs consumer function and visualize the schedule
+    sampler_schedule.test(kwargs_consumer)
+    sampler_schedule.visualize()
 
 
 al_handler = active_learning_base.ActiveLearningHandler(
-    sampler=ns_traj_sampler,  # Where to get new samples from (Nested sampling trajectories)
-    evaluator=vasp_evaluator,  # How to evaluate the samples (DFT single point calculations)
-    trainer=neuralil_trainer,  # How to train the model (NeuralIL)
-    sampler_schedule=sampler_schedule,  # How to change the sampler parameters as the AL loop progresses
-    calchome=homepath,  # Home directory where the AL loop is run from
-    initial_model_file=initial_model_file,  # Initial model file (None if starting from scratch)
-    initial_db_file=initial_db_file,  # Initial database file (None if starting from scratch)
-    initial_sample_file=initial_sample_file,  # Initial sample file (extxyz with structures to add to the initial database)
-    num_iterations=num_iterations,  # Number of active learning iterations
-    cycle_entry_point=cycle_entry_point,  # Entry point for the active learning cycle ("sampling" or "evaluation")
+    sampler=ns_traj_sampler,                 # Where to get new samples from (Nested sampling trajectories)
+    evaluator=vasp_evaluator,                # How to evaluate the samples (DFT single point calculations)
+    trainer=neuralil_trainer,                # How to train the model (NeuralIL)
+    sampler_schedule=sampler_schedule,       # How to change the sampler parameters as the AL loop progresses
+    calchome=homepath,                       # Home directory where the AL loop is run from
+    initial_trainer_out=initial_model_file,  # Initial model file (None if starting from scratch)
+    initial_sampler_out=initial_sample_file, # Initial database file (None if starting from scratch)
+    initial_evaluator_out=initial_db_file,   # Initial sample file (extxyz with structures to add to the initial database)
+    num_iterations=num_iterations,           # Number of active learning iterations
+    cycle_entry_point=cycle_entry_point      # Entry point for the active learning cycle ("sampling" or "evaluation")
 )
 
 al_handler.run()

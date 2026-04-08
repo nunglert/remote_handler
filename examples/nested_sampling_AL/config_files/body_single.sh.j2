@@ -1,0 +1,4 @@
+export SSL_CERT_FILE=$(python -m certifi)
+export CURL_CA_BUNDLE=$SSL_CERT_FILE
+
+python {{ python_script_path }} {{ input_file }}

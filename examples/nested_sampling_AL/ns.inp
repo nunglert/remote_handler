@@ -1,43 +1,33 @@
 n_walkers=400
 platform=gpu
-gpu_n_batch=200
+gpu_n_batch=400
 n_cull=1
 n_iter_times_fraction_killed=1000
 n_model_calls_expected=1000
 full_auto_steps=200
-
-# MCMC
 n_gmc_steps=2
 atom_traj_len=4
 n_random_shift_steps=8
 n_cell_volume_steps=16
 n_cell_shear_steps=8
 n_cell_stretch_steps=8
-
-# REPLICA EXCHANGE
 add_swaps_on_top=T
 n_swap_cycles=10
-inter_swap_interval=5
+inter_swap_interval=0
 n_pressure_swap_steps=200
-# inter_swap_interval=1
-
-MC_cell_P= 3 7 11 15
+MC_cell_P=2 4 6 8 10 12 14 16
 pressure_conversion=gpa_to_eva3
 max_volume_per_atom=52.734375
 min_volume_per_atom=10.0
-
 MC_atom_step_size=0.01
 MC_atom_step_size_max=5.0
-
 GMC_adjust_min_rate=0.1
 MC_cell_min_aspect_ratio=0.8
-
 energy_calculator=NN
-pickle_file=/home/alessandro.serafini/code/jaxns/test/data/systems/silicon/n16/model_params_plain_ensemble_VELO_8E04F5B1.pkl
+pickle_file=/home/alessandro.serafini/remote_jobs/al/test/AL_NS_1/trainer_it0_0.pkl
 max_neighbors_list=30 35 40 45 50
 max_neighbors_offset=5
 supercell_trafo=3 3 3
-
 start_species=14 16
 restart_file=AUTO
 random_initialise_pos=T
@@ -46,33 +36,18 @@ cell_shape_equil_steps=10
 initial_walk_N_walks=0
 initial_walk_walklength=50
 initial_walk_Emax_offset_per_atom=2
-
 info_interval=10
 traj_interval=10
 monitor_step_interval=100
 snapshot_interval=1000
 snapshot_time=100000
 snapshot_clean=T
-
 converge_down_to_T=100
 adjust_step_interval=100
 step_rng_seed=0
-evaluate_uncertainties_traj=F
-
-# ACTIVE LEARNING
+evaluate_uncertainties_traj=T
 do_active_learning=F
-num_uncertain_configs=500
-compress_every=50
-compress_size=100
-compress_with_uncert=T
-save_energies_every=1
-save_uncertainties_every=1
-save_configs_every=100
-n_batch=100
-sample_size=100
 total_uncertainty_max=1000000000.0
-
-# IGNORE
 profile_memory=F
 debug=0
 random_energy_perturbation=-1
