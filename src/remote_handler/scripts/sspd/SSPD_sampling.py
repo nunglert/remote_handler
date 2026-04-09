@@ -12,6 +12,7 @@ import ase.io
 import jax.numpy as jnp
 
 import jax
+
 jax.config.update("jax_platform_name", "cpu")
 from SSPD.calculators.calculator import MACEModel
 import h5py
@@ -33,7 +34,9 @@ def get_SSPD_simulator(input_args):
 
     input_struct = ase.io.read(input_struct_path)
 
-    model = MACEModel(model_path, input_struct, N, hessian_method=input_args["hessian_method"])
+    model = MACEModel(
+        model_path, input_struct, N, hessian_method=input_args["hessian_method"]
+    )
 
     positions = jnp.array(input_struct.get_positions()).ravel()
     natoms = len(input_struct)
@@ -42,10 +45,22 @@ def get_SSPD_simulator(input_args):
     masses = jnp.repeat(masses, 3)
     masses = jnp.reshape(masses, jnp.shape(positions))
 
-    simulator = SSPD(positions, 3*natoms, N, model.EvaluateEnergy, model.EvaluateEnergyGradient, model.EvaluateEnergyHessian, input_args["seed"], input_args["threshold"], input_args["inv_beta"], masses, max_acceptance=input_args["max_acceptance"], min_acceptance=input_args["min_acceptance"])
+    simulator = SSPD(
+        positions,
+        3 * natoms,
+        N,
+        model.EvaluateEnergy,
+        model.EvaluateEnergyGradient,
+        model.EvaluateEnergyHessian,
+        input_args["seed"],
+        input_args["threshold"],
+        input_args["inv_beta"],
+        masses,
+        max_acceptance=input_args["max_acceptance"],
+        min_acceptance=input_args["min_acceptance"],
+    )
 
     return simulator, model
-
 
 
 def run_SSPD(simulator, input_args, model):
@@ -53,7 +68,6 @@ def run_SSPD(simulator, input_args, model):
     input_struct_path = calcpath / input_args["input_struct_path"]
     input_struct = ase.io.read(input_struct_path)
     num_iter = input_args["num_iterations"]
-
 
     ### FOR OUTPUT START
 
@@ -96,14 +110,14 @@ def run_SSPD(simulator, input_args, model):
 
     ### FOR OUTPUT END
 
-
     np.random.seed(input_args["seed"])
     dt = input_args["initial_timestep"]
     E_init = None
+    t = -10
+    written_file = False
     for i in range(num_iter):
         print("Currently at iteration " + str(i))
         dt, ratio = simulator.PerformIteration(dt)
-
 
         #### PUT THIS IN SEPARATE PLACE AND IMPROVE UPON IT
         # JUST FOR TESTING
@@ -119,7 +133,7 @@ def run_SSPD(simulator, input_args, model):
         if track_evalues:
             eigenvalues.append(simulator.eigvals)
         if track_vhp_evaluations:
-            vhp_evaluations.append(simulator.vhp_evaluations/N)
+            vhp_evaluations.append(simulator.vhp_evaluations / N)
         if full_uncertainty:
             energy_uncertainty.append(model.uncertainties["energies"])
             force_uncertainty.append(model.uncertainties["forces"])
@@ -178,7 +192,7 @@ def run_SSPD(simulator, input_args, model):
                     if track_evalues:
                         f["eigenvalues"][-num_add:] = np.array(eigenvalues)
                     if track_vhp_evaluations:
-                        f["vhp_evaluations"][-output_batch:] = np.array(vhp_evaluations)    
+                        f["vhp_evaluations"][-output_batch:] = np.array(vhp_evaluations)
                     if full_uncertainty:
                         f["force_uncertainty"][-num_add:] = np.array(force_uncertainty)
                         f["energy_uncertainty"][-num_add:] = np.array(
@@ -202,15 +216,20 @@ def run_SSPD(simulator, input_args, model):
                 force_uncertainty = []
 
         #### CODE TO CHANGE END
-        if (simulator.resampling >= input_args["sampling_threshold"]) and (i % input_args["sampling_frequency"] == 0):
+        if (simulator.resampling >= input_args["sampling_threshold"]) and (
+            i % input_args["sampling_frequency"] == 0
+        ):
             positions = np.array(simulator.X)
             chosen_pos = positions[np.random.randint(0, input_args["N"])]
             struct = input_struct.copy()
             struct.positions = chosen_pos.reshape((-1, 3))
             extracted_configs.append(struct)
-    print("Extracted " + str(len(extracted_configs)) + " structures for adding to the database.")
+    print(
+        "Extracted "
+        + str(len(extracted_configs))
+        + " structures for adding to the database."
+    )
     return extracted_configs
-
 
 
 simulator, model = get_SSPD_simulator(input_args)
