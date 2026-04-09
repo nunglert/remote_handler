@@ -45,12 +45,12 @@ pages:
     - python -c "import remote_handler; print(f'Successfully imported remote_handler from {remote_handler.__file__}')"
     - python -c "import remote_handler.config; print('Config module imported successfully')"
   script:
-    # Build the Sphinx documentation
-    - cd docs
-    - make html
-    - cd ..
-    # GitLab Pages expects output in 'public' directory
-    - mv docs/build/html public
+    # # Build the Sphinx documentation
+    # - cd docs
+    # - make html
+    # - cd ..
+    # # GitLab Pages expects output in 'public' directory
+    # - mv docs/build/html public
   artifacts:
     paths:
       - public
