@@ -66,12 +66,20 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         nbins (int, optional): Number of bins for the Steinhardt calculation.
         do_optimization (bool, optional): If True, perform the optimization.
         do_steinhardt (bool, optional): If True, compute the Steinhardt parameters.
+        do_rdf (bool, optional): If True, compute the radial distribution function.
+        do_wc (bool, optional): If True, compute the Warren-Cowley parameter.
+        do_soap (bool, optional): If True, compute the SOAP descriptor.
         optimization_backend (str, optional): Backend to use for the optimization.
             Either "NNFF" or "LJ". Defaults to "NNFF".
         steinhardt_backend (str, optional): Backend to use for the Steinhardt
             calculation. Either "pyscal" or "quip". Defaults to "quip".
         steinhardt_l_values (list[int], optional): List of l values to compute
             for the Steinhardt calculation. Defaults to [4, 6].
+        soap_species (list[str], optional): List of species to compute the SOAP
+            descriptor for. Defaults to ["Cu"].
+        soap_nmax (int, optional): nmax for the SOAP descriptor. Defaults to 8.
+        soap_lmax (int, optional): lmax for the SOAP descriptor. Defaults to 6.
+
 
     """
 
@@ -94,21 +102,25 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         collect_only: bool = False,
         tag: str = "opt",
         python_script_path: str = "/home/aserafini/code/jaxnest/scripts/utility/optimize_traj.py",
-        stub: bool = False,
         pickle_file: str = None,  # = "/home/nunglert/nnff_trainings/velo/si_bartok_gpu7/run11_r2scan_rerun/model_params_plain_ensemble_VELO_8E04F5B1.pkl",
+        stub: bool = False,
+        do_optimization: bool = False,
+        do_steinhardt: bool = False,
+        do_rdf: bool = False,
+        do_wc: bool = False,
+        do_soap: bool = False,
         supercell_trafo: list[int] = [3, 3, 3],
         max_neighbors_list: list[int] = [20, 30, 40, 50, 60],
         max_neighbors_offset: int = 3,
+        optimization_backend: str = "NNFF",
         fmax: float = 0.1,
         steps: int = 200,
-        rmax: float = 5.0,
-        nbins: int = 200,
-        do_optimization: bool = True,
-        do_steinhardt: bool = True,
-        do_rdf: bool = True,
-        optimization_backend: str = "NNFF",
-        steinhardt_backend: str = "quip",
         steinhardt_l_value: int = 4,
+        soap_species: list[str] = ["Cu"],
+        soap_nmax: int = 8,
+        soap_lmax: int = 6,
+        nbins: int = 200,
+        rmax: float = 5.0,
     ):
         super().__init__(
             traj_files,
@@ -140,8 +152,9 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
             "do_optimization": do_optimization,
             "do_steinhardt": do_steinhardt,
             "do_rdf": do_rdf,
+            "do_wc": do_wc,
+            "do_soap": do_soap,
             "calculator_args": dict(
-                # pickle_file=str(self.moved_pickle_file),
                 supercell_trafo=supercell_trafo,
                 max_neighbors_list=max_neighbors_list,
                 max_neighbors_offset=max_neighbors_offset,
@@ -152,13 +165,18 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
                 steps=steps,
             ),
             "steinhardt_args": dict(
-                steinhardt_backend=steinhardt_backend,
                 steinhardt_l_value=steinhardt_l_value,
+            ),
+            "soap_args": dict(
+                soap_species=soap_species,
+                soap_nmax=soap_nmax,
+                soap_lmax=soap_lmax,
             ),
             "general_args": dict(
                 nbins=nbins,
                 cutoff=rmax,
             ),
+            
         }
 
         # Since we did not initialize the python_script_file, shared_ressources
@@ -166,8 +184,9 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
         self.python_script_file = python_script_path
 
         self.shared_ressources = []
-        if optimization_backend == "NNFF" or optimization_backend == "MACE":
-            self.shared_ressources.append(pickle_file)
+        if do_optimization:
+            if optimization_backend == "NNFF" or optimization_backend == "MACE":
+                self.shared_ressources.append(pickle_file)
 
         if not collect_only:
             self.prepare_individual_data()
@@ -181,10 +200,11 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
             json_config = deepcopy(self.json_args)
             json_config["DATABASE"] = f"opt.extxyz"
 
-            pickle_file = f"{os.path.split(self.pickle_file)[1]}"
-            json_config["calculator_args"]["pickle_file"] = (
-                (Path(self.savepath) / pickle_file).resolve().__str__()
-            )
+            if self.pickle_file is not None:
+                pickle_file = f"{os.path.split(self.pickle_file)[1]}"
+                json_config["calculator_args"]["pickle_file"] = (
+                    (Path(self.savepath) / pickle_file).resolve().__str__()
+                )
 
             config_files.append(
                 tasks.DictJSON(json_config, "input_opt.json", self.remote_fs)
