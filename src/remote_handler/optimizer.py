@@ -168,9 +168,9 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
                 steinhardt_l_value=steinhardt_l_value,
             ),
             "soap_args": dict(
-                soap_species=soap_species,
-                soap_nmax=soap_nmax,
-                soap_lmax=soap_lmax,
+                species=soap_species,
+                n_max=soap_nmax,
+                l_max=soap_lmax,
             ),
             "general_args": dict(
                 nbins=nbins,
