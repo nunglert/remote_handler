@@ -44,7 +44,7 @@ pages:
     # Verify installation
     - python -c "import remote_handler; print(f'Successfully imported remote_handler from {remote_handler.__file__}')"
     - python -c "import remote_handler.config; print('Config module imported successfully')"
-  script:
+  # script:
     # # Build the Sphinx documentation
     # - cd docs
     # - make html
