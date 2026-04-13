@@ -30,31 +30,31 @@ test:
     - merge_requests
 
 # Build and deploy documentation to GitLab Pages
-pages:
-  stage: deploy
-  image: python:3.10
-  tags:
-    - shared
-  before_script:
-    - pip install --upgrade pip
-    # Install package with all dependencies (needed for autodoc to import modules)
-    - pip install -e .
-    # Install documentation dependencies
-    - pip install -e ".[docs]"
-    # Verify installation
-    - python -c "import remote_handler; print(f'Successfully imported remote_handler from {remote_handler.__file__}')"
-    - python -c "import remote_handler.config; print('Config module imported successfully')"
-  script:
-    # # Build the Sphinx documentation
-    - cd docs
-    # - make html
-    - cd ..
-    # # GitLab Pages expects output in 'public' directory
-    # - mv docs/build/html public
-  artifacts:
-    paths:
-      - public
-    expire_in: 1 week
-  # only:
-  #   - main  # Only deploy docs from main branch
-  dependencies: []
+# pages:
+#   stage: deploy
+#   image: python:3.10
+#   tags:
+#     - shared
+#   before_script:
+#     - pip install --upgrade pip
+#     # Install package with all dependencies (needed for autodoc to import modules)
+#     - pip install -e .
+#     # Install documentation dependencies
+#     - pip install -e ".[docs]"
+#     # Verify installation
+#     - python -c "import remote_handler; print(f'Successfully imported remote_handler from {remote_handler.__file__}')"
+#     - python -c "import remote_handler.config; print('Config module imported successfully')"
+#   script:
+#     # # Build the Sphinx documentation
+#     - cd docs
+#     # - make html
+#     - cd ..
+#     # # GitLab Pages expects output in 'public' directory
+#     # - mv docs/build/html public
+#   artifacts:
+#     paths:
+#       - public
+#     expire_in: 1 week
+#   # only:
+#   #   - main  # Only deploy docs from main branch
+#   dependencies: []
