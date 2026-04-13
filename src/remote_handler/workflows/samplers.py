@@ -1193,6 +1193,7 @@ class SSPDSampler(Sampler):
         remote_savepath: Optional[os.PathLike] = None,
         loop_time: float = 30,
         selector: Optional[ConfigSelector] = None,
+        torch_sim: bool = False,
     ):
         """
         Args:
@@ -1212,6 +1213,7 @@ class SSPDSampler(Sampler):
         self.loop_time = loop_time
         self.cluster_config = cluster_config
         self.selector = selector
+        self.torch_sim = torch_sim
 
     def update(self, calcdir: Path, sampler_input: list[Path], **kwargs) -> None:
         self.sample_dir = calcdir / "sample"
@@ -1269,31 +1271,51 @@ class SSPDSampler(Sampler):
     def get_sampled_configs(self) -> Path:
         self.sampling_task.submit()
         self.sampling_task.collect_results()
+        # TODO: check possibilities with the sampler
+        # would be nice to separate the "reader" functions. Or simply discontinue the support for the non torch-sim version
+        results_path = Path(self.sampling_task.local_savepath) / "out"
+        if self.torch_sim:
+            # there is also the option to write the trajectory in the script, but the h5 format is nicer
+            torch_sim_alist = []
+            from torch_sim.trajectory import TorchSimTrajectory
+
+            traj_paths = sorted(results_path.glob("SSPD_trajectory_*.h5md"))
+            for tp in traj_paths:
+                with TorchSimTrajectory(tp) as traj:
+                    for i in range(len(traj)):
+                        atoms = traj.get_atoms(frame=i)
+                        torch_sim_alist.append(atoms)
 
         if self.selector is not None:
-            # Read all trajectory frames and pass to selector
-            results_path = Path(self.sampling_task.local_savepath)
-            results_path = results_path / "out/"
-            traj_paths = sorted(results_path.glob("*.xyz"))
-            if not traj_paths:
+            grouped_frames = None
+            if not self.torch_sim:
+                # Read all trajectory frames and pass to selector
+                traj_paths = sorted(results_path.glob("*.xyz"))
+                if traj_paths:
+                    grouped_frames: list[list[Atoms]] = []
+                    for traj_path in traj_paths:
+                        traj = ase.io.read(str(traj_path), index=":")
+                        grouped_frames.append(traj)
+
+            else:
+                grouped_frames = [torch_sim_alist]
+            if grouped_frames:
+                selected = self.selector.select(grouped_frames)
+                os.makedirs(results_path, exist_ok=True)
+                output_path = results_path / "samples.extxyz"
+                ase.io.write(output_path, selected)
+            else:
                 logger.warning(
-                    "No *.xyz files found in %s, " "falling back to script output",
+                    "No output trajectory files found in %s, "
+                    "falling back to script output",
                     results_path,
                 )
-                output_path = results_path / "out/samples.extxyz"
-            else:
-                grouped_frames: list[list[Atoms]] = []
-                for traj_path in traj_paths:
-                    traj = ase.io.read(str(traj_path), index=":")
-                    grouped_frames.append(traj)
+                output_path = results_path / "samples.extxyz"
 
-                selected = self.selector.select(grouped_frames)
-                output_dir = results_path / "out"
-                os.makedirs(output_dir, exist_ok=True)
-                output_path = output_dir / "samples.extxyz"
-                ase.io.write(output_path, selected)
         else:
-            output_path = Path(self.sampling_task.local_savepath) / "out/samples.extxyz"
+            output_path = results_path / "samples.extxyz"
+            if self.torch_sim:
+                ase.io.write(output_path, torch_sim_alist)
 
         logger.info(f"SSPD sampled configurations written to {output_path}")
         return output_path
