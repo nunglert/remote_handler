@@ -47,10 +47,10 @@ test:
 #   script:
 #     # # Build the Sphinx documentation
 #     - cd docs
-#     # - make html
+#     - make html
 #     - cd ..
 #     # # GitLab Pages expects output in 'public' directory
-#     # - mv docs/build/html public
+#     - mv docs/build/html public
 #   artifacts:
 #     paths:
 #       - public

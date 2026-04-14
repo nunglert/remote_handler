@@ -205,15 +205,14 @@ class VASPEvaluator(GroundTruthEvaluator):
             for calcpath in grep(str(self.results_dir / "calcdirs"), ""):
                 try:
                     at = ase.io.read(Path(calcpath) / "vasprun.xml")
+                    # Add REF labels to results
+                    at.info["REF_energy"] = at.get_potential_energy()
+                    at.arrays["REF_forces"] = at.get_forces()
+                    at.calc = None
                     all_ats.append(at)
                 except Exception as e:
                     logger.info(f"VASP run failed for {calcpath=}: {e}")
 
-            # Add REF labels to results
-            for s in all_ats:
-                s.info["REF_energy"] = s.get_potential_energy()
-                s.arrays["REF_forces"] = s.get_forces()
-                s.calc = None
 
         # Write results to file
         os.makedirs(self.results_dir, exist_ok=True)
