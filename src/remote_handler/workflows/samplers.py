@@ -1284,6 +1284,8 @@ class SSPDSampler(Sampler):
                 with TorchSimTrajectory(tp) as traj:
                     for i in range(len(traj)):
                         atoms = traj.get_atoms(frame=i)
+                        # TODO: figure out why the following is required
+                        atoms.cell.array = atoms.cell.array.T
                         torch_sim_alist.append(atoms)
 
         if self.selector is not None:
