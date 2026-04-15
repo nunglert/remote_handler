@@ -68,10 +68,8 @@ def write_with_keys(
     for atoms in alist:
         if energy_key not in atoms.info:
             atoms.info[energy_key] = atoms.get_potential_energy()
-            atoms.info.pop("energy")
         if forces_key not in atoms.info:
             atoms.arrays[forces_key] = atoms.get_forces()
-            atoms.arrays.pop("forces")
     ase.io.write(file_name, alist)
 
 
