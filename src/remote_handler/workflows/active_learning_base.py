@@ -142,23 +142,26 @@ def process_progress(
     if combine_sampler_outputs:
         if len(keys) > 1:
             for key in keys[:-1]:
-                append_or_extend(
-                    progress[key].get("sampler_output"), evaluator_in
-                )
+                if "sampler_output" in progress[key].keys():
+                    append_or_extend(
+                        progress[key].get("sampler_output"), evaluator_in
+                    )
 
     if combine_evaluator_outputs:
         if len(keys) > 1:
             for key in keys[:-1]:
-                append_or_extend(
-                    progress[key].get("evaluator_output"), trainer_in
-                )
+                if "evaluator_output" in progress[key].keys():
+                    append_or_extend(
+                        progress[key].get("evaluator_output"), trainer_in
+                    )
 
     if combine_trainer_outputs:
         if len(keys) > 1:
             for key in keys[:-1]:
-                append_or_extend(
-                    progress[key].get("trainer_output"), sampler_in
-                )
+                if "trainer_output" in progress[key].keys():
+                    append_or_extend(
+                        progress[key].get("trainer_output"), sampler_in
+                    )
 
     last_iteration_key = keys[-1]
     last_iter_keys = progress[last_iteration_key].keys()
@@ -214,7 +217,7 @@ def process_progress(
             # last loaded iteration is complete, proceed with next iter
             iteration_idx = last_iteration_key + 1
             progress.append({"steps": [1, 1, 1]})
-
+    
     evaluator_in = [Path(p) for p in evaluator_in]
     trainer_in = [Path(p) for p in trainer_in]
     sampler_in = [Path(p) for p in sampler_in]
