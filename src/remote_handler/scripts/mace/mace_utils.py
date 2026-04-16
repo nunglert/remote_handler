@@ -66,9 +66,9 @@ def write_with_keys(
         forces_key: Key to use for forces, default is MACE default
     """
     for atoms in alist:
-        if energy_key not in atoms.info:
+        if energy_key not in atoms.info.keys():
             atoms.info[energy_key] = atoms.get_potential_energy()
-        if forces_key not in atoms.info:
+        if forces_key not in atoms.arrays.keys():
             atoms.arrays[forces_key] = atoms.get_forces()
     ase.io.write(file_name, alist)
 
