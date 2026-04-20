@@ -1225,6 +1225,8 @@ class SSPDSampler(Sampler):
         # suggestion: go over everything in kwargs and just write it in there,
         # implement defaults for each omission
         # see the nested sampling sampler above
+        if "struct" in kwargs.keys():
+            self.data_path = kwargs["struct"]
         script_input = {
             "input_struct_path": Path(self.data_path).name,
             "threshold": kwargs.get("threshold"),
