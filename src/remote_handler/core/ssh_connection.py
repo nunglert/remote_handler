@@ -32,11 +32,13 @@ class ProxyJumpParams:
         hostname: The jump host hostname
         username: Username for jump host authentication
         identityfile: Optional SSH key file for jump host
+        port: SSH port of the jump host (default 22)
     """
 
     hostname: str
     username: str
     identityfile: Optional[str] = None
+    port: int = 22
 
 
 @dataclass
@@ -51,12 +53,14 @@ class SSHConnectionParams:
         hostname: Target host hostname
         username: Username for authentication
         identityfile: Optional SSH key file path
+        port: SSH port of the target host (default 22)
         proxyjump: Optional ProxyJump parameters for jump host connections
     """
 
     hostname: str
     username: str
     identityfile: Optional[str] = None
+    port: int = 22
     proxyjump: Optional[ProxyJumpParams] = None
 
 
@@ -159,6 +163,9 @@ class SSHConfigParser:
                 remote_alias,
             )
 
+        # SSH config ``Port`` (paramiko returns it as a string); default 22.
+        port = int(host_config.get("port", 22))
+
         # Handle ProxyJump recursively
         proxyjump_alias = host_config.get("proxyjump")
         proxyjump = None
@@ -168,12 +175,14 @@ class SSHConfigParser:
                 hostname=jump_config.get("hostname"),
                 username=jump_config.get("user"),
                 identityfile=jump_config.get("identityfile", [None])[0],
+                port=int(jump_config.get("port", 22)),
             )
 
         return SSHConnectionParams(
             hostname=hostname,
             username=username,
             identityfile=identityfile,
+            port=port,
             proxyjump=proxyjump,
         )
 
@@ -236,6 +245,7 @@ class DirectSSHConnection(SSHConnectionStrategy):
 
         ssh_client.connect(
             params.hostname,
+            port=params.port,
             username=params.username,
             key_filename=params.identityfile,
         )
@@ -284,13 +294,14 @@ class ProxyJumpSSHConnection(SSHConnectionStrategy):
 
         self.jump_client.connect(
             jump_params.hostname,
+            port=jump_params.port,
             username=jump_params.username,
             key_filename=jump_params.identityfile,
         )
 
         # Step 2: Create tunnel from jump host to target
         jump_transport = self.jump_client.get_transport()
-        dest_addr = (params.hostname, 22)
+        dest_addr = (params.hostname, params.port)
         local_addr = ("localhost", 0)
 
         channel = jump_transport.open_channel(
@@ -303,6 +314,7 @@ class ProxyJumpSSHConnection(SSHConnectionStrategy):
 
         ssh_client.connect(
             params.hostname,
+            port=params.port,
             username=params.username,
             key_filename=params.identityfile,
             sock=channel,

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from _foundation import foundation_model_available, foundation_model_path
 from ase import Atoms
 from ase.build import bulk
 from ase.constraints import FixAtoms
@@ -68,17 +69,13 @@ def founder_bulk(integration_temp_dir):
 
 @pytest.mark.integration
 @pytest.mark.skipif(
-    not (
-        os.getenv("FOUNDATION_MODEL")
-        and os.path.isfile(os.getenv("FOUNDATION_MODEL"))
-    ),
-    reason="FOUNDATION_MODEL must point to an existing model file",
+    not foundation_model_available(),
+    reason="MACE foundation model asset missing from test/data/assets",
 )
 class TestTorchSimScriptIntegration:
     """Integration tests for torch_sim_sampling.py script execution.
 
-    Requires environment variables:
-        FOUNDATION_MODEL: Path to a MACE model file
+    Uses the MACE model shipped under ``test/data/assets``.
     """
 
     def test_script_npt_ensemble(self, integration_temp_dir, founder_bulk):
@@ -88,7 +85,7 @@ class TestTorchSimScriptIntegration:
             shutil.rmtree(root_dir)
         root_dir.mkdir()
 
-        model = os.getenv("FOUNDATION_MODEL")
+        model = foundation_model_path()
 
         input_file = root_dir / "input_torchsim.json"
         input_data = {
@@ -153,7 +150,7 @@ class TestTorchSimScriptIntegration:
             shutil.rmtree(root_dir)
         root_dir.mkdir()
 
-        model = os.getenv("FOUNDATION_MODEL")
+        model = foundation_model_path()
 
         input_file = root_dir / "input_torchsim.json"
         input_data = {
@@ -210,7 +207,7 @@ class TestTorchSimScriptIntegration:
             shutil.rmtree(root_dir)
         root_dir.mkdir()
 
-        model = os.getenv("FOUNDATION_MODEL")
+        model = foundation_model_path()
 
         input_file = root_dir / "input_torchsim.json"
         input_data = {
@@ -268,7 +265,7 @@ class TestTorchSimScriptIntegration:
             shutil.rmtree(root_dir)
         root_dir.mkdir()
 
-        model = os.getenv("FOUNDATION_MODEL")
+        model = foundation_model_path()
 
         input_file = root_dir / "input_torchsim.json"
         input_data = {
@@ -392,17 +389,13 @@ class TestTorchSimScriptIntegration:
 
 @pytest.mark.integration
 @pytest.mark.skipif(
-    not (
-        os.getenv("FOUNDATION_MODEL")
-        and os.path.isfile(os.getenv("FOUNDATION_MODEL"))
-    ),
-    reason="FOUNDATION_MODEL must point to an existing model file",
+    not foundation_model_available(),
+    reason="MACE foundation model asset missing from test/data/assets",
 )
 class TestTorchSimSamplerIntegration:
     """Integration tests for TorchSimSampler workflow class.
 
-    Requires environment variables:
-        FOUNDATION_MODEL: Path to a MACE model file
+    Uses the MACE model shipped under ``test/data/assets``.
     """
 
     @requires_local_slurm
@@ -424,7 +417,7 @@ class TestTorchSimSamplerIntegration:
             shutil.rmtree(root_dir)
         root_dir.mkdir()
 
-        model = os.getenv("FOUNDATION_MODEL")
+        model = foundation_model_path()
         model_files = [Path(model)]
 
         script_path = (
@@ -491,7 +484,7 @@ class TestTorchSimSamplerIntegration:
             shutil.rmtree(root_dir)
         root_dir.mkdir()
 
-        model = os.getenv("FOUNDATION_MODEL")
+        model = foundation_model_path()
         model_files = [Path(model)]
 
         script_path = (

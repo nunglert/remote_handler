@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from _foundation import foundation_model_available, foundation_model_path
 from ase.build import bulk
 from ase.io import write
 
@@ -48,17 +49,13 @@ def founder_poscar(integration_temp_dir):
 
 @pytest.mark.integration
 @pytest.mark.skipif(
-    not (
-        os.getenv("FOUNDATION_MODEL")
-        and os.path.isfile(os.getenv("FOUNDATION_MODEL"))
-    ),
-    reason="FOUNDATION_MODEL must point to an existing model file",
+    not foundation_model_available(),
+    reason="MACE foundation model asset missing from test/data/assets",
 )
 class TestCmaesSamplingIntegration:
     """Integration tests for full cmaes_sampling.py script execution.
 
-    Requires environment variables:
-        FOUNDATION_MODEL: Path to a MACE model file
+    Uses the MACE model shipped under ``test/data/assets``.
     """
 
     def test_script_energy_only(self, integration_temp_dir, founder_poscar):
@@ -68,7 +65,7 @@ class TestCmaesSamplingIntegration:
             shutil.rmtree(root_dir)
         root_dir.mkdir()
 
-        model = os.getenv("FOUNDATION_MODEL")
+        model = foundation_model_path()
 
         input_file = root_dir / "input.json"
         input_data = {
@@ -117,7 +114,7 @@ class TestCmaesSamplingIntegration:
             shutil.rmtree(root_dir)
         root_dir.mkdir()
 
-        model = os.getenv("FOUNDATION_MODEL")
+        model = foundation_model_path()
         assert os.path.exists(model)
 
         input_file = root_dir / "input.json"
@@ -178,7 +175,7 @@ class TestCmaesSamplingIntegration:
             shutil.rmtree(root_dir)
         root_dir.mkdir()
 
-        model = os.getenv("FOUNDATION_MODEL")
+        model = foundation_model_path()
         model_files = [Path(model)]
 
         # Resolve the actual script file path from the installed package
@@ -249,7 +246,7 @@ class TestCmaesSamplingIntegration:
             shutil.rmtree(root_dir)
         root_dir.mkdir()
 
-        model = os.getenv("FOUNDATION_MODEL")
+        model = foundation_model_path()
         model_files = [Path(model)]
 
         # Resolve the actual script file path from the installed package
@@ -330,7 +327,7 @@ class TestCmaesSamplingIntegration:
             shutil.rmtree(root_dir)
         root_dir.mkdir()
 
-        model = os.getenv("FOUNDATION_MODEL")
+        model = foundation_model_path()
         model_files = [Path(model)]
 
         scripts_dir = Path(input_models_module.__file__).parent

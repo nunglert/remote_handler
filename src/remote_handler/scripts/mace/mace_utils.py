@@ -3,6 +3,7 @@
 import logging
 import pathlib
 import subprocess
+import sys
 from typing import Optional
 
 import ase.io
@@ -187,7 +188,10 @@ def run_training_from_config(
     try:
         subprocess.run(
             [
-                "python",
+                # Same interpreter running this script (works locally and on
+                # the cluster where the env is activated); bare "python" could
+                # resolve to an interpreter without torch.
+                sys.executable,
                 str(train_runner),
                 "--config",
                 str(config_file.resolve()),

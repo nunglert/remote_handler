@@ -51,6 +51,22 @@ mace = [
     "mace-torch==0.3.14",
     "cuequivariance-torch==0.8.1",
 ]
+# MACE fork adding layer-freezing for finetuning (MaceFinetuningTrainer /
+# MACE_FREEZE_TRAIN_RUNNER). It builds the `mace-torch` distribution from git,
+# so it REPLACES mace-torch -- install in its own environment; do not combine
+# with [mace] or [torch_sim] (same package, conflicting sources).
+mace_freeze = [
+    "mace-torch @ git+https://github.com/7radians/mace-freeze.git@mace-freeze",
+]
+# torch_sim with the freeze fork instead of stock mace-torch. Self-contained:
+# its only mace-torch source is the git fork, so there is no conflicting
+# requirement (unlike combining [torch_sim] + [mace_freeze]). Mutually
+# exclusive with [mace]/[torch_sim]/[mace_freeze] -- pick one mace-torch source.
+torch_sim_freeze = [
+    "torch-sim-atomistic==0.5.1",
+    "cuequivariance-torch==0.8.1",
+    "mace-torch @ git+https://github.com/7radians/mace-freeze.git@mace-freeze",
+]
 clinamen = [
     "Clinamen2"
 ]
@@ -82,6 +98,7 @@ markers = [
     "remote: needs a live remote cluster; auto-skips when REMOTE_HANDLER_CONFIG_DIR/remote.json is absent",
     "local: runs against the local filesystem; no cluster needed",
     "integration: end-to-end tests needing external tools/models or a live cluster; deselected by default",
+    "sshlive: real SSH/SFTP round-trip against a throwaway Docker container; auto-skips when Docker is unavailable",
     "heavy: slow tests",
 ]
 

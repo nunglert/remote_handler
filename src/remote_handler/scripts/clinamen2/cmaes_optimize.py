@@ -988,11 +988,18 @@ def dof_to_atoms_from_evo(
         founder = pathlib.Path(override_founder)
 
     if dof_mode == "full-dof":
-        _, transform_dof, _ = prepare_dof_and_pipeline(
+        # Must rebuild the SAME degrees of freedom the evolution used
+        # (run_evolution -> clinamen2's prepare_dof_and_pipeline with
+        # scaled_center/radius), not the local surface-slab wrapper -- otherwise
+        # the reconstruction weights mismatch the optimized DOF.
+        from clinamen2.utils.structure_setup import (
+            prepare_dof_and_pipeline as prep_full,
+        )
+
+        _, transform_dof, _ = prep_full(
             founder,
-            surface_normal_axis=2,
-            cutoff=cutoff,
-            bulk_range=bulk_range,
+            scaled_center=scaled_center,
+            radius=radius,
         )
     elif dof_mode == "defect":
         # assert scaled_center is not None
