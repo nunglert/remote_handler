@@ -419,7 +419,10 @@ class ConfigBasedSSHClientProvider(SSHClientProvider):
         params = self.config_parser.parse_host_config(
             self.remote_alias, self.identityfile
         )
-
+        logger.warning(
+            "params: %s",
+            params,
+        )
         # Create and execute connection strategy
         self.connection_strategy = SSHConnectionFactory.create_strategy(params)
         ssh_client = self.connection_strategy.connect(params)

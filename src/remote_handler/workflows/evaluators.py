@@ -41,6 +41,8 @@ class VASPEvaluator(GroundTruthEvaluator):
         stub: If True, creates mock outputs without running VASP
         loop_time: Interval (seconds) to poll for job completion
         required_fraction: Fraction of samples that must succeed
+        n_processors: Number of CPU cores to run each VASP job on
+        slurm_header_add: Additional text to add to SLURM header
     """
 
     def __init__(
@@ -56,6 +58,7 @@ class VASPEvaluator(GroundTruthEvaluator):
         loop_time: float = 30,
         required_fraction: float = 0.5,
         n_processors: int = 8,
+        slurm_header_add: str = "#SBATCH --time=0-02:00:00\nmodule purge\nmodule load vasp/6.4.2_intel\nsource /opt/intel/oneapi/setvars.sh --force\nexport VASP_PP_PATH=/home/nunglert/cellar/vasp/paw",
     ):
         super().__init__()
         self.singlepoint_script = singlepoint_script
@@ -71,6 +74,7 @@ class VASPEvaluator(GroundTruthEvaluator):
         self.remote_savepath = (
             Path(remote_savepath) if remote_savepath else None
         )
+        self.slurm_header_add = slurm_header_add
 
     def update(
         self, calcdir: Path, evaluator_input: Path | list[Path], **kwargs
@@ -122,6 +126,7 @@ class VASPEvaluator(GroundTruthEvaluator):
                 launcher=self.launcher,
                 n_processors=self.n_processors,
                 incar_kwargs=self.incar_kwargs,
+                slurm_header_add=self.slurm_header_add,
             )
 
     def _create_stub_outputs(self, num_configs: int = 5) -> list[Atoms]:
@@ -200,15 +205,14 @@ class VASPEvaluator(GroundTruthEvaluator):
             for calcpath in grep(str(self.results_dir / "calcdirs"), ""):
                 try:
                     at = ase.io.read(Path(calcpath) / "vasprun.xml")
+                    # Add REF labels to results
+                    at.info["REF_energy"] = at.get_potential_energy()
+                    at.arrays["REF_forces"] = at.get_forces()
+                    at.calc = None
                     all_ats.append(at)
                 except Exception as e:
                     logger.info(f"VASP run failed for {calcpath=}: {e}")
 
-            # Add REF labels to results
-            for s in all_ats:
-                s.info["REF_energy"] = s.get_potential_energy()
-                s.arrays["REF_forces"] = s.get_forces()
-                s.calc = None
 
         # Write results to file
         os.makedirs(self.results_dir, exist_ok=True)

@@ -238,6 +238,9 @@ class SlurmHandlerBase(ABC):
         if self.conda_source.strip().endswith("miniconda3"):
             miniconda_home = Path(self.conda_source)
             self.conda_source = Path(self.conda_source) / "bin/activate"
+        elif "micromamba" in self.conda_source:
+            miniconda_home = self.conda_source
+            self.conda_source = 'eval "$(micromamba shell hook --shell bash)"'  # run `eval "$(micromamba shell hook --shell bash)"` instead in the config, no path should be needed
         elif "bin/activate" in self.conda_source:
             miniconda_home = Path(self.conda_source).parents[1]
             self.conda_source = Path(self.conda_source)
@@ -247,19 +250,27 @@ class SlurmHandlerBase(ABC):
                 "Expected format: /home/user/miniconda3/ or /path/to/bin/activate\n"
                 "Note: Only miniconda3 is currently supported"
             )
-
-        if not self.remote_fs.exists(self.conda_source):
-            raise FileSystemError(
-                f"Conda activation script not found at: {self.conda_source}. "
-                "We currently do not support '~', write the full path!\n"
-                f"Remote machine: {self.cluster_config.remote_machine}"
+        if "micromamba" not in str(self.conda_source):
+            if not self.remote_fs.exists(self.conda_source):
+                raise FileSystemError(
+                    "Conda activation script not found at: "
+                    f"{self.conda_source}. We currently do not "
+                    "support '~', write the full path!\n"
+                    f"Remote machine: {self.cluster_config.remote_machine}"
+                )
+            conda_env_path = miniconda_home / "envs" / self.conda_env
+            dot_conda_env_path = (
+                Path(os.path.expanduser("~")) / ".conda/envs" / self.conda_env
             )
-        if not self.remote_fs.exists(miniconda_home / "envs" / self.conda_env) and not self.remote_fs.exists(os.path.join(os.path.expanduser('~'), ".conda/envs", self.conda_env)):
-            raise ConfigurationError(
-                f"Conda environment '{self.conda_env}' not found on "
-                f"{self.cluster_config.remote_machine}\n"
-                f"Expected path: {miniconda_home / 'envs' / self.conda_env} or {os.path.join(os.path.expanduser('~'), '.conda/envs', self.conda_env)}"
-            )
+            if not self.remote_fs.exists(
+                conda_env_path
+            ) and not self.remote_fs.exists(dot_conda_env_path):
+                raise ConfigurationError(
+                    f"Conda environment '{self.conda_env}' not found on "
+                    f"{self.cluster_config.remote_machine}\n"
+                    f"Expected path: {conda_env_path} or "
+                    f"{dot_conda_env_path}"
+                )
 
     @abstractmethod
     def submit(self):

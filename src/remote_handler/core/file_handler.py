@@ -27,9 +27,19 @@ from remote_handler.core.ssh_connection import (
     SSHClientProvider,
 )
 from remote_handler.exceptions import FileSystemError, RemoteConnectionError
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
 
 class FileSystemHandlerBase(ABC):
     """
@@ -322,7 +332,7 @@ class LocalFileSystem(FileSystemHandlerBase):
         """
         filepath = str(filepath)
         with open(filepath, "w") as f:
-            json.dump(param_dict, f, indent=2)
+            json.dump(param_dict, f, indent=2, cls=NumpyEncoder)
 
     def read_ase(self, filepath: os.PathLike, **kwargs) -> list[Atoms]:
         """
@@ -649,7 +659,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
         """
         filepath = str(filepath)
         with self.sftp_client.file(filepath, "w") as f:
-            f.write(json.dumps(param_dict, indent=2))
+            f.write(json.dumps(param_dict, indent=2, cls=NumpyEncoder))
 
     @reconnect_on_failure
     def read_ase(self, filepath: os.PathLike, **kwargs) -> list[Atoms]:
