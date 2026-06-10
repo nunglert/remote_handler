@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 from _foundation import foundation_model_path
 from _mace import mace_available, mace_freeze_available, mace_run_train_script
+from _markers import requires_local_slurm
 from ase import Atoms
 
 from remote_handler.core.cluster_handler import ClusterConfig
@@ -20,13 +21,6 @@ from remote_handler.exceptions import ScriptInputError
 from remote_handler.workflows.trainers import (
     MaceFinetuningTrainer,
     MaceModelTrainer,
-)
-
-# Trainer-workflow tests submit through SlurmJobHandler against the local
-# machine; skip (rather than error with DependencyError) when SLURM is absent.
-requires_local_slurm = pytest.mark.skipif(
-    shutil.which("sbatch") is None,
-    reason="SLURM (sbatch) not available on this machine",
 )
 
 

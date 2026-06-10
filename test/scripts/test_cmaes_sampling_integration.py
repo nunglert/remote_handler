@@ -10,19 +10,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 from _foundation import foundation_model_available, foundation_model_path
+from _markers import requires_local_slurm
 from ase.build import bulk
 from ase.io import write
 
 import remote_handler.scripts.input_models as input_models_module
 from remote_handler.scripts.input_models import CmaesSamplingInput
 from remote_handler.workflows.samplers import BatchCMAESSampler, CMAESSampler
-
-# Sampler-interface tests submit through SlurmJobHandler against the local
-# machine; skip (rather than error with DependencyError) when SLURM is absent.
-requires_local_slurm = pytest.mark.skipif(
-    shutil.which("sbatch") is None,
-    reason="SLURM (sbatch) not available on this machine",
-)
 
 
 @pytest.fixture(scope="session")

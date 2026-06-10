@@ -101,7 +101,7 @@ def scripts_dir():
 # -------------------------------------------------------------------------
 
 
-@pytest.mark.integration
+@pytest.mark.remote
 @requires_lugus_template
 class TestVASPEvaluatorIntegration:
     """Integration tests for VASPEvaluator with actual SLURM submission.

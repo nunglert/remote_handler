@@ -89,16 +89,22 @@ remote_handler = ["templates/*.j2"]
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
-# Integration tests need external tools/models and live clusters; opt in with
-# `pytest -m integration`. Remote-tier tests are not deselected here -- they
-# skip themselves (with a reason) when no cluster config is available.
+# Test tiers, grouped by what the environment must provide:
+#   (unmarked) unit  -- pure logic, no special deps; always run.
+#   integration      -- needs the ML stack (mace/torch_sim/clinamen); opt in.
+#   slurm            -- needs a working local sbatch; opt in (also integration).
+#   sshlive          -- needs Docker (dummy remote); opt in.
+#   remote           -- needs a configured live cluster; runs but self-skips.
+# Default run = unit only: integration and sshlive are deselected here; the
+# remote tier is left in so it reports an informative skip when unconfigured.
 # -ra prints a summary of skip/xfail/error reasons so nothing is hidden.
-addopts = "-m 'not integration' -ra"
+addopts = "-m 'not integration and not sshlive' -ra"
 markers = [
-    "remote: needs a live remote cluster; auto-skips when REMOTE_HANDLER_CONFIG_DIR/remote.json is absent",
-    "local: runs against the local filesystem; no cluster needed",
-    "integration: end-to-end tests needing external tools/models or a live cluster; deselected by default",
-    "sshlive: real SSH/SFTP round-trip against a throwaway Docker container; auto-skips when Docker is unavailable",
+    "remote: needs a configured live cluster; auto-skips when REMOTE_HANDLER_CONFIG_DIR/remote.json is absent",
+    "local: file-handler variant running against the local filesystem; no cluster needed",
+    "integration: needs the ML stack (mace/torch_sim/clinamen) installed; deselected by default",
+    "slurm: needs a working local sbatch (job-submission orchestration); auto-skips when sbatch is absent",
+    "sshlive: real SSH/SFTP round-trip against a throwaway Docker container; auto-skips when Docker is unavailable; deselected by default",
     "heavy: slow tests",
 ]
 

@@ -23,7 +23,7 @@ from ase import Atoms
 from remote_handler.core.file_handler import RemoteFileSystem
 from remote_handler.core.ssh_connection import ConfigBasedSSHClientProvider
 
-pytestmark = [pytest.mark.integration, pytest.mark.sshlive]
+pytestmark = [pytest.mark.sshlive]
 
 SSH_IMAGE = "linuxserver/openssh-server:latest"
 SSH_USER = "tester"
