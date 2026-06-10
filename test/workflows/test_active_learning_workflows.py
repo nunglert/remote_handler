@@ -226,8 +226,9 @@ class TestNestedSamplingALWorkflow:
 
         # Initialize workflow components
         sampler = NSTrajectorySampler(
-            ns_exe=ns_exe,
+            sampling_script=ns_exe,
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             initial_input_file=ns_input,
             n_gpu_parallel=4,
             sample_size=100,
@@ -316,8 +317,9 @@ class TestNestedSamplingALWorkflow:
 
         # Initialize workflow components
         sampler = NSTrajectorySampler(
-            ns_exe=ns_exe,
+            sampling_script=ns_exe,
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             initial_input_file=ns_input,
             n_gpu_parallel=4,
             sample_size=80,

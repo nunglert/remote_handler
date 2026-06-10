@@ -216,6 +216,20 @@ class DirectSSHConnection(SSHConnectionStrategy):
 
         Returns:
             Connected SSH client
+
+        Note:
+            ``paramiko.SSHClient.connect`` defaults to ``allow_agent=True``,
+            so the running ssh-agent is consulted before the key files in
+            ``params.identityfile``. paramiko 3.5.1 crashes with
+            ``AttributeError: public_blob`` when the agent offers an OpenSSH
+            *certificate* (e.g. one loaded by ``step ssh login``) rather than
+            a plain key -- an upstream bug unfixed as of the pinned version:
+            https://github.com/paramiko/paramiko/issues/2462
+            https://github.com/paramiko/paramiko/issues/2437
+            Workaround until upstream ships a fix: clear the cert from the
+            agent before connecting (``ssh-add -D``) so paramiko falls back to
+            the plain key files. Hosts here accept plain-key auth, so this is
+            sufficient; it is *not* a bug in this code.
         """
         ssh_client = paramiko.SSHClient()
         ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())

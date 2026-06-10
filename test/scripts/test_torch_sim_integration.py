@@ -18,6 +18,13 @@ import remote_handler.scripts.input_models as input_models_module
 from remote_handler.scripts.input_models import TorchSimSamplingInput
 from remote_handler.workflows.samplers import TorchSimSampler
 
+# Sampler-interface tests submit through SlurmJobHandler against the local
+# machine; skip (rather than error with DependencyError) when SLURM is absent.
+requires_local_slurm = pytest.mark.skipif(
+    shutil.which("sbatch") is None,
+    reason="SLURM (sbatch) not available on this machine",
+)
+
 
 @pytest.fixture(scope="session")
 def integration_temp_dir(data_dir):
@@ -61,8 +68,11 @@ def founder_bulk(integration_temp_dir):
 
 @pytest.mark.integration
 @pytest.mark.skipif(
-    not os.getenv("FOUNDATION_MODEL"),
-    reason="FOUNDATION_MODEL environment variable must be set",
+    not (
+        os.getenv("FOUNDATION_MODEL")
+        and os.path.isfile(os.getenv("FOUNDATION_MODEL"))
+    ),
+    reason="FOUNDATION_MODEL must point to an existing model file",
 )
 class TestTorchSimScriptIntegration:
     """Integration tests for torch_sim_sampling.py script execution.
@@ -382,8 +392,11 @@ class TestTorchSimScriptIntegration:
 
 @pytest.mark.integration
 @pytest.mark.skipif(
-    not os.getenv("FOUNDATION_MODEL"),
-    reason="FOUNDATION_MODEL environment variable must be set",
+    not (
+        os.getenv("FOUNDATION_MODEL")
+        and os.path.isfile(os.getenv("FOUNDATION_MODEL"))
+    ),
+    reason="FOUNDATION_MODEL must point to an existing model file",
 )
 class TestTorchSimSamplerIntegration:
     """Integration tests for TorchSimSampler workflow class.
@@ -392,6 +405,7 @@ class TestTorchSimSamplerIntegration:
         FOUNDATION_MODEL: Path to a MACE model file
     """
 
+    @requires_local_slurm
     def test_sampler_npt_interface(
         self,
         integration_temp_dir,
@@ -463,6 +477,7 @@ class TestTorchSimSamplerIntegration:
         sampled = read(output_path, index=":")
         assert len(sampled) == 2
 
+    @requires_local_slurm
     def test_sampler_nvt_interface(
         self,
         integration_temp_dir,
@@ -579,6 +594,7 @@ class TestTorchSimSamplerIntegration:
             assert atoms.info["ensemble"] == "npt"
             assert atoms.info["temperature"] == temperatures[i]
 
+    @requires_local_slurm
     def test_sampler_foundation_model(
         self,
         integration_temp_dir,

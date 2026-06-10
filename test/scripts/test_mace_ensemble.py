@@ -3,7 +3,12 @@
 import os
 
 import pytest
-import torch
+
+# These tests need the optional torch / torch_sim extras. Skip the whole module
+# (rather than erroring at collection) when they are not installed.
+torch = pytest.importorskip("torch")
+pytest.importorskip("torch_sim")
+
 from ase.build import bulk
 from torch_sim.models.mace import MaceModel
 

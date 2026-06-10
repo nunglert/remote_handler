@@ -16,6 +16,13 @@ import remote_handler.scripts.input_models as input_models_module
 from remote_handler.scripts.input_models import CmaesSamplingInput
 from remote_handler.workflows.samplers import BatchCMAESSampler, CMAESSampler
 
+# Sampler-interface tests submit through SlurmJobHandler against the local
+# machine; skip (rather than error with DependencyError) when SLURM is absent.
+requires_local_slurm = pytest.mark.skipif(
+    shutil.which("sbatch") is None,
+    reason="SLURM (sbatch) not available on this machine",
+)
+
 
 @pytest.fixture(scope="session")
 def integration_temp_dir(data_dir):
@@ -41,8 +48,11 @@ def founder_poscar(integration_temp_dir):
 
 @pytest.mark.integration
 @pytest.mark.skipif(
-    not os.getenv("FOUNDATION_MODEL"),
-    reason="FOUNDATION_MODEL environment variable must be set",
+    not (
+        os.getenv("FOUNDATION_MODEL")
+        and os.path.isfile(os.getenv("FOUNDATION_MODEL"))
+    ),
+    reason="FOUNDATION_MODEL must point to an existing model file",
 )
 class TestCmaesSamplingIntegration:
     """Integration tests for full cmaes_sampling.py script execution.
@@ -148,6 +158,7 @@ class TestCmaesSamplingIntegration:
         evo_dir = root_dir / "test_loss_threshold"
         assert evo_dir.exists(), f"Evolution directory not found: {evo_dir}"
 
+    @requires_local_slurm
     def test_sampler_interface(
         self,
         integration_temp_dir,
@@ -218,6 +229,7 @@ class TestCmaesSamplingIntegration:
         evo_dir = sampler.results_dir / "test_sampler_iface"
         assert evo_dir.exists(), f"Evolution directory not found: {evo_dir}"
 
+    @requires_local_slurm
     def test_sample_multiple_interface(
         self,
         integration_temp_dir,
@@ -299,6 +311,7 @@ class TestCmaesSamplingIntegration:
                 evo_dir.exists()
             ), f"Evolution directory not found: {evo_dir}"
 
+    @requires_local_slurm
     def test_batch_sampler_interface(
         self,
         integration_temp_dir,

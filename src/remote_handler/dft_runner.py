@@ -3,7 +3,6 @@ import os
 from abc import ABC, abstractmethod
 from copy import deepcopy
 from pathlib import Path
-from re import T
 from typing import Any, Optional, Union
 
 from remote_handler.atoms_handler import RemoteAtomsHandler

@@ -7,7 +7,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Union
-from xml.etree.ElementPath import prepare_star
 
 from remote_handler.core import (
     cluster_handler,

@@ -2,39 +2,95 @@ stages:
   - test
   - deploy
 
+# ---------------------------------------------------------------------------
+# Install + test chain
+#
+# Each job runs inside a clean official `python` container and performs a
+# from-scratch, NON-editable `pip install` of the package. That install IS the
+# installation-pipeline check: it builds and installs the wheel exactly as an
+# end user would, so packaging problems (missing data files, bad metadata,
+# unresolvable deps) fail the pipeline. The suite then runs against the
+# installed package.
+#
+# No custom image is built, so this needs no privileged mode and runs on any
+# docker/kubernetes runner. (A Dockerfile is kept in the repo for local dev:
+# `docker build --target dev -t remote_handler . && docker run --rm remote_handler`.)
+#
+# No `tags:` are set, so jobs run on any runner configured to pick up untagged
+# jobs. If you later pin to a specific runner, add its tag to each job.
+# ---------------------------------------------------------------------------
+
 variables:
-  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
-cache:
-  paths:
-    - .cache/pip
+# Control which pipelines are created at all. This runs CI on every branch
+# push AND on merge requests, while avoiding the classic duplicate pipeline
+# (a branch pipeline + an MR pipeline for the same commit): when an MR is open
+# for the branch, only the MR pipeline runs.
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
+    - if: '$CI_COMMIT_BRANCH'
 
-# Run tests
+# Base + dev tooling, on the requires-python floor (3.10) and latest (3.13).
 test:
   stage: test
-  image: python:3.10
-  tags:
-    - shared
+  image: "python:$PYVER-slim"
+  parallel:
+    matrix:
+      - PYVER: ["3.10", "3.13"]
+  before_script:
+    - python -V
+    - pip install --upgrade pip
+    # Non-editable install -> exercises the real build + packaging pipeline.
+    - pip install ".[dev]"
+    - python -c "import remote_handler; print('install OK:', remote_handler.__file__)"
+  script:
+    - >-
+      pytest --junitxml=report.xml
+      --cov=remote_handler --cov-report=term --cov-report=xml:coverage.xml
+  coverage: '/^TOTAL.+?(\d+\%)$/'
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+# Heavy: attempt every optional extra. Allowed to fail so it never blocks the
+# pipeline (some extras pull torch/CUDA wheels that may not install on CPU CI).
+# `python:3.13` (not -slim) ships git + compilers for any source builds.
+test:full:
+  stage: test
+  image: python:3.13
+  allow_failure: true
   before_script:
     - pip install --upgrade pip
-    - pip install -e ".[dev]"
+    - pip install ".[dev,docs,mace,torch_sim,clinamen,quests]"
+    - python -c "import remote_handler; print('full install OK')"
   script:
-    - pytest -v --tb=short
-  coverage: '/(?i)total.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
+    # With the extras present, the quests / torch_sim / mace unit tests
+    # un-skip. Integration tests still need a live cluster, so stay deselected.
+    - pytest --junitxml=report.xml -ra
   artifacts:
-    reports:
-      junit: test-results.xml
     when: always
-  only:
-    - main
-    - merge_requests
+    reports:
+      junit: report.xml
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - when: manual
+      allow_failure: true
 
-# Build and deploy documentation to GitLab Pages
+# docs -> GitLab Pages
 pages:
   stage: deploy
   image: python:3.10
-  tags:
-    - shared
   before_script:
     - pip install --upgrade pip
     # Install package with all dependencies (needed for autodoc to import modules)
@@ -55,6 +111,6 @@ pages:
     paths:
       - public
     expire_in: 1 week
-  only:
-    - main  # Only deploy docs from main branch
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
   dependencies: []

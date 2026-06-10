@@ -13,3 +13,6 @@ __pycache__
 # Sphinx documentation
 docs/build/
 docs/source/_autosummary/
+
+CLAUDE.md
+.claude

@@ -10,11 +10,31 @@ import numpy as np
 import pytest
 from ase import Atoms
 
+from remote_handler.config import get_config
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import RemoteFileSystem
 from remote_handler.dft_runner import VASPHandler
 from remote_handler.scripts.input_models import DftSinglepointInput
 from remote_handler.workflows.evaluators import VASPEvaluator
+
+
+def _slurm_template_available(name):
+    """True if SLURM template ``name`` is on the configured search path."""
+    try:
+        dirs = get_config().get_template_dirs()
+    except Exception:
+        return False
+    return any((Path(d) / name).is_file() for d in dirs)
+
+
+# This test needs a live lugus cluster *and* its bundled lugus.sh.j2 template
+# (supplied via REMOTE_HANDLER_SLURM_TEMPLATES). Skip -- rather than error with
+# TemplateNotFound -- when the machine isn't configured for it.
+requires_lugus_template = pytest.mark.skipif(
+    not _slurm_template_available("lugus.sh.j2"),
+    reason="lugus.sh.j2 SLURM template not on search path "
+    "(set REMOTE_HANDLER_SLURM_TEMPLATES to the dir containing it)",
+)
 
 # -------------------------------------------------------------------------
 # Fixtures
@@ -82,6 +102,7 @@ def scripts_dir():
 
 
 @pytest.mark.integration
+@requires_lugus_template
 class TestVASPEvaluatorIntegration:
     """Integration tests for VASPEvaluator with actual SLURM submission.
 

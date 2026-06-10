@@ -59,6 +59,7 @@ def write_json(A, B, filename):
         json.dump(content, f)
 
 
+@pytest.mark.integration
 def test_SingleScriptTask_simple(data_dir, filesystem, cluster_config):
     """This test runs a SingleScriptTask. It generates the required python
     script and a corresponding input file on-the-fly.
@@ -74,6 +75,13 @@ def test_SingleScriptTask_simple(data_dir, filesystem, cluster_config):
     collected. This allows us to comfortably check the output files in case
     something crashed.
     """
+    # SLURM submission against the local machine needs sbatch; skip
+    # (rather than error with DependencyError) when it is absent.
+    if isinstance(filesystem, file_handler.LocalFileSystem) and (
+        shutil.which("sbatch") is None
+    ):
+        pytest.skip("SLURM (sbatch) not available on this machine")
+
     # os.environ["REMOTE_HANDLER_LOCAL"] = "datalab"
     relative_path = Path("SingleScriptTask") / "simple"
     assetpath = data_dir / "assets" / relative_path
@@ -117,6 +125,7 @@ def test_SingleScriptTask_simple(data_dir, filesystem, cluster_config):
         )
 
 
+@pytest.mark.integration
 def test_ArrayScriptTask_simple(data_dir, filesystem, cluster_config):
     """This test runs a ArrayScriptTask. It generates the required python
     script on-the-fly and sets up the directories on the remote machine with
@@ -133,6 +142,13 @@ def test_ArrayScriptTask_simple(data_dir, filesystem, cluster_config):
     collected. This allows us to comfortably check the output files in case
     something crashed.
     """
+    # SLURM submission against the local machine needs sbatch; skip
+    # (rather than error with DependencyError) when it is absent.
+    if isinstance(filesystem, file_handler.LocalFileSystem) and (
+        shutil.which("sbatch") is None
+    ):
+        pytest.skip("SLURM (sbatch) not available on this machine")
+
     # os.environ["REMOTE_HANDLER_LOCAL"] = "datalab"
     relative_path = Path("ArrayScriptTask") / "simple"
     assetpath = data_dir / "assets" / relative_path

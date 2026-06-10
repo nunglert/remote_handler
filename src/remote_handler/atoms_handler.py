@@ -8,7 +8,6 @@ from abc import ABC, abstractmethod
 from copy import deepcopy
 from itertools import groupby
 from pathlib import Path
-from re import T
 from typing import Any, Optional, Union
 
 import ase.db
