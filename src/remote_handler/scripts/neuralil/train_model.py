@@ -1,7 +1,7 @@
 import os
 from typing import Optional
 
-from jaxnest.mcmc import KeyArray
+from remote_handler.scripts.neuralil._support import KeyArray
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
@@ -25,8 +25,6 @@ import tqdm
 import tqdm.auto
 from ase.geometry import minkowski_reduce, wrap_positions
 from jax import tree_util
-from jaxnest import structure_utils, utils
-from jaxnest.backends.neuralil import load_neuralil
 from neuralil.bessel_descriptors import (
     PowerSpectrumGenerator,
     get_max_number_of_neighbors,
@@ -42,7 +40,17 @@ from neuralil.plain_ensembles.model import (
     PlainEnsemble,
     PlainEnsemblewithMorse,
 )
-from neuralil.plain_ensembles.training import *
+from neuralil.plain_ensembles.training import (
+    create_training_epoch,
+    create_training_step,
+    create_validation_step,
+    emae_validation_statistic,
+    ermse_validation_statistic,
+    fmae_validation_statistic,
+    frmse_validation_statistic,
+    pack_params,
+    unpack_params,
+)
 from neuralil.training import (
     create_elogcosh_validation_statistic,
     create_flogcosh_validation_statistic,
@@ -50,7 +58,13 @@ from neuralil.training import (
     create_one_cycle_minimizer,
     create_velo_minimizer,
 )
-from neuralil.utilities import *
+from neuralil.utilities import create_array_shuffler, draw_urandom_int32
+
+from remote_handler.scripts.neuralil._support import (
+    batching,
+    load_neuralil,
+    structure_utils,
+)
 
 
 def transform_energy_forces(energy, forces, supercell_diag):
@@ -534,7 +548,7 @@ class DataProcessor:
 
 
 def compute_data(n_batch, batch_func, data):
-    res = utils.evaluate_batch_func_pytree_args_remainder(
+    res = batching.evaluate_batch_func_pytree_args_remainder(
         n_batch, batch_func, data.positions, data.types, data.cells
     )
     return res
@@ -621,13 +635,16 @@ class ModelSetup:
         self.n_ensemble = n_ensemble
         self.r_cut = data_processor.r_cut
         self.data_processor = data_processor
+        # The jaxrens neuralil fork takes max_neighbors at call time (in the
+        # energy/force methods), so keep it handy for the apply/init calls.
+        self.max_neighbors = data_processor.max_neighbors
+        max_neighbors = self.max_neighbors
 
         # Set up the descriptor generator and model
         descriptor_generator = PowerSpectrumGenerator(
             n_max,
             data_processor.r_cut,
             data_processor.n_types,
-            data_processor.max_neighbors,
             data_processor.supercell_diag,
         )
         # Set up the core model, individual model, and ensemble
@@ -663,6 +680,7 @@ class ModelSetup:
                 positions,
                 types,
                 cell,
+                max_neighbors,
                 method=individual_model.calc_potential_energy,
             )
 
@@ -683,6 +701,7 @@ class ModelSetup:
             self.data_processor.train.positions[0],
             self.data_processor.train.types[0],
             self.data_processor.train.cells[0],
+            self.max_neighbors,
             method=self.dynamics_model.calc_forces,
         )
 
@@ -696,7 +715,7 @@ class ModelSetup:
             tuple: JIT-compiled energy and forces evaluators.
         """
         calc_energy, calc_forces = load_neuralil.evaluators_from_model(
-            self.dynamics_model, self.model_params
+            self.dynamics_model, self.model_params, self.max_neighbors
         )
         if batch:
             return jax.jit(jax.vmap(calc_energy)), jax.jit(
@@ -719,7 +738,7 @@ class ModelSetup:
         updated_params = []
         # For each model, compute the predicted energies and adjust the offset
         for p in individual_params:
-            energies = utils.evaluate_batch_func_pytree_args_remainder(
+            energies = batching.evaluate_batch_func_pytree_args_remainder(
                 n_batch,
                 lambda pp, tt, cc: self.vmapped_individual_energy_calculator(
                     p, pp, tt, cc
@@ -779,7 +798,7 @@ def get_high_energy_weight(e_obs_per_atom, thresh):
     return w
 
 
-def create_gradient_evaluator(model, calc_loss_contribution):
+def create_gradient_evaluator(model, calc_loss_contribution, max_neighbors):
     def gradient_evaluator(
         model_params,
         positions_batch,
@@ -798,6 +817,7 @@ def create_gradient_evaluator(model, calc_loss_contribution):
                     positions,
                     types,
                     cell,
+                    max_neighbors,
                     method=model.calc_potential_energy_and_forces,
                 )
                 pred_forces = jnp.where(
@@ -1013,6 +1033,7 @@ class Training:
             self.model_setup.dynamics_model,
             optimizer,
             self.calc_loss_contribution,
+            self.data_processor.max_neighbors,
         )
         # Create the training epoch function
         self.training_epoch = create_training_epoch(
@@ -1035,12 +1056,15 @@ class Training:
             self.data_processor.val.energies,
             self.data_processor.val.forces,
             self.n_eval_batch,
+            self.data_processor.max_neighbors,
         )
 
     def debug_nans(self):
         gradient_evaluator = jax.jit(
             create_gradient_evaluator(
-                self.model_setup.dynamics_model, self.calc_loss_contribution
+                self.model_setup.dynamics_model,
+                self.calc_loss_contribution,
+                self.data_processor.max_neighbors,
             )
         )
 

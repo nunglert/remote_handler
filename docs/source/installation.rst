@@ -28,6 +28,14 @@ For development with testing and documentation:
 Configuration
 -------------
 
+.. tip::
+
+   The quickest way to set this up is the interactive CLI:
+   ``remote_handler configure cluster`` generates a valid cluster config and
+   ``remote_handler configure`` persists global settings so the environment
+   variables below become optional. See :doc:`cli`. The sections below
+   describe the underlying files and variables it manages.
+
 Cluster Configuration Files
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

@@ -73,6 +73,16 @@ clinamen = [
 quests = [
     "quests==2025.9.29"
 ]
+# NeuralIL force-field training (remote-side payload
+# `remote_handler.scripts.neuralil.train_model`, run by `NeuralilILTrainer`).
+# This payload no longer depends on `jaxnest` -- the small closure it used is
+# vendored under `scripts/neuralil/_support/`. The NeuralIL library is pulled
+# from the group's git fork (not on PyPI); it brings in jax/flax transitively.
+neuralil = [
+    "neuralil @ git+https://github.com/nunglert/neuralil-jaxrens.git@jaxrens",
+    "pandas",
+    "tqdm",
+]
 
 [project.scripts]
 remote_handler = "remote_handler.cli:main"
