@@ -33,12 +33,15 @@ from remote_handler.exceptions import ConfigurationError
 
 
 @pytest.fixture(autouse=True, scope="function")
-def reset_global_config():
-    """Ensure clean config state for each test.
+def reset_global_config(monkeypatch, tmp_path):
+    """Ensure clean, hermetic config state for each test.
 
-    Resets the global configuration singleton after each test to prevent
-    state leakage between tests.
+    Isolates the persistent-config location to a temp dir so tests never read
+    a developer's real ``~/.config/remote_handler``, and resets the global
+    configuration singleton before and after each test.
     """
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    reset_config()
     yield
     reset_config()
 

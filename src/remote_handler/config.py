@@ -25,6 +25,23 @@ from remote_handler.exceptions import ConfigurationError
 logger = logging.getLogger(__name__)
 
 
+def get_persistent_config_dir() -> Path:
+    """Fixed XDG location of the persistent global config directory.
+
+    ``$XDG_CONFIG_HOME/remote_handler`` if set, else
+    ``~/.config/remote_handler``. Read at call time so it honours a
+    monkeypatched environment in tests.
+    """
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg).expanduser() if xdg else Path.home() / ".config"
+    return base / "remote_handler"
+
+
+def get_persistent_config_file() -> Path:
+    """Path to the persistent global config JSON (may not exist)."""
+    return get_persistent_config_dir() / "config.json"
+
+
 @dataclass
 class RemoteHandlerConfig:
     """Centralized configuration for remote_handler.
@@ -339,6 +356,38 @@ class RemoteHandlerConfig:
             "default_conda_source": self.default_conda_source,
         }
 
+    @classmethod
+    def resolve(cls) -> "RemoteHandlerConfig":
+        """Resolve configuration with full precedence.
+
+        Precedence (highest first): environment variables > persistent
+        config file (fixed XDG location) > built-in defaults. ``config_dir``
+        defaults to the persistent config directory when neither the file nor
+        the environment set it, so per-cluster JSONs live next to
+        ``config.json`` with no prior setup.
+
+        Returns:
+            Merged RemoteHandlerConfig.
+        """
+        # 1. Persistent file (if any) provides the base, else defaults.
+        pfile = get_persistent_config_file()
+        base = cls.from_file(pfile) if pfile.exists() else cls()
+
+        # 2. Environment overlays the file (env wins). from_env only sets the
+        #    directories when the variables are actually present.
+        env = cls.from_env()
+        if env.config_dir is not None:
+            base.config_dir = env.config_dir
+        if env.slurm_templates_dir is not None:
+            base.slurm_templates_dir = env.slurm_templates_dir
+
+        # 3. Default config_dir to the persistent dir so cluster JSONs have a
+        #    home even before anything is configured.
+        if base.config_dir is None:
+            base.config_dir = get_persistent_config_dir()
+
+        return base
+
     def __repr__(self) -> str:
         """String representation of configuration."""
         return (
@@ -358,7 +407,8 @@ _config: Optional[RemoteHandlerConfig] = None
 def get_config() -> RemoteHandlerConfig:
     """Get the global configuration instance.
 
-    Lazily initializes configuration from environment variables on first access.
+    Lazily resolves configuration on first access with precedence
+    environment > persistent config file > built-in defaults.
 
     Returns:
         Global RemoteHandlerConfig instance
@@ -369,8 +419,8 @@ def get_config() -> RemoteHandlerConfig:
     """
     global _config
     if _config is None:
-        _config = RemoteHandlerConfig.from_env()
-        logger.debug("Initialized configuration from environment")
+        _config = RemoteHandlerConfig.resolve()
+        logger.debug("Initialized configuration (env + persistent file)")
     return _config
 
 

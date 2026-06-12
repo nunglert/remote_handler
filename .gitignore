@@ -3,6 +3,7 @@ experiments*
 *.egg-info
 .vscode*
 test.log
+input_nnff.json
 docs/_build/
 test/data/temp
 pyrightconfig.json

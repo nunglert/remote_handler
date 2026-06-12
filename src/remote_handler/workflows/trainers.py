@@ -4,13 +4,13 @@ Trainers for Active Learning Workflows.
 Trainers fit machine learning models to evaluated configurations.
 """
 
+import json
 import logging
 import os
 import pickle
+from copy import deepcopy
 from pathlib import Path
 from typing import Optional
-from copy import deepcopy
-import json
 
 import numpy as np
 
@@ -445,7 +445,7 @@ class NeuralilILTrainer(ModelTrainer):
         stub: If True, creates mock model outputs without training
         loop_time: Interval (seconds) to poll for job completion
     """
-    
+
     default_training_kwargs: dict = {
         "r_cut": 4.0,
         "training_fraction": 0.75,
@@ -470,7 +470,7 @@ class NeuralilILTrainer(ModelTrainer):
             max_learning_rate=1e-2,
             min_learning_rate=1e-3,
             fin_learning_rate=1e-5,
-        )
+        ),
     }
 
     def __init__(
@@ -499,12 +499,15 @@ class NeuralilILTrainer(ModelTrainer):
         self.stub = stub
         self.training_kwargs["stub"] = stub
 
-        self.input_file = Path(os.getcwd()) / "input_nnff.json"  # Local path for input file
-        with open(self.input_file, "w") as f:
-            json.dump(self.training_kwargs, f)
+        # The local staging input file is written lazily in update(),
+        # under this iteration's training directory -- never in the cwd.
+        self.input_file = None
 
     def update(
-        self, calcdir: os.PathLike, trainer_input: Path | list[os.PathLike], **kwargs
+        self,
+        calcdir: os.PathLike,
+        trainer_input: Path | list[os.PathLike],
+        **kwargs,
     ) -> None:
         """
         Prepare trainer for a new iteration.
@@ -527,7 +530,11 @@ class NeuralilILTrainer(ModelTrainer):
 
         # In stub mode, we don't need to create the task
         if not self.stub:
-            # Create JSON input file for training script
+            # Create JSON input file for the training script inside this
+            # iteration's training directory.
+            self.input_file = self.train_dir / "input_nnff.json"
+            with open(self.input_file, "w") as f:
+                json.dump(self.training_kwargs, f)
 
             self.train_task = SingleScriptTask(
                 cluster_config=self.cluster_config,
@@ -551,7 +558,7 @@ class NeuralilILTrainer(ModelTrainer):
 
             with open(self.input_file, "r") as f:
                 self.training_kwargs = json.load(f)
-                
+
             self.training_kwargs["structure_databases"] = remote_dbs
             self.training_kwargs["filepath"] = str(self.train_task.calcdir)
             self.training_kwargs["pickle_file_name"] = str(
@@ -628,9 +635,7 @@ class NeuralilILTrainer(ModelTrainer):
             # Get model file path from training kwargs
             model_file = (
                 self.results_dir
-                / os.path.split(
-                    self.training_kwargs["pickle_file_name"]
-                )[-1]
+                / os.path.split(self.training_kwargs["pickle_file_name"])[-1]
             )
 
             if not os.path.exists(model_file):
