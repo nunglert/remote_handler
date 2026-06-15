@@ -9,12 +9,35 @@ import numpy as np
 from jinja2 import Environment, FileSystemLoader
 
 from remote_handler.config import get_config
+from remote_handler.core import resilience
 from remote_handler.exceptions import TaskError
 
 logger = logging.getLogger(__name__)
 
 
-def submit_job(script_path, output_path, ssh_command=None, cwd=None) -> str:
+def _run_ssh(cmd: str, policy: resilience.ConnectionPolicy):
+    """Run a (possibly ssh-wrapped) shell command under a connection policy.
+
+    With a disabled policy this is exactly ``subprocess.run(..., check=True)``;
+    with an enabled one it pauses-and-retries on ssh-level auth/connection
+    failures (but still raises on a real non-zero exit, e.g. a bad sbatch).
+    """
+    return resilience.run_resilient(
+        lambda: subprocess.run(
+            cmd, shell=True, capture_output=True, text=True, check=True
+        ),
+        policy,
+        label=f"ssh command ({cmd[:60]}...)",
+    )
+
+
+def submit_job(
+    script_path,
+    output_path,
+    ssh_command=None,
+    cwd=None,
+    connection_policy: resilience.ConnectionPolicy = resilience.DISABLED,
+) -> str:
     """
     Submit a slurm job.
 
@@ -44,9 +67,7 @@ def submit_job(script_path, output_path, ssh_command=None, cwd=None) -> str:
         submit_cmd = command
 
     # Execute the submission command and capture the output
-    result = subprocess.run(
-        submit_cmd, shell=True, capture_output=True, text=True, check=True
-    )
+    result = _run_ssh(submit_cmd, connection_policy)
     # In the stdout, we expect to find the job ID
     match = re.search("(\d+)", result.stdout)
     if match is not None:
@@ -66,6 +87,7 @@ def submit_job_array(
     num_parallel: int = 10,
     ssh_command: Optional[str] = None,
     cwd: Optional[os.PathLike] = None,
+    connection_policy: resilience.ConnectionPolicy = resilience.DISABLED,
 ) -> str:
     """
     Submit a slurm job array.
@@ -97,16 +119,18 @@ def submit_job_array(
         submit_cmd = command
 
     # Execute the submission command and capture the output
-    result = subprocess.run(
-        submit_cmd, shell=True, capture_output=True, text=True, check=True
-    )
+    result = _run_ssh(submit_cmd, connection_policy)
 
     # Extract and return the job ID from the output
     pid = re.search(r"(\d+)", result.stdout).groups()[0]
     return pid
 
 
-def check_job_status_sacct(job_ids, ssh_command="ssh lugus"):
+def check_job_status_sacct(
+    job_ids,
+    ssh_command="ssh lugus",
+    connection_policy: resilience.ConnectionPolicy = resilience.DISABLED,
+):
     """
     Tries to retrieve information on the job using the slurm `sacct`
     functionality. I designed this for arrays. Somehow sacct does not work
@@ -134,9 +158,7 @@ def check_job_status_sacct(job_ids, ssh_command="ssh lugus"):
             status_cmd = (
                 f"{ssh_command} 'sacct -j {pid_str} --format=JobID,State'"
             )
-        result = subprocess.run(
-            status_cmd, shell=True, capture_output=True, text=True, check=True
-        )
+        result = _run_ssh(status_cmd, connection_policy)
         logger.debug(result["stderr"])
         status = [s.split()[-1] for s in result.stdout.split("\n")[2:-1]]
         return [
@@ -146,7 +168,11 @@ def check_job_status_sacct(job_ids, ssh_command="ssh lugus"):
         return []
 
 
-def check_job_status_squeue(job_id, ssh_command="ssh lugus"):
+def check_job_status_squeue(
+    job_id,
+    ssh_command="ssh lugus",
+    connection_policy: resilience.ConnectionPolicy = resilience.DISABLED,
+):
     """
     Tries to retrieve information on the job using the slurm `squeue`
     command. This is a quite naive method that just checks whether `squeue`
@@ -165,9 +191,7 @@ def check_job_status_squeue(job_id, ssh_command="ssh lugus"):
         status_cmd = f"squeue -j {pid_str}"
     else:
         status_cmd = f"{ssh_command} 'squeue -j {pid_str}'"
-    result = subprocess.run(
-        status_cmd, shell=True, capture_output=True, text=True, check=True
-    )
+    result = _run_ssh(status_cmd, connection_policy)
     res = result.stdout.split("\n")
     if len(res) > 2:
         return False

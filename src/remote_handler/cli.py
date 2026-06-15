@@ -51,6 +51,15 @@ def _list_header_templates() -> list[str]:
     return sorted(names)
 
 
+def _list_cluster_names(config_dir: Path) -> list[str]:
+    """Per-cluster config names (``*.json`` stems, excl. ``config.json``)."""
+    if not config_dir.is_dir():
+        return []
+    return sorted(
+        p.stem for p in config_dir.glob("*.json") if p.name != "config.json"
+    )
+
+
 def _write_json(path: Path, data: dict) -> None:
     """Write ``data`` as pretty JSON, creating parent dirs."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -180,12 +189,22 @@ def cmd_configure(args: argparse.Namespace) -> int:
         default=current.default_conda_source,
     )
 
+    # Which per-cluster config the `remote` test tier targets. Offer the
+    # known cluster names as a hint; blank falls back to remote.json.
+    clusters = _list_cluster_names(_resolved_config_dir())
+    hint = f" (known: {', '.join(clusters)})" if clusters else ""
+    test_cluster = prompt_text(
+        f"Cluster for remote tests, name without .json{hint}",
+        default=current.test_cluster or "",
+    )
+
     data = {
         "config_dir": config_dir or None,
         "slurm_templates_dir": templates or None,
         "default_partition": partition,
         "default_conda_env": conda_env,
         "default_conda_source": conda_source,
+        "test_cluster": test_cluster or None,
     }
     pfile = get_persistent_config_file()
     _write_json(pfile, data)
@@ -360,6 +379,7 @@ def cmd_show(args: argparse.Namespace) -> int:
     print(f"default_partition: {cfg.default_partition}")
     print(f"default_conda_env: {cfg.default_conda_env}")
     print(f"default_conda_source: {cfg.default_conda_source}")
+    print(f"test_cluster: {cfg.test_cluster or '(remote.json)'}")
     print("template search dirs:")
     for template_dir in cfg.get_template_dirs():
         print(f"  - {template_dir}")

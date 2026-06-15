@@ -295,6 +295,11 @@ class SingleScriptTask(RemoteTask):
         # The directory where the computation will be performed
         self.calcdir = Path(self.savepath)
 
+        # Propagate this cluster's opt-in connection policy to the SFTP layer
+        # so file transfers pause-and-retry on auth loss too (no-op if off).
+        if hasattr(remote_fs, "connection_policy"):
+            remote_fs.connection_policy = cluster_config.connection_policy
+
         self.script_file = script_file
         self.input_file = input_file
         self.additional_files = additional_files
@@ -351,10 +356,17 @@ class SingleScriptTask(RemoteTask):
         self.input_file_remote = self.copy_file(self.input_file)
 
         if self.additional_files:
-            self.remote_fs.makedirs(self.calcdir / "additional_files", exist_ok=True)
+            self.remote_fs.makedirs(
+                self.calcdir / "additional_files", exist_ok=True
+            )
             for additional_file in self.additional_files:
-                self.remote_fs.put(additional_file, self.calcdir / "additional_files" / os.path.basename(additional_file))
-    
+                self.remote_fs.put(
+                    additional_file,
+                    self.calcdir
+                    / "additional_files"
+                    / os.path.basename(additional_file),
+                )
+
         # After copying the files, write the slurm job script on the remote machine
         self.slurm_handler.write_jobfile(
             self.input_file_remote, self.script_file_remote
@@ -707,6 +719,11 @@ class ArrayScriptTask(RemoteTask):
 
         # The directory where the computation will be performed
         self.rootpath = Path(self.savepath)
+
+        # Propagate this cluster's opt-in connection policy to the SFTP layer
+        # so file transfers pause-and-retry on auth loss too (no-op if off).
+        if hasattr(remote_fs, "connection_policy"):
+            remote_fs.connection_policy = cluster_config.connection_policy
 
         # Store the provided arguments
         self.python_script_file = python_script_file

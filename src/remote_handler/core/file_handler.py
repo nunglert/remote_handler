@@ -18,18 +18,20 @@ from stat import S_ISDIR
 from typing import Optional
 
 import ase.io
+import numpy as np
 import paramiko
 from ase import Atoms
 
+from remote_handler.core import resilience
 from remote_handler.core.file_utils import tag_path as tag_path_util
 from remote_handler.core.ssh_connection import (
     ConfigBasedSSHClientProvider,
     SSHClientProvider,
 )
 from remote_handler.exceptions import FileSystemError, RemoteConnectionError
-import numpy as np
 
 logger = logging.getLogger(__name__)
+
 
 class NumpyEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -40,6 +42,7 @@ class NumpyEncoder(json.JSONEncoder):
         if isinstance(obj, np.ndarray):
             return obj.tolist()
         return super().default(obj)
+
 
 class FileSystemHandlerBase(ABC):
     """
@@ -383,6 +386,12 @@ def reconnect_on_failure(func):
     This decorator wraps methods that perform SSH/SFTP operations. If an
     SSHException, EOFError, or OSError is raised during the execution of the
     decorated method, it attempts to reconnect and retries the operation once.
+
+    If that single reconnect+retry still fails with a connection/auth error
+    *and* the filesystem's ``connection_policy`` is enabled (opt-in, off by
+    default), the operation escalates to ``resilience.run_resilient``: it
+    pauses and keeps reconnecting on an interval until the credential is
+    refreshed, rather than crashing. Disabled is exactly the old behaviour.
     """
 
     @functools.wraps(func)
@@ -390,10 +399,32 @@ def reconnect_on_failure(func):
         # Attempt the operation
         try:
             return func(self, *args, **kwargs)
-        except (paramiko.SSHException, EOFError, OSError):
-            print("SFTP connection lost. Reconnecting...")
-            self._reconnect()
-            return func(self, *args, **kwargs)
+        except (paramiko.SSHException, EOFError, OSError) as exc:
+            logger.warning(
+                "SFTP op '%s' failed (%s); reconnecting once...",
+                func.__name__,
+                exc,
+            )
+            try:
+                self._reconnect()
+                return func(self, *args, **kwargs)
+            except (
+                paramiko.SSHException,
+                EOFError,
+                OSError,
+                RemoteConnectionError,
+            ) as exc2:
+                policy = getattr(
+                    self, "connection_policy", resilience.DISABLED
+                )
+                if policy.enabled and resilience.is_connection_error(exc2):
+                    return resilience.run_resilient(
+                        lambda: func(self, *args, **kwargs),
+                        policy,
+                        before_retry=self._reconnect,
+                        label=f"SFTP {func.__name__} -> {self.remote_alias}",
+                    )
+                raise
 
     return wrapper
 
@@ -422,6 +453,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
         remote_temp_path: Optional[str] = None,
         local_temp_path: Optional[str] = None,
         ssh_client_provider: Optional[SSHClientProvider] = None,
+        connection_policy: Optional[resilience.ConnectionPolicy] = None,
     ):
         super().__init__()
 
@@ -429,6 +461,8 @@ class RemoteFileSystem(FileSystemHandlerBase):
         self.identityfile = identityfile
         self.ssh_client = None
         self.sftp_client = None
+        # Opt-in pause-and-retry on connection/auth loss; off by default.
+        self.connection_policy = connection_policy or resilience.DISABLED
 
         # Store the client provider - use config-based by default
         if ssh_client_provider is None:

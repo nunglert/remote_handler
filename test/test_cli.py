@@ -226,7 +226,32 @@ def test_check_connect_degrades_on_cert_bug(monkeypatch, capsys):
     assert "ssh-add -D" in out
 
 
-def test_show_json_has_five_keys(capsys):
+def test_configure_persists_test_cluster(monkeypatch):
+    # configure prompts (all prompt_text), in order:
+    # config_dir, templates, partition, conda_env, conda_source, test_cluster
+    _script_prompts(
+        monkeypatch,
+        ["", "", "normal", "base", "~/miniconda3/bin/activate", "lugus"],
+    )
+    rc = cli.main(["configure"])
+    assert rc == 0
+    data = json.loads(get_persistent_config_file().read_text())
+    assert data["test_cluster"] == "lugus"
+    # And it resolves through the global config singleton.
+    assert get_config().test_cluster == "lugus"
+
+
+def test_configure_blank_test_cluster_is_none(monkeypatch):
+    _script_prompts(
+        monkeypatch,
+        ["", "", "normal", "base", "~/miniconda3/bin/activate", ""],
+    )
+    assert cli.main(["configure"]) == 0
+    data = json.loads(get_persistent_config_file().read_text())
+    assert data["test_cluster"] is None
+
+
+def test_show_json_has_expected_keys(capsys):
     rc = cli.main(["show", "--json"])
     out = capsys.readouterr().out
     assert rc == 0
@@ -237,6 +262,7 @@ def test_show_json_has_five_keys(capsys):
         "default_partition",
         "default_conda_env",
         "default_conda_source",
+        "test_cluster",
     }
 
 

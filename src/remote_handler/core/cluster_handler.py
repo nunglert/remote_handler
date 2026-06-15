@@ -17,7 +17,7 @@ import numpy as np
 from jinja2 import Environment, FileSystemLoader
 
 from remote_handler.config import get_config
-from remote_handler.core import file_handler, slurm_utils
+from remote_handler.core import file_handler, resilience, slurm_utils
 from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.exceptions import (
     ConfigurationError,
@@ -42,6 +42,13 @@ class ClusterConfig:
         conda_env: Name of the conda environment to activate on the cluster
         savepath: Default path on the cluster where computations are saved
         template: Name of the Jinja2 template file for SLURM job headers
+        resilient_connection: Opt-in. When True, SSH operations to this cluster
+            pause-and-retry instead of crashing if the connection/credential
+            drops (e.g. an expired ``step ssh login`` cert), resuming once it
+            is refreshed. Off by default; most clusters don't need it.
+        connection_retry_interval: Seconds between retries while paused.
+        connection_max_wait: Give up after this many seconds paused; ``None``
+            (default) waits indefinitely until the credential is refreshed.
 
     Example:
         >>> config = ClusterConfig.from_file("my_cluster.json")
@@ -55,6 +62,18 @@ class ClusterConfig:
     conda_source: str
     savepath: str
     template: str
+    resilient_connection: bool = False
+    connection_retry_interval: float = 60.0
+    connection_max_wait: Optional[float] = None
+
+    @property
+    def connection_policy(self) -> "resilience.ConnectionPolicy":
+        """Build the ``ConnectionPolicy`` described by this config."""
+        return resilience.ConnectionPolicy(
+            enabled=self.resilient_connection,
+            poll_interval=self.connection_retry_interval,
+            max_wait=self.connection_max_wait,
+        )
 
     @classmethod
     def from_file(cls, config_file: str) -> "ClusterConfig":
@@ -390,6 +409,7 @@ class SlurmJobHandler(SlurmHandlerBase):
             output_path=self.calcdir,
             ssh_command=self.ssh_command,
             cwd=self.calcdir,
+            connection_policy=self.cluster_config.connection_policy,
         )
 
         logger.info(f"Submitted slurm job with pid {self.pid}")
@@ -402,7 +422,9 @@ class SlurmJobHandler(SlurmHandlerBase):
         assert self.is_submitted, "Can not check status of unsubmitted job!"
         logger.debug("Checking slurm job status...")
         return slurm_utils.check_job_status_squeue(
-            self.pid, ssh_command=self.ssh_command
+            self.pid,
+            ssh_command=self.ssh_command,
+            connection_policy=self.cluster_config.connection_policy,
         )
 
 
@@ -519,6 +541,7 @@ class SlurmArrayHandler(SlurmHandlerBase):
             cwd=self.calcdir,
             num_array_tasks=self.num_array_tasks,
             num_parallel=self.num_parallel,
+            connection_policy=self.cluster_config.connection_policy,
         )
         logger.info(f"Submitted slurm job with pid {self.pid}")
         self.is_submitted = True
@@ -527,5 +550,7 @@ class SlurmArrayHandler(SlurmHandlerBase):
         assert self.is_submitted, "Can not check status of unsubmitted job!"
         logger.debug("Checking slurm job status...")
         return slurm_utils.check_job_status_squeue(
-            self.pid, ssh_command=self.ssh_command
+            self.pid,
+            ssh_command=self.ssh_command,
+            connection_policy=self.cluster_config.connection_policy,
         )

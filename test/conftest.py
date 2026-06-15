@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -61,20 +62,46 @@ def config_dir():
         pytest.skip(f"No config directory configured: {exc}")
 
 
+def _remote_test_cluster_name() -> str:
+    """Name of the cluster config the remote tier targets.
+
+    Reads ``test_cluster`` from ``<config_dir>/config.json`` (set via
+    ``remote_handler configure``), falling back to ``remote``. Read from the
+    config dir rather than the global config singleton because the remote tier
+    is driven by ``REMOTE_HANDLER_CONFIG_DIR`` (the autouse fixture isolates
+    the XDG persistent config per-test).
+    """
+    try:
+        config_dir = get_config().get_config_dir(required=True)
+    except ConfigurationError:
+        return "remote"
+    cfgfile = config_dir / "config.json"
+    if cfgfile.exists():
+        try:
+            name = json.loads(cfgfile.read_text()).get("test_cluster")
+            if name:
+                return name
+        except (OSError, json.JSONDecodeError):
+            pass
+    return "remote"
+
+
 @pytest.fixture(scope="session")
 def remote_cluster_config():
     """Cluster configuration for the live-remote tier.
 
-    Skips (with a reason) when the package is not configured, so the rest of
-    the suite still runs without a cluster. Session-scoped since ClusterConfig
-    objects are immutable.
+    The target cluster is configurable (``test_cluster`` in the global config,
+    via ``remote_handler configure``); defaults to ``remote.json``. Skips with
+    a reason when the package is not configured, so the rest of the suite still
+    runs without a cluster. Session-scoped since ClusterConfig is immutable.
     """
+    name = _remote_test_cluster_name()
     try:
-        return ClusterConfig.from_file("remote.json")
+        return ClusterConfig.from_file(f"{name}.json")
     except ConfigurationError as exc:
         pytest.skip(
             "Remote cluster config unavailable -- set "
-            "REMOTE_HANDLER_CONFIG_DIR to a directory containing remote.json "
+            f"REMOTE_HANDLER_CONFIG_DIR to a directory containing {name}.json "
             f"to run remote tests ({exc})"
         )
 

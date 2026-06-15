@@ -52,6 +52,9 @@ class RemoteHandlerConfig:
         default_partition: Default SLURM partition for job submission
         default_conda_env: Default conda environment name
         default_conda_source: Default path to conda activation script
+        test_cluster: Name (without ``.json``) of the per-cluster config used
+            as the target for the ``remote`` test tier. ``None`` means fall
+            back to ``remote.json``.
     """
 
     # Directories
@@ -62,6 +65,9 @@ class RemoteHandlerConfig:
     default_partition: str = "normal"
     default_conda_env: str = "base"
     default_conda_source: str = "~/miniconda3/bin/activate"
+
+    # Which cluster the ``remote`` test tier targets (name without ".json").
+    test_cluster: Optional[str] = None
 
     @classmethod
     def from_env(cls) -> "RemoteHandlerConfig":
@@ -354,6 +360,7 @@ class RemoteHandlerConfig:
             "default_partition": self.default_partition,
             "default_conda_env": self.default_conda_env,
             "default_conda_source": self.default_conda_source,
+            "test_cluster": self.test_cluster,
         }
 
     @classmethod
