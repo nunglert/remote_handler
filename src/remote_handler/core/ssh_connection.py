@@ -18,9 +18,15 @@ from typing import Optional
 
 import paramiko
 
+from remote_handler.core import _paramiko_patch
 from remote_handler.exceptions import RemoteConnectionError
 
 logger = logging.getLogger(__name__)
+
+# Fix the paramiko 3.5.1 ssh-agent certificate bug at import time, before any
+# connection is attempted. No-op on paramiko versions that aren't affected.
+# See remote_handler.core._paramiko_patch / paramiko issue #2462.
+_paramiko_patch.apply()
 
 
 @dataclass
@@ -235,10 +241,10 @@ class DirectSSHConnection(SSHConnectionStrategy):
             a plain key -- an upstream bug unfixed as of the pinned version:
             https://github.com/paramiko/paramiko/issues/2462
             https://github.com/paramiko/paramiko/issues/2437
-            Workaround until upstream ships a fix: clear the cert from the
-            agent before connecting (``ssh-add -D``) so paramiko falls back to
-            the plain key files. Hosts here accept plain-key auth, so this is
-            sufficient; it is *not* a bug in this code.
+            ``remote_handler.core._paramiko_patch`` (applied at import of this
+            module) fixes this at runtime, so agent certificates work directly
+            and no ``ssh-add -D`` workaround is needed. The patch self-disables
+            on paramiko versions that aren't affected.
         """
         ssh_client = paramiko.SSHClient()
         ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
