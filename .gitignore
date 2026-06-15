@@ -2,6 +2,14 @@
 experiments*
 *.egg-info
 .vscode*
+
+# coverage / pytest artifacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+report.xml
+.pytest_cache/
 test.log
 input_nnff.json
 docs/_build/

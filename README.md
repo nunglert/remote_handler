@@ -1,5 +1,7 @@
 # remote_handler
 
+[![pipeline status](https://gitlab.tuwien.ac.at/e165-03-1_theoretische_materialchemie/madsen-s-research-group/remote_handler/badges/main/pipeline.svg)](https://gitlab.tuwien.ac.at/e165-03-1_theoretische_materialchemie/madsen-s-research-group/remote_handler/-/commits/main)
+[![coverage report](https://gitlab.tuwien.ac.at/e165-03-1_theoretische_materialchemie/madsen-s-research-group/remote_handler/badges/main/coverage.svg)](https://gitlab.tuwien.ac.at/e165-03-1_theoretische_materialchemie/madsen-s-research-group/remote_handler/-/commits/main)
 [![Documentation](https://img.shields.io/badge/docs-online-blue.svg)](https://remote-handler-ed37f2.git-pages.tuwien.ac.at)
 
 A Python package for streamlining active learning workflows on remote clusters. Handles SSH/SFTP connections, SLURM job submissions, and orchestrates distributed computational workflows.

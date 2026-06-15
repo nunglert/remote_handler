@@ -128,6 +128,16 @@ markers = [
     "heavy: slow tests",
 ]
 
+[tool.coverage.run]
+source_pkgs = ["remote_handler"]
+branch = true
+
+[tool.coverage.paths]
+# Map the installed copy (CI does a non-editable install, so coverage measures
+# site-packages) back onto the src tree, so the cobertura report's file paths
+# are repo-relative -- required for GitLab's MR line-coverage visualization.
+source = ["src/remote_handler", "*/site-packages/remote_handler"]
+
 
 # [tool.setuptools.dynamic]
 # version = { attr = "jaxnest.__version__" }
