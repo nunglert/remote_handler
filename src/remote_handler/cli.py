@@ -3,8 +3,11 @@
 Subcommands:
   configure              build the global config and persist it
   configure cluster NAME build/edit a per-cluster ClusterConfig JSON
+  configure test [NAME]  set the cluster used by the remote test tier
   check [--connect]      validate config and diagnose remote setup
   show [--json]          print the resolved configuration
+  show templates         list registered SLURM templates + paths
+  show clusters          list registered cluster configs + paths
 
 Stdlib only; interactive prompts live in ``cli_prompts``.
 """
@@ -13,6 +16,7 @@ import argparse
 import json
 import os
 import socket
+import sys
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
@@ -218,6 +222,52 @@ def cmd_configure(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+# configure test
+# --------------------------------------------------------------------------
+def cmd_configure_test(args: argparse.Namespace) -> int:
+    """Set only the remote-test target cluster, preserving other config.
+
+    Updates ``test_cluster`` in the persistent config file in place, without
+    re-running the full ``configure`` flow.
+    """
+    config_dir = _resolved_config_dir()
+    name = args.name
+    if name is None:
+        clusters = _list_cluster_names(config_dir)
+        hint = f" (known: {', '.join(clusters)})" if clusters else ""
+        name = prompt_text(
+            f"Cluster for remote tests, name without .json{hint}",
+            default=get_config().test_cluster or "",
+        )
+    name = name.strip()
+
+    # Soft check: warn (don't block) if the cluster JSON isn't there yet.
+    if name and not (config_dir / f"{name}.json").exists():
+        print(
+            f"Warning: {name}.json not found in {config_dir}; "
+            "create it with 'remote_handler configure cluster "
+            f"{name}'."
+        )
+
+    pfile = get_persistent_config_file()
+    data: dict = {}
+    if pfile.exists():
+        try:
+            data = json.loads(pfile.read_text())
+        except (OSError, json.JSONDecodeError):
+            data = {}
+    data["test_cluster"] = name or None
+
+    _write_json(pfile, data)
+    reset_config()
+    print(
+        f"Set test_cluster to {data['test_cluster'] or '(remote.json)'} "
+        f"in {pfile}"
+    )
+    return 0
+
+
+# --------------------------------------------------------------------------
 # check
 # --------------------------------------------------------------------------
 def _check_connect(cc: ClusterConfig, name: str, report: Reporter) -> None:
@@ -395,6 +445,48 @@ def cmd_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_show_templates(args: argparse.Namespace) -> int:
+    """List the registered SLURM templates and their resolved file paths.
+
+    Walks the template search path in priority order; when the same template
+    name exists in several dirs, the first (highest priority) wins -- the same
+    resolution ``find_template`` uses.
+    """
+    cfg = get_config()
+    resolved: dict[str, Path] = {}
+    for template_dir in cfg.get_template_dirs():
+        template_dir = Path(template_dir)
+        if not template_dir.is_dir():
+            continue
+        for path in sorted(template_dir.glob("*.j2")):
+            resolved.setdefault(path.name, path)
+
+    if not resolved:
+        print("No templates found on the search path.")
+        return 0
+    for name in sorted(resolved):
+        print(f"{name}\t{resolved[name]}")
+    return 0
+
+
+def cmd_show_clusters(args: argparse.Namespace) -> int:
+    """List the registered per-cluster configs and their file paths."""
+    cfg = get_config()
+    config_dir = cfg.config_dir
+    if config_dir is None or not config_dir.is_dir():
+        print(f"No config directory: {config_dir}")
+        return 0
+    clusters = sorted(
+        p for p in config_dir.glob("*.json") if p.name != "config.json"
+    )
+    if not clusters:
+        print(f"No cluster configs in {config_dir}")
+        return 0
+    for path in clusters:
+        print(f"{path.stem}\t{path}")
+    return 0
+
+
 # --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
@@ -402,6 +494,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="remote_handler",
         description="Configure and diagnose remote_handler.",
+        epilog=(
+            "all commands:\n"
+            "  configure                 build & persist the global config\n"
+            "  configure cluster [NAME]  create/edit a per-cluster config\n"
+            "  configure test [NAME]     set the remote-test target cluster\n"
+            "  check [--connect]         validate / diagnose config\n"
+            "  show [--json]             print the resolved config\n"
+            "  show templates            list registered templates + paths\n"
+            "  show clusters             list registered clusters + paths\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--version",
@@ -420,6 +523,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_cluster.add_argument(
         "name", nargs="?", default=None, help="cluster config name"
     )
+    p_test = conf_sub.add_parser(
+        "test", help="set the cluster used for remote tests"
+    )
+    p_test.add_argument(
+        "name",
+        nargs="?",
+        default=None,
+        help="cluster name without .json (blank prompts; empty clears)",
+    )
 
     p_check = sub.add_parser("check", help="validate / diagnose config")
     p_check.add_argument(
@@ -432,22 +544,48 @@ def _build_parser() -> argparse.ArgumentParser:
     p_show.add_argument(
         "--json", action="store_true", dest="as_json", help="emit JSON"
     )
+    show_sub = p_show.add_subparsers(dest="show_target")
+    show_sub.add_parser(
+        "templates", help="list registered SLURM templates + their paths"
+    )
+    show_sub.add_parser(
+        "clusters", help="list registered cluster configs + their paths"
+    )
     return parser
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    """CLI entry point. Returns a process exit code."""
+    """CLI entry point. Returns a process exit code.
+
+    Ctrl-C / Ctrl-D at any interactive prompt aborts quietly (no traceback)
+    with exit code 130, the conventional SIGINT code.
+    """
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    if args.command == "configure":
-        if getattr(args, "target", None) == "cluster":
-            return cmd_configure_cluster(args)
-        return cmd_configure(args)
-    if args.command == "check":
-        return cmd_check(args)
-    if args.command == "show":
-        return cmd_show(args)
+    try:
+        if args.command == "configure":
+            target = getattr(args, "target", None)
+            if target == "cluster":
+                return cmd_configure_cluster(args)
+            if target == "test":
+                return cmd_configure_test(args)
+            return cmd_configure(args)
+        if args.command == "check":
+            return cmd_check(args)
+        if args.command == "show":
+            show_target = getattr(args, "show_target", None)
+            if show_target == "templates":
+                return cmd_show_templates(args)
+            if show_target == "clusters":
+                return cmd_show_clusters(args)
+            return cmd_show(args)
 
-    parser.print_help()
-    return 1
+        parser.print_help()
+        return 1
+    except KeyboardInterrupt:
+        print("\nAborted.", file=sys.stderr)
+        return 130
+    except EOFError:
+        print("\nAborted (EOF).", file=sys.stderr)
+        return 130

@@ -66,6 +66,17 @@ class ClusterConfig:
     connection_retry_interval: float = 60.0
     connection_max_wait: Optional[float] = None
 
+    def __post_init__(self) -> None:
+        # SFTP never expands '~', so a tilde savepath can never resolve. Reject
+        # it at construction (covers from_dict / from_file / direct) instead of
+        # letting it fail deep in a transfer as a bare "No such file".
+        if str(self.savepath).startswith("~"):
+            raise ConfigurationError(
+                f"savepath '{self.savepath}' uses '~', which is not "
+                "supported: SFTP does not expand '~'. Use an absolute remote "
+                "path (e.g. '/home/<user>/...')."
+            )
+
     @property
     def connection_policy(self) -> "resilience.ConnectionPolicy":
         """Build the ``ConnectionPolicy`` described by this config."""
@@ -247,9 +258,23 @@ class SlurmHandlerBase(ABC):
             )
 
     def _validate_savepath(self):
+        savepath = str(self.savepath)
+        # SFTP does not expand '~'; a tilde path can never resolve. Catch it
+        # explicitly -- otherwise it surfaces deep in a transfer as a bare
+        # "No such file" with no hint as to why.
+        if savepath.startswith("~"):
+            raise FileSystemError(
+                f"Save path '{savepath}' uses '~', which is not supported: "
+                "SFTP does not expand '~'. Use an absolute remote path "
+                "(e.g. '/home/<user>/...') as the cluster config 'savepath'.\n"
+                f"Remote machine: {self.cluster_config.remote_machine}"
+            )
         if not self.remote_fs.exists(self.savepath):
             raise FileSystemError(
-                f"Save path does not exist on remote filesystem: {self.savepath}\n"
+                "Save path does not exist on the remote filesystem: "
+                f"{self.savepath}\n"
+                "Create it on the remote, or set an existing absolute path "
+                "as the cluster config 'savepath'.\n"
                 f"Remote machine: {self.cluster_config.remote_machine}"
             )
 

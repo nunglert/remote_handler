@@ -1,13 +1,24 @@
 import json
 import os
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
-from remote_handler.config import get_config, reset_config
+from remote_handler.config import (
+    get_config,
+    get_persistent_config_dir,
+    reset_config,
+)
 from remote_handler.core import file_handler
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.exceptions import ConfigurationError
+
+# Real persistent config dir, captured at import -- i.e. *before* the autouse
+# ``reset_global_config`` fixture isolates XDG_CONFIG_HOME to a temp dir. This
+# lets the remote tier fall back to a ``remote_handler configure`` setup when
+# REMOTE_HANDLER_CONFIG_DIR is unset, so the env var is optional, not required.
+_REAL_PERSISTENT_DIR = get_persistent_config_dir()
 
 # -------------------------------------------------------------------------
 # Test tiers
@@ -20,17 +31,17 @@ from remote_handler.exceptions import ConfigurationError
 #                     ClusterConfig (no config files required).
 #   * Remote tests -- need a live cluster. They request the
 #                     ``remote_cluster_config`` fixture, which SKIPS with a
-#                     reason when REMOTE_HANDLER_CONFIG_DIR / remote.json is
-#                     not available, so the rest of the suite still runs.
+#                     reason when no cluster config is available, so the rest
+#                     of the suite still runs.
 #   * Integration  -- marked ``integration`` and deselected by default
 #                     (see pyproject.toml). Run with ``pytest -m integration``.
 #
-# To exercise the remote tier, point REMOTE_HANDLER_CONFIG_DIR at a directory
-# containing a ``remote.json`` cluster config:
-#
-#     export REMOTE_HANDLER_CONFIG_DIR="/path/to/config/files"
-#
-# Without it, the remote-parametrized tests simply report as skipped.
+# The remote tier finds its cluster config dir with this precedence:
+#     1. REMOTE_HANDLER_CONFIG_DIR (an optional override), else
+#     2. the real persistent config dir from ``remote_handler configure``.
+# So once the package is configured, ``pytest -m remote`` runs with no env
+# var; setting the env var still works to point elsewhere. Without either,
+# the remote-parametrized tests simply report as skipped.
 
 
 @pytest.fixture(autouse=True, scope="function")
@@ -62,18 +73,28 @@ def config_dir():
         pytest.skip(f"No config directory configured: {exc}")
 
 
-def _remote_test_cluster_name() -> str:
-    """Name of the cluster config the remote tier targets.
+def _remote_config_dir() -> Optional[Path]:
+    """Directory holding the remote-tier cluster JSONs, or ``None``.
+
+    Precedence: ``REMOTE_HANDLER_CONFIG_DIR`` (optional override) > the real
+    persistent config dir captured before the test harness isolated
+    XDG_CONFIG_HOME. Resolved here (not via ``get_config()``) precisely so the
+    isolation does not hide a ``remote_handler configure`` setup.
+    """
+    env = os.environ.get("REMOTE_HANDLER_CONFIG_DIR")
+    if env:
+        path = Path(env).expanduser()
+        return path if path.is_dir() else None
+    return _REAL_PERSISTENT_DIR if _REAL_PERSISTENT_DIR.is_dir() else None
+
+
+def _remote_test_cluster_name(config_dir: Optional[Path]) -> str:
+    """Cluster name the remote tier targets.
 
     Reads ``test_cluster`` from ``<config_dir>/config.json`` (set via
-    ``remote_handler configure``), falling back to ``remote``. Read from the
-    config dir rather than the global config singleton because the remote tier
-    is driven by ``REMOTE_HANDLER_CONFIG_DIR`` (the autouse fixture isolates
-    the XDG persistent config per-test).
+    ``remote_handler configure``), falling back to ``remote``.
     """
-    try:
-        config_dir = get_config().get_config_dir(required=True)
-    except ConfigurationError:
+    if config_dir is None:
         return "remote"
     cfgfile = config_dir / "config.json"
     if cfgfile.exists():
@@ -90,20 +111,27 @@ def _remote_test_cluster_name() -> str:
 def remote_cluster_config():
     """Cluster configuration for the live-remote tier.
 
-    The target cluster is configurable (``test_cluster`` in the global config,
-    via ``remote_handler configure``); defaults to ``remote.json``. Skips with
-    a reason when the package is not configured, so the rest of the suite still
-    runs without a cluster. Session-scoped since ClusterConfig is immutable.
+    Resolves the config dir from REMOTE_HANDLER_CONFIG_DIR or, when unset, the
+    persistent ``remote_handler configure`` location; the target cluster is
+    configurable via ``test_cluster`` (default ``remote.json``). Loads by
+    absolute path so it is unaffected by the per-test XDG isolation. Skips with
+    a reason when no config is available. Session-scoped (ClusterConfig is
+    immutable).
     """
-    name = _remote_test_cluster_name()
-    try:
-        return ClusterConfig.from_file(f"{name}.json")
-    except ConfigurationError as exc:
-        pytest.skip(
-            "Remote cluster config unavailable -- set "
-            f"REMOTE_HANDLER_CONFIG_DIR to a directory containing {name}.json "
-            f"to run remote tests ({exc})"
-        )
+    config_dir = _remote_config_dir()
+    name = _remote_test_cluster_name(config_dir)
+    if config_dir is not None:
+        path = config_dir / f"{name}.json"
+        if path.exists():
+            try:
+                return ClusterConfig.from_file(str(path))
+            except ConfigurationError as exc:
+                pytest.skip(f"Cannot load remote cluster {path}: {exc}")
+    pytest.skip(
+        f"Remote cluster config unavailable -- run `remote_handler configure` "
+        f"(or set REMOTE_HANDLER_CONFIG_DIR) so {name}.json is found, to run "
+        "remote tests"
+    )
 
 
 @pytest.fixture(scope="session")
@@ -188,10 +216,16 @@ def fs_with_target(request, env_type, tmp_path):
     if env_type == "remote":
         remote_fs = request.getfixturevalue("remote_fs")
         remote_cfg = request.getfixturevalue("remote_cluster_config")
-        target_dir = (
-            Path(remote_cfg.savepath)
-            if remote_cfg.savepath
-            else remote_fs.create_tempdir()
-        )
+        if remote_cfg.savepath:
+            if not remote_fs.exists(remote_cfg.savepath):
+                pytest.fail(
+                    "Configured savepath does not exist on "
+                    f"{remote_cfg.remote_machine}: {remote_cfg.savepath}\n"
+                    "Create it on the remote, or set an existing absolute "
+                    "path as the cluster config 'savepath'."
+                )
+            target_dir = Path(remote_cfg.savepath)
+        else:
+            target_dir = remote_fs.create_tempdir()
         return remote_fs, target_dir
     return request.getfixturevalue("local_fs"), tmp_path

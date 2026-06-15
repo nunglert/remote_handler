@@ -10,31 +10,16 @@ import numpy as np
 import pytest
 from ase import Atoms
 
-from remote_handler.config import get_config
-from remote_handler.core.cluster_handler import ClusterConfig
-from remote_handler.core.file_handler import RemoteFileSystem
 from remote_handler.dft_runner import VASPHandler
 from remote_handler.scripts.input_models import DftSinglepointInput
 from remote_handler.workflows.evaluators import VASPEvaluator
 
-
-def _slurm_template_available(name):
-    """True if SLURM template ``name`` is on the configured search path."""
-    try:
-        dirs = get_config().get_template_dirs()
-    except Exception:
-        return False
-    return any((Path(d) / name).is_file() for d in dirs)
-
-
-# This test needs a live lugus cluster *and* its bundled lugus.sh.j2 template
-# (supplied via REMOTE_HANDLER_SLURM_TEMPLATES). Skip -- rather than error with
-# TemplateNotFound -- when the machine isn't configured for it.
-requires_lugus_template = pytest.mark.skipif(
-    not _slurm_template_available("lugus.sh.j2"),
-    reason="lugus.sh.j2 SLURM template not on search path "
-    "(set REMOTE_HANDLER_SLURM_TEMPLATES to the dir containing it)",
-)
+# The DFT (VASP) integration test runs only when the configured remote test
+# cluster uses this template -- a proxy for "this is the known lugus setup with
+# a working VASP installation". For any other template we can't assume VASP is
+# present, so the test skips (via the ``vasp_cluster_config`` fixture) rather
+# than submitting a job that would fail.
+_VASP_TEMPLATE = "dirona.sh.j2"
 
 # -------------------------------------------------------------------------
 # Fixtures
@@ -49,23 +34,22 @@ def integration_temp_dir(data_dir):
     yield temp_dir
 
 
-@pytest.fixture(scope="session")
-def lugus_cluster_config():
-    """Cluster configuration for lugus (DFT cluster)."""
-    return ClusterConfig(
-        remote_machine="lugus",
-        partition="normal",
-        conda_env="jaxnest",
-        conda_source="/home/nunglert/miniconda3",
-        savepath="/home/nunglert/dump/remote_handler",
-        template="lugus.sh.j2",
-    )
+@pytest.fixture
+def vasp_cluster_config(remote_cluster_config):
+    """The configured remote cluster, gated to the VASP setup.
 
-
-@pytest.fixture(scope="session")
-def lugus_fs():
-    """Remote filesystem for lugus."""
-    return RemoteFileSystem(remote_alias="lugus")
+    Couples this test to the actual cluster config (``remote_cluster_config``
+    resolves the configured ``test_cluster``): it runs only when that config
+    uses the ``dirona.sh.j2`` template, which on lugus implies the known VASP
+    installation. Otherwise it skips.
+    """
+    if remote_cluster_config.template != _VASP_TEMPLATE:
+        pytest.skip(
+            "DFT integration runs only when the configured remote cluster "
+            f"uses the {_VASP_TEMPLATE!r} template (known lugus+VASP setup); "
+            f"configured template is {remote_cluster_config.template!r}."
+        )
+    return remote_cluster_config
 
 
 @pytest.fixture
@@ -102,19 +86,19 @@ def scripts_dir():
 
 
 @pytest.mark.remote
-@requires_lugus_template
 class TestVASPEvaluatorIntegration:
     """Integration tests for VASPEvaluator with actual SLURM submission.
 
-    Requires SSH access to lugus.
+    Requires SSH access to the configured cluster (lugus) and a config that
+    uses the dirona.sh.j2 template (see ``vasp_cluster_config``).
     """
 
     def test_evaluator_update(
         self,
         integration_temp_dir,
         dummy_trajectory,
-        lugus_fs,
-        lugus_cluster_config,
+        remote_fs,
+        vasp_cluster_config,
         scripts_dir,
     ):
         """Test VASPEvaluator update creates VASPHandler on lugus."""
@@ -125,8 +109,8 @@ class TestVASPEvaluatorIntegration:
 
         evaluator = VASPEvaluator(
             singlepoint_script=scripts_dir / "dft_singlepoint.py",
-            remote_fs=lugus_fs,
-            cluster_config=lugus_cluster_config,
+            remote_fs=remote_fs,
+            cluster_config=vasp_cluster_config,
             num_parallel=5,
             incar_kwargs={
                 "xc": "PBE",
@@ -136,7 +120,7 @@ class TestVASPEvaluatorIntegration:
                 "lwave": False,
                 "lcharg": False,
             },
-            remote_savepath=Path(lugus_cluster_config.savepath),
+            remote_savepath=Path(vasp_cluster_config.savepath),
             loop_time=5,
             stub=False,
         )

@@ -251,6 +251,79 @@ def test_configure_blank_test_cluster_is_none(monkeypatch):
     assert data["test_cluster"] is None
 
 
+def test_configure_test_sets_cluster(capsys):
+    assert cli.main(["configure", "test", "lugus"]) == 0
+    data = json.loads(get_persistent_config_file().read_text())
+    assert data["test_cluster"] == "lugus"
+
+
+def test_configure_test_preserves_other_fields():
+    pfile = get_persistent_config_file()
+    pfile.parent.mkdir(parents=True, exist_ok=True)
+    pfile.write_text(
+        json.dumps({"default_partition": "gpu", "test_cluster": "old"})
+    )
+    assert cli.main(["configure", "test", "lugus"]) == 0
+    data = json.loads(pfile.read_text())
+    assert data["test_cluster"] == "lugus"
+    assert data["default_partition"] == "gpu"  # untouched
+
+
+def test_configure_test_blank_clears(capsys):
+    assert cli.main(["configure", "test", ""]) == 0
+    data = json.loads(get_persistent_config_file().read_text())
+    assert data["test_cluster"] is None
+
+
+def test_configure_test_prompts_when_no_name(monkeypatch):
+    _script_prompts(monkeypatch, ["lugus"])
+    assert cli.main(["configure", "test"]) == 0
+    data = json.loads(get_persistent_config_file().read_text())
+    assert data["test_cluster"] == "lugus"
+
+
+def test_ctrl_c_aborts_quietly(monkeypatch, capsys):
+    def kbint(*a, **k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "prompt_text", kbint)
+    rc = cli.main(["configure"])
+    assert rc == 130
+    assert "Aborted" in capsys.readouterr().err
+
+
+def test_ctrl_d_aborts_quietly(monkeypatch, capsys):
+    def eof(*a, **k):
+        raise EOFError
+
+    monkeypatch.setattr(cli, "prompt_text", eof)
+    rc = cli.main(["configure"])
+    assert rc == 130
+    assert "Aborted" in capsys.readouterr().err
+
+
+def test_show_templates_lists_builtins_with_paths(capsys):
+    rc = cli.main(["show", "templates"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    # built-in templates are always on the search path
+    assert "dirona.sh.j2" in out
+    # each line shows the resolved file path
+    assert "/templates/dirona.sh.j2" in out
+
+
+def test_show_clusters_lists_configs_with_paths(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("REMOTE_HANDLER_CONFIG_DIR", str(tmp_path))
+    (tmp_path / "mycluster.json").write_text("{}")
+    (tmp_path / "config.json").write_text("{}")  # must be excluded
+    rc = cli.main(["show", "clusters"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "mycluster" in out
+    assert str(tmp_path / "mycluster.json") in out
+    assert str(tmp_path / "config.json") not in out
+
+
 def test_show_json_has_expected_keys(capsys):
     rc = cli.main(["show", "--json"])
     out = capsys.readouterr().out

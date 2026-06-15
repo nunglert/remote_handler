@@ -1,0 +1,18 @@
+#!/bin/bash
+#SBATCH --job-name={{ jobname }}
+#SBATCH --partition={{ partition }}
+#SBATCH --gres=gpu:{{ n_cores }}
+#SBATCH -N 1
+#SBATCH --qos={{ partition }}
+#SBATCH --time=3-00:00:00
+{{ slurm_header_add }}
+
+ulimit -u 40000
+ulimit -s unlimited
+
+pwd; hostname; date
+
+source ~/miniconda3/etc/profile.d/conda.sh 
+conda activate {{ conda_env }}
+
+{% include job_type_template %}
