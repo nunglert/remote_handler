@@ -6,6 +6,7 @@ from pathlib import Path
 from remote_handler.scripts.input_models import MaceFinetuningInput
 from remote_handler.scripts.mace.mace_utils import (
     combine_databases,
+    convert_torch_model_to_jax,
     run_training_from_config,
     split_db,
 )
@@ -52,3 +53,18 @@ run_training_from_config(
     logger=logging.getLogger(),
     foundation_model=str((calcpath / input_config.foundation_model).resolve()),
 )
+
+# Optionally convert the trained torch model to a mace-jax .pkl bundle, in the
+# same job/env (so torch-mace + mace-jax must both be installed there).
+if input_config.convert_to_jax:
+    torch_model_path = calcpath / "models" / f"{input_config.model_name}.model"
+    assert os.path.exists(
+        torch_model_path
+    ), f"Trained model not found for conversion: {torch_model_path}"
+    jax_model_path = convert_torch_model_to_jax(
+        torch_model_path,
+        output_path=calcpath / "models" / f"{input_config.model_name}-jax.pkl",
+    )
+    logging.getLogger().info(
+        f"Converted torch model to mace-jax bundle: {jax_model_path}"
+    )

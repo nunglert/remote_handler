@@ -181,6 +181,8 @@ class MaceFinetuningInput(ScriptInput):
         model_name: Name tag for the trained model
         seed: Random seed for database splitting and training
         validation_fraction: Fraction of data to use for validation (default: 0.1)
+        convert_to_jax: If True, convert the trained torch model to a mace-jax
+            ``.pkl`` bundle after training (needs mace-jax in the same env)
     """
 
     _path_fields: ClassVar[tuple[str, ...]] = (
@@ -196,6 +198,7 @@ class MaceFinetuningInput(ScriptInput):
     model_name: str
     seed: int
     validation_fraction: float = 0.1
+    convert_to_jax: bool = False
 
     def validate(self) -> None:
         """Validate configuration parameters.

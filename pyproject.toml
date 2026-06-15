@@ -83,6 +83,13 @@ neuralil = [
     "pandas",
     "tqdm",
 ]
+# mace-jax, for converting a trained torch MACE model to a mace-jax `.pkl`
+# bundle (MaceFinetuningTrainer(convert_to_jax=True)). The conversion needs a
+# torch MACE source too (it reads the .model via `mace.tools.scripts_utils`),
+# so install alongside a mace extra, e.g. `.[mace_freeze,mace_jax]`.
+mace_jax = [
+    "mace-jax @ git+https://github.com/ACEsuit/mace-jax.git",
+]
 
 [project.scripts]
 remote_handler = "remote_handler.cli:main"

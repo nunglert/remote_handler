@@ -32,6 +32,24 @@ def mace_freeze_available() -> bool:
         return False
 
 
+def mace_jax_available() -> bool:
+    """True if both stacks for torch->mace-jax conversion are importable.
+
+    The conversion (``convert_torch_model_to_jax``) reads a torch ``.model``
+    via ``mace.tools.scripts_utils`` and writes mace-jax params, so it needs
+    the torch MACE stack *and* ``mace_jax`` in the same process.
+    """
+    import importlib.util
+
+    try:
+        return (
+            importlib.util.find_spec("mace_jax") is not None
+            and importlib.util.find_spec("mace") is not None
+        )
+    except Exception:
+        return False
+
+
 def mace_run_train_script() -> Optional[str]:
     """Path to mace's ``run_train.py`` from the install, or None.
 

@@ -217,7 +217,7 @@ def process_progress(
             # last loaded iteration is complete, proceed with next iter
             iteration_idx = last_iteration_key + 1
             progress.append({"steps": [1, 1, 1]})
-    
+
     evaluator_in = [Path(p) for p in evaluator_in]
     trainer_in = [Path(p) for p in trainer_in]
     sampler_in = [Path(p) for p in sampler_in]
@@ -701,6 +701,9 @@ class ActiveLearningHandler(ABC):
             Path to moved file
         """
         if not file.is_relative_to(self.calchome):
+            # calchome may not exist yet: initial_*_out files are moved in
+            # during __init__, before the per-iteration dir structure is built.
+            os.makedirs(self.calchome, exist_ok=True)
             file_home = self.calchome / os.path.split(file)[1]
             shutil.copy(file, file_home)
             file = file_home

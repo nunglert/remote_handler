@@ -240,3 +240,74 @@ def run_training_from_config(
             )
             logger.error(run_error.stderr.decode("utf-8"))
         raise RuntimeError(run_error)
+
+
+def convert_torch_model_to_jax(
+    model_path: pathlib.Path,
+    output_path: Optional[pathlib.Path] = None,
+    head: Optional[str] = None,
+) -> pathlib.Path:
+    """Convert a trained torch MACE model to a mace-jax ``.pkl`` bundle.
+
+    Reuses mace-jax's own conversion engine (``convert_model``) and writes the
+    same ``{'config', 'params', 'head'}`` pickle that ``mace-jax-predict`` /
+    ``MACEJAXCalculator`` load -- i.e. what ``mace-create-lammps-model``
+    produces, but without building the (unused, dependency-heavy) LAMMPS-MLIAP
+    wrapper.
+
+    Runs in the same environment as training, so it requires both the torch
+    MACE stack (``mace.tools.scripts_utils``) and ``mace-jax`` importable.
+
+    Args:
+        model_path: Path to the trained torch ``.model`` file.
+        output_path: Destination ``.pkl``. Defaults to
+            ``<model_path stem>-jax.pkl`` next to the input.
+        head: Optional head name to record in the bundle.
+
+    Returns:
+        Path to the written ``.pkl`` bundle.
+    """
+    # Lazy imports: keep this module importable without torch / mace-jax (the
+    # conversion only runs on the cluster env that has both stacks).
+    import pickle
+
+    import torch
+    from flax import serialization
+    from mace.tools.scripts_utils import extract_config_mace_model
+    from mace_jax.cli.mace_jax_from_torch import convert_model
+    from mace_jax.nnx_utils import state_to_serializable_dict
+
+    model_path = pathlib.Path(model_path)
+    bundle = torch.load(model_path, map_location="cpu", weights_only=False)
+    torch_model = (
+        bundle["model"]
+        if isinstance(bundle, dict) and "model" in bundle
+        else bundle
+    )
+    torch_model.eval()
+
+    config = extract_config_mace_model(torch_model)
+    if "error" in config:
+        raise RuntimeError(config["error"])
+    config["torch_model_class"] = torch_model.__class__.__name__
+
+    graphdef, state, _ = convert_model(torch_model, config)
+    # Use state_to_serializable_dict (not state_to_pure_dict): it converts the
+    # ConfigDict leaves the MACE model carries into plain dicts, which msgpack
+    # / flax.serialization can pack (pure_dict leaves a raw ConfigDict and
+    # to_bytes then raises "can not serialize 'ConfigDict' object").
+    variables = state_to_serializable_dict(state)
+
+    artifact = {
+        "config": config,
+        "params": serialization.to_bytes(variables),
+        "head": head,
+    }
+
+    if output_path is None:
+        output_path = model_path.with_name(model_path.stem + "-jax.pkl")
+    output_path = pathlib.Path(output_path)
+    with output_path.open("wb") as f:
+        pickle.dump(artifact, f)
+
+    return output_path

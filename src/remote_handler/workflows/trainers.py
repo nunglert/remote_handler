@@ -255,6 +255,10 @@ class MaceFinetuningTrainer(ModelTrainer):
         remote_savepath: Path on remote machine for calculation files
         loop_time: Interval (seconds) to poll for job completion
         stub: If True, creates mock model outputs without training
+        convert_to_jax: If True, convert each trained torch model to a
+            mace-jax ``.pkl`` bundle in the same job and return those paths
+            from ``get_trained_model``. The training (cluster) environment
+            must then have both the torch MACE stack and ``mace-jax``.
     """
 
     def __init__(
@@ -270,6 +274,7 @@ class MaceFinetuningTrainer(ModelTrainer):
         remote_savepath: Optional[os.PathLike] = None,
         loop_time: float = 30,
         stub: bool = False,
+        convert_to_jax: bool = False,
     ):
         super().__init__()
         self.training_script = training_script
@@ -283,6 +288,7 @@ class MaceFinetuningTrainer(ModelTrainer):
         self.remote_savepath = remote_savepath
         self.loop_time = loop_time
         self.stub = stub
+        self.convert_to_jax = convert_to_jax
         self.model_name = "Model"  # Default model name
 
     def update(
@@ -320,6 +326,7 @@ class MaceFinetuningTrainer(ModelTrainer):
                 "model_name": self.model_name,
                 "validation_fraction": self.validation_fraction,
                 "train_runner": Path(self.remote_mace_train_runner).as_posix(),
+                "convert_to_jax": self.convert_to_jax,
             }
 
             # Validate input dict against the script's expected schema
@@ -388,8 +395,17 @@ class MaceFinetuningTrainer(ModelTrainer):
             with open(model_path, "wb") as f:
                 pickle.dump(mock_model, f)
 
-            model_paths.append(model_path)
-            logger.info(f"Created stub finetuned model: {model_path}")
+            if self.convert_to_jax:
+                jax_path = model_dir / f"{self.model_name}-jax.pkl"
+                with open(jax_path, "wb") as f:
+                    pickle.dump(
+                        {"config": mock_model, "params": b"", "head": None}, f
+                    )
+                model_paths.append(jax_path)
+                logger.info(f"Created stub mace-jax bundle: {jax_path}")
+            else:
+                model_paths.append(model_path)
+                logger.info(f"Created stub finetuned model: {model_path}")
 
         return model_paths
 
@@ -412,9 +428,16 @@ class MaceFinetuningTrainer(ModelTrainer):
             self.training_task.submit()
             self.training_task.collect_results()
 
+            # When converting, the artifact handed to the next sampler is the
+            # mace-jax .pkl bundle produced alongside the torch .model.
+            model_filename = (
+                f"{self.model_name}-jax.pkl"
+                if self.convert_to_jax
+                else f"{self.model_name}.model"
+            )
             model_paths = []
             for calcpath in grep(str(self.results_dir / "calcdirs"), ""):
-                model_path = Path(calcpath) / f"models/{self.model_name}.model"
+                model_path = Path(calcpath) / "models" / model_filename
                 if model_path.exists():
                     model_paths.append(model_path)
                 else:
