@@ -10,8 +10,8 @@ import numpy as np
 import pytest
 from ase import Atoms
 
-from remote_handler.dft_runner import VASPHandler
 from remote_handler.scripts.input_models import DftSinglepointInput
+from remote_handler.workflows.dft_runner import VASPHandler
 from remote_handler.workflows.evaluators import VASPEvaluator
 
 # The DFT (VASP) integration test runs only when the configured remote test

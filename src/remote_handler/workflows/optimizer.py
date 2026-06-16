@@ -5,8 +5,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Optional, Union
 
-from remote_handler.atoms_handler import RemoteAtomsHandler
 from remote_handler.core import cluster_handler, file_handler, tasks
+from remote_handler.core.atoms_handler import RemoteAtomsHandler
 from remote_handler.core.cluster_handler import ClusterConfig
 
 logger = logging.getLogger(__name__)
@@ -175,7 +175,6 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
                 nbins=nbins,
                 cutoff=rmax,
             ),
-            
         }
 
         # Since we did not initialize the python_script_file, shared_ressources
@@ -184,7 +183,10 @@ class RemoteOptimizationHandler(RemoteAtomsHandler):
 
         self.shared_ressources = []
         if do_optimization:
-            if optimization_backend == "NNFF" or optimization_backend == "MACE":
+            if (
+                optimization_backend == "NNFF"
+                or optimization_backend == "MACE"
+            ):
                 self.shared_ressources.append(pickle_file)
 
         if not collect_only:

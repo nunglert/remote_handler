@@ -102,7 +102,7 @@ class VASPEvaluator(GroundTruthEvaluator):
 
         # In stub mode, we don't need VASPHandler
         if not self.stub:
-            from remote_handler.dft_runner import VASPHandler
+            from remote_handler.workflows.dft_runner import VASPHandler
 
             self.vasp_handler = VASPHandler(
                 traj_files=traj_files,
@@ -213,7 +213,6 @@ class VASPEvaluator(GroundTruthEvaluator):
                 except Exception as e:
                     logger.info(f"VASP run failed for {calcpath=}: {e}")
 
-
         # Write results to file
         os.makedirs(self.results_dir, exist_ok=True)
         output_path = self.results_dir / "evaluated_configs.extxyz"
@@ -272,8 +271,7 @@ class ORCAEvaluator(GroundTruthEvaluator):
         os.makedirs(self.dft_dir, exist_ok=True)
         it = str(calcdir).split("/")[-1]
 
-        from remote_handler.dft_runner import ORCAHandler
-
+        from remote_handler.workflows.dft_runner import ORCAHandler
 
         traj_files = (
             [str(evaluator_input)]
@@ -326,7 +324,6 @@ class ORCAEvaluator(GroundTruthEvaluator):
             s.info["REF_energy"] = s.get_potential_energy()
             s.arrays["REF_forces"] = s.get_forces()
             s.calc = None
-
 
         # Write results to file
         os.makedirs(self.results_dir, exist_ok=True)

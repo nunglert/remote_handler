@@ -18,6 +18,7 @@ from jinja2 import Environment, FileSystemLoader
 
 from remote_handler.config import get_config
 from remote_handler.core import file_handler, resilience, slurm_utils
+from remote_handler.core.executors import ArrayExecutor, SingleExecutor
 from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.exceptions import (
     ConfigurationError,
@@ -49,6 +50,9 @@ class ClusterConfig:
         connection_retry_interval: Seconds between retries while paused.
         connection_max_wait: Give up after this many seconds paused; ``None``
             (default) waits indefinitely until the credential is refreshed.
+        executor: Which execution backend to run jobs through. ``"slurm"``
+            (default) submits via sbatch; other backends are selected by the
+            executor factory. Unset in a config JSON means ``"slurm"``.
 
     Example:
         >>> config = ClusterConfig.from_file("my_cluster.json")
@@ -65,6 +69,7 @@ class ClusterConfig:
     resilient_connection: bool = False
     connection_retry_interval: float = 60.0
     connection_max_wait: Optional[float] = None
+    executor: str = "slurm"
 
     def __post_init__(self) -> None:
         # SFTP never expands '~', so a tilde savepath can never resolve. Reject
@@ -349,7 +354,11 @@ class SlurmHandlerBase(ABC):
                 break
 
 
-class SlurmJobHandler(SlurmHandlerBase):
+class SlurmJobHandler(SlurmHandlerBase, SingleExecutor):
+    # SLURM can re-place a single job on another node; SingleScriptTask runs
+    # its node-exclusion retry loop only when this is True.
+    supports_node_retry = True
+
     def __init__(
         self,
         jobname: str,
@@ -453,7 +462,7 @@ class SlurmJobHandler(SlurmHandlerBase):
         )
 
 
-class SlurmArrayHandler(SlurmHandlerBase):
+class SlurmArrayHandler(SlurmHandlerBase, ArrayExecutor):
     """
     Class to handle job arrays via slurm on a remote HPC cluster.
 

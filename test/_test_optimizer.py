@@ -14,8 +14,8 @@ import pytest
 from ase import Atoms
 from ase.calculators.calculator import compare_atoms
 
-from remote_handler import optimizer, run_optimizer
-from remote_handler.atoms_handler import front_tag
+from remote_handler.core.atoms_shard import front_tag
+from remote_handler.workflows import optimizer, run_optimizer
 
 
 def at_to_hash(at, length=8):

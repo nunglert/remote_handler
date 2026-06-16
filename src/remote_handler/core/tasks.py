@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Optional, Union
 
 from remote_handler.core import (
-    cluster_handler,
+    executors,
     file_handler,
     file_utils,
     slurm_utils,
@@ -319,9 +319,9 @@ class SingleScriptTask(RemoteTask):
         self.loop_time = loop_time
         self.local_savepath = local_savepath
 
-        self.slurm_handler = cluster_handler.SlurmJobHandler(
+        self.executor = executors.make_single_executor(
+            cluster_config,
             jobname=jobname,
-            cluster_config=cluster_config,
             savepath=self.calcdir,
             n_processors=n_processors,
             slurm_header_add="",
@@ -330,6 +330,9 @@ class SingleScriptTask(RemoteTask):
             loop_time=loop_time,
             job_type_template=job_type_template,
         )
+        # Back-compat alias: external callers (e.g. RemoteAtomsHandler) still
+        # reference ``.slurm_handler``. Same object as ``.executor``.
+        self.slurm_handler = self.executor
 
         # Create composable components for file allocation and result collection
         self.file_allocator = FileAllocator(
@@ -375,17 +378,17 @@ class SingleScriptTask(RemoteTask):
                     / os.path.basename(additional_file),
                 )
 
-        # After copying the files, write the slurm job script on the remote machine
-        self.slurm_handler.write_jobfile(
+        # After copying the files, write the job script on the remote machine
+        self.executor.write_jobfile(
             self.input_file_remote, self.script_file_remote
         )
 
     def submit(self, only_start=False):
-        """Submit the slurm job and wait until it is finished."""
-        self.slurm_handler.submit()
+        """Submit the job and wait until it is finished."""
+        self.executor.submit()
         if only_start:
             return
-        self.slurm_handler.wait_until_finished()
+        self.executor.wait_until_finished()
 
     def collect_results(self):
         """Copy the entire calculation directory from the remote machine to
@@ -418,6 +421,11 @@ class SingleScriptTask(RemoteTask):
             if only_start:
                 break
 
+            # Node-exclusion retry is a scheduler capability (re-place the job
+            # on another node). Backends without a notion of nodes run once.
+            if not self.executor.supports_node_retry:
+                break
+
             if not self.node_problem():
                 break
 
@@ -438,7 +446,7 @@ class SingleScriptTask(RemoteTask):
 
                 exclude_node_list.append(last_used_node)
 
-                self.slurm_handler.write_jobfile(
+                self.executor.write_jobfile(
                     self.input_file_remote,
                     self.script_file,
                     exclude_nodes=",".join(exclude_node_list),
@@ -740,10 +748,10 @@ class ArrayScriptTask(RemoteTask):
         self.loop_time = loop_time
         self.local_savepath = local_savepath
 
-        # Instantiate the slurm handler for array jobs
-        self.slurm_handler = cluster_handler.SlurmArrayHandler(
+        # Instantiate the execution backend for array jobs
+        self.executor = executors.make_array_executor(
+            cluster_config,
             jobname=jobname,
-            cluster_config=cluster_config,
             savepath=self.rootpath,
             n_processors=n_processors,
             remote_fs=remote_fs,
@@ -753,8 +761,10 @@ class ArrayScriptTask(RemoteTask):
             num_parallel=num_parallel,
             job_type_template="body_array.sh.j2",
         )
+        # Back-compat alias (see SingleScriptTask). Same object as ``.executor``.
+        self.slurm_handler = self.executor
 
-        self.calcdir = self.slurm_handler.calcdir
+        self.calcdir = self.executor.calcdir
 
         # Create composable components for file allocation and result collection
         self.file_allocator = FileAllocator(
@@ -894,8 +904,8 @@ class ArrayScriptTask(RemoteTask):
         """
         # Copy the python script to the calculation directory on the remote machine
         self.script_file_remote = self.copy_file(self.python_script_file)
-        # Write the slurm job script on the remote machine
-        self.slurm_handler.write_jobfile(
+        # Write the job script on the remote machine
+        self.executor.write_jobfile(
             self.script_file_remote, self.num_array_tasks
         )
 
@@ -912,9 +922,9 @@ class ArrayScriptTask(RemoteTask):
             )
 
     def submit(self):
-        # Submit the slurm job and wait until it is finished.
-        self.slurm_handler.submit()
-        self.slurm_handler.wait_until_finished()
+        # Submit the job and wait until it is finished.
+        self.executor.submit()
+        self.executor.wait_until_finished()
 
     def collect_results(self):
         """Copy the entire rootpath directory from the remote machine to
