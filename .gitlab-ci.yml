@@ -43,6 +43,27 @@ test:
     # Non-editable install -> exercises the real build + packaging pipeline.
     - pip install ".[dev,mace,torch_sim,clinamen,quests]"
     - python -c "import remote_handler; print('install OK:', remote_handler.__file__)"
+    # Best-effort: stand up a localhost sshd so the `sshlive` tier does a real
+    # SSH/SFTP round-trip in CI. This needs in-container root (the Docker
+    # executor default) but NOT privileged mode / a Docker daemon. If the
+    # runner forbids it (e.g. a hardened non-root Kubernetes runner), the whole
+    # block is a no-op and the sshlive tests simply skip, as they did before --
+    # it never fails the pipeline. The job log prints RUN vs SKIP.
+    - |
+      if apt-get update \
+         && apt-get install -y --no-install-recommends openssh-server openssh-client \
+         && useradd -m -s /bin/bash tester \
+         && install -d -m 700 -o tester -g tester /home/tester/.ssh \
+         && ssh-keygen -t ed25519 -N '' -q -f /tmp/sshlive_key \
+         && install -m 600 -o tester -g tester /tmp/sshlive_key.pub /home/tester/.ssh/authorized_keys \
+         && mkdir -p /run/sshd && ssh-keygen -A && /usr/sbin/sshd -p 2222 \
+         && ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                -i /tmp/sshlive_key -p 2222 tester@127.0.0.1 true; then
+        export SSHLIVE_HOST=127.0.0.1 SSHLIVE_PORT=2222 SSHLIVE_USER=tester SSHLIVE_KEY=/tmp/sshlive_key
+        echo 'sshlive: local sshd ready -> sshlive tests will RUN'
+      else
+        echo 'sshlive: no local sshd (insufficient privileges?) -> sshlive tests will SKIP'
+      fi
   script:
     - >-
       pytest --junitxml=report.xml -ra

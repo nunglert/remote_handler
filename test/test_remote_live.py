@@ -1,15 +1,25 @@
-"""Live SSH/SFTP round-trip tests against a throwaway Docker container.
+"""Live SSH/SFTP round-trip tests against a real sshd.
 
 These exercise the *real* transport path
 (``ConfigBasedSSHClientProvider`` -> paramiko -> SFTP) without a cluster and
-without SLURM, by booting a disposable ``linuxserver/openssh-server``
-container and pointing a temporary ssh-config at it (the user's real
-``~/.ssh/config`` is never touched).
+without SLURM, by pointing a temporary ssh-config at a live SSH server (the
+user's real ``~/.ssh/config`` is never touched).
 
-They auto-skip when Docker is unavailable, so they are safe to keep in the
-suite. Run just these with ``pytest -m sshlive``.
+The SSH endpoint is provisioner-agnostic:
+
+  * If ``SSHLIVE_HOST`` is set, connect to that already-running sshd. CI uses
+    this -- it starts an sshd in the job itself, so the suite gets a genuine
+    SSH/SFTP round-trip on every pipeline without needing a Docker daemon.
+    Vars: ``SSHLIVE_HOST``, ``SSHLIVE_PORT`` (default 22), ``SSHLIVE_USER``
+    (default ``tester``), ``SSHLIVE_KEY`` (path to the private key).
+  * Otherwise boot a disposable ``linuxserver/openssh-server`` container
+    (handy for local dev). Skips when Docker is unavailable.
+
+Either way these auto-skip when no endpoint is reachable, so they are safe to
+keep in the suite. Run just these with ``pytest -m sshlive``.
 """
 
+import os
 import shutil
 import socket
 import subprocess
@@ -64,13 +74,68 @@ def _wait_for_tcp(port, timeout=60):
     return False
 
 
+def _write_ssh_config(workdir, host, port, user, key):
+    """Write a throwaway ssh-config for the ``sshlive`` alias; return path."""
+    config_file = workdir / "ssh_config"
+    config_file.write_text(
+        "Host sshlive\n"
+        f"    HostName {host}\n"
+        f"    Port {port}\n"
+        f"    User {user}\n"
+        f"    IdentityFile {key}\n"
+    )
+    return config_file
+
+
+def _connect_fs(config_file, retries=20):
+    """Connect a RemoteFileSystem via the config, retrying; skip on failure.
+
+    A TCP-open port does not mean auth is ready (a container provisions its
+    user asynchronously; a fresh sshd may still be starting), so retry.
+    """
+    last_err = None
+    for _ in range(retries):
+        try:
+            provider = ConfigBasedSSHClientProvider(
+                remote_alias="sshlive", config_file=str(config_file)
+            )
+            return RemoteFileSystem(
+                remote_alias="sshlive", ssh_client_provider=provider
+            )
+        except Exception as err:  # noqa: BLE001 - report & skip below
+            last_err = err
+            time.sleep(1)
+    pytest.skip(f"Could not connect to SSH endpoint: {last_err}")
+
+
 @pytest.fixture(scope="session")
 def ssh_container_fs(tmp_path_factory):
-    """A RemoteFileSystem wired to a disposable openssh-server container."""
-    if not _docker_available():
-        pytest.skip("Docker not available")
-
+    """A RemoteFileSystem wired to a live sshd (env endpoint or Docker)."""
     workdir = tmp_path_factory.mktemp("sshlive")
+
+    # Provisioner 1: an already-running sshd (CI starts one in the job).
+    env_host = os.environ.get("SSHLIVE_HOST")
+    if env_host:
+        config_file = _write_ssh_config(
+            workdir,
+            host=env_host,
+            port=int(os.environ.get("SSHLIVE_PORT", "22")),
+            user=os.environ.get("SSHLIVE_USER", SSH_USER),
+            key=os.environ["SSHLIVE_KEY"],
+        )
+        fs = _connect_fs(config_file)
+        try:
+            yield fs
+        finally:
+            fs._disconnect()
+        return
+
+    # Provisioner 2: a disposable openssh-server Docker container (local dev).
+    if not _docker_available():
+        pytest.skip(
+            "No SSH endpoint: set SSHLIVE_HOST or make Docker available"
+        )
+
     key = workdir / "id_ed25519"
     subprocess.run(
         ["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", str(key)],
@@ -115,36 +180,14 @@ def ssh_container_fs(tmp_path_factory):
         if not _wait_for_tcp(port):
             pytest.skip("SSH container did not open its port in time")
 
-        config_file = workdir / "ssh_config"
-        config_file.write_text(
-            "Host sshlive\n"
-            "    HostName 127.0.0.1\n"
-            f"    Port {port}\n"
-            f"    User {SSH_USER}\n"
-            f"    IdentityFile {key}\n"
+        config_file = _write_ssh_config(
+            workdir, "127.0.0.1", port, SSH_USER, key
         )
-
-        # TCP-open does not mean auth is ready (the image provisions the user
-        # and authorized_keys asynchronously); retry the real connection.
-        fs = None
-        last_err = None
-        for _ in range(20):
-            try:
-                provider = ConfigBasedSSHClientProvider(
-                    remote_alias="sshlive", config_file=str(config_file)
-                )
-                fs = RemoteFileSystem(
-                    remote_alias="sshlive", ssh_client_provider=provider
-                )
-                break
-            except Exception as err:  # noqa: BLE001 - report & skip below
-                last_err = err
-                time.sleep(1)
-        if fs is None:
-            pytest.skip(f"Could not connect to SSH container: {last_err}")
-
-        yield fs
-        fs._disconnect()
+        fs = _connect_fs(config_file)
+        try:
+            yield fs
+        finally:
+            fs._disconnect()
     finally:
         subprocess.run(
             ["docker", "rm", "-f", name],
