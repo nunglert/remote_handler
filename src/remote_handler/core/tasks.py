@@ -26,6 +26,14 @@ from remote_handler.exceptions import FileSystemError, TaskError
 
 logger = logging.getLogger(__name__)
 
+# Array tasks execute in "<rootpath>/calcdirs/<run_id>" (see
+# SlurmArrayHandler.calcdir and templates/body_array.sh.j2) -- two levels below
+# the rootpath where shared resources are allocated. Reference shared resources
+# from a task's input JSON with this prefix; it is derived from the run-subdir
+# nesting so it stays correct if that layout ever changes.
+_ARRAY_TASK_RUN_SUBDIR = os.path.join("calcdirs", "0")
+SHARED_RESOURCE_PREFIX = os.path.relpath(os.curdir, _ARRAY_TASK_RUN_SUBDIR)
+
 
 class RemoteTask(ABC):
     """This serves as an interface for tasks that should be performed on a

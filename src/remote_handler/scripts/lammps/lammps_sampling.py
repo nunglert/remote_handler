@@ -31,7 +31,7 @@ except ImportError:
 calcpath = Path(sys.argv[1]).parent
 INPUTFILE = Path(sys.argv[1])
 input_config = LammpsSamplingInput.from_file(INPUTFILE)
-input_config.validate()
+input_config.validate(calcpath)
 
 outpath = calcpath / "out"
 os.makedirs(outpath, exist_ok=False)

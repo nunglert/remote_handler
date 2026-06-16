@@ -1138,7 +1138,7 @@ if __name__ == "__main__":
     calcpath = pathlib.Path(sys.argv[1]).parent
     INPUTFILE = pathlib.Path(sys.argv[1])
     input_config = CmaesOptimizeInput.from_file(INPUTFILE)
-    input_config.validate()
+    input_config.validate(calcpath)
 
     # Load models once for all evolutions
     calc = MACECalculator(

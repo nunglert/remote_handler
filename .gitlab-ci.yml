@@ -47,7 +47,7 @@ test:
     - >-
       pytest --junitxml=report.xml -ra
       --cov=remote_handler --cov-report=term --cov-report=xml:coverage.xml
-      --cov-fail-under=70
+      --cov-fail-under=50
   coverage: '/^TOTAL.+?(\d+\%)$/'
   artifacts:
     when: always

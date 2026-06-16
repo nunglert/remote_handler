@@ -17,6 +17,7 @@ import numpy as np
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.core.tasks import (
+    SHARED_RESOURCE_PREFIX,
     ArrayScriptTask,
     DictJSON,
     SingleScriptTask,
@@ -26,10 +27,6 @@ from remote_handler.exceptions import (
     ConfigurationError,
     DependencyError,
     WorkflowError,
-)
-from remote_handler.scripts.input_models import (
-    MaceFinetuningInput,
-    MaceTrainingInput,
 )
 
 from .active_learning_base import ModelTrainer
@@ -105,21 +102,21 @@ class MaceModelTrainer(ModelTrainer):
 
         # In stub mode, we don't need to create the task
         if not self.stub:
-            # Shared resources live in rootpath/, but scripts run in
-            # rootpath/calcdirs/N/. Prefix with ../../ so the script can
-            # resolve them relative to its own calcpath.
+            # Shared resources live in rootpath/, but scripts run in a
+            # subdir of it; reference them via SHARED_RESOURCE_PREFIX so each
+            # script resolves them relative to its own calcpath.
             script_input_shared = {
                 "database_files": [
-                    f"../../{Path(p).name}" for p in self.db_files
+                    f"{SHARED_RESOURCE_PREFIX}/{Path(p).name}"
+                    for p in self.db_files
                 ],
-                "config_file": f"../../{Path(self.config_file).name}",
+                "config_file": (
+                    f"{SHARED_RESOURCE_PREFIX}/{Path(self.config_file).name}"
+                ),
                 "model_name": self.model_name,
                 "validation_fraction": self.validation_fraction,
                 "train_runner": Path(self.remote_mace_train_runner).as_posix(),
             }
-
-            # Validate input dict against the script's expected schema
-            MaceTrainingInput.from_dict(script_input_shared | {"seed": 0})
 
             # Create individual input files with different seeds
             individual_resources = [
@@ -314,23 +311,26 @@ class MaceFinetuningTrainer(ModelTrainer):
 
         # In stub mode, we don't need to create the task
         if not self.stub:
-            # Shared resources live in rootpath/, but scripts run in
-            # rootpath/calcdirs/N/. Prefix with ../../ so the script can
-            # resolve them relative to its own calcpath.
+            # Shared resources live in rootpath/, but scripts run in a
+            # subdir of it; reference them via SHARED_RESOURCE_PREFIX so each
+            # script resolves them relative to its own calcpath.
             script_input_shared = {
                 "database_files": [
-                    f"../../{Path(p).name}" for p in self.db_files
+                    f"{SHARED_RESOURCE_PREFIX}/{Path(p).name}"
+                    for p in self.db_files
                 ],
-                "config_file": f"../../{Path(self.config_file).name}",
-                "foundation_model": f"../../{Path(self.foundation_model).name}",
+                "config_file": (
+                    f"{SHARED_RESOURCE_PREFIX}/{Path(self.config_file).name}"
+                ),
+                "foundation_model": (
+                    f"{SHARED_RESOURCE_PREFIX}/"
+                    f"{Path(self.foundation_model).name}"
+                ),
                 "model_name": self.model_name,
                 "validation_fraction": self.validation_fraction,
                 "train_runner": Path(self.remote_mace_train_runner).as_posix(),
                 "convert_to_jax": self.convert_to_jax,
             }
-
-            # Validate input dict against the script's expected schema
-            MaceFinetuningInput.from_dict(script_input_shared | {"seed": 0})
 
             # Create individual input files with different seeds
             individual_resources = [

@@ -13,7 +13,7 @@ from remote_handler.scripts.input_models import OrcaSinglepointInput
 calcpath = Path(sys.argv[1])
 INPUTFILE = calcpath / "input_dft.json"
 input_config = OrcaSinglepointInput.from_file(INPUTFILE)
-input_config.validate()
+input_config.validate(calcpath)
 # ----------------------------------------------------------------------
 
 atoms = ase.io.read(calcpath / input_config.DATABASE)

@@ -8,10 +8,6 @@ from typing import Any, Optional, Union
 from remote_handler.atoms_handler import RemoteAtomsHandler
 from remote_handler.core import cluster_handler, file_handler, tasks
 from remote_handler.core.cluster_handler import ClusterConfig
-from remote_handler.scripts.input_models import (
-    DftSinglepointInput,
-    OrcaSinglepointInput,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -124,11 +120,6 @@ class VASPHandler(RemoteAtomsHandler):
             self.prepare_individual_data()
 
     def prepare_individual_data(self):
-        # Validate input dict against the script's expected schema
-        DftSinglepointInput.from_dict(
-            {**self.json_args, "DATABASE": "placeholder"}
-        )
-
         config_files = []
         atoms_batches = []
         for calc_idx in range(self.num_array_tasks):
@@ -267,11 +258,6 @@ class ORCAHandler(RemoteAtomsHandler):
             self.prepare_individual_data()
 
     def prepare_individual_data(self):
-        # Validate input dict against the script's expected schema
-        OrcaSinglepointInput.from_dict(
-            {**self.json_args, "DATABASE": "placeholder"}
-        )
-
         config_files = []
         atoms_batches = []
         for calc_idx in range(self.num_array_tasks):

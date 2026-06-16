@@ -1,5 +1,4 @@
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -14,13 +13,9 @@ from remote_handler.scripts.mace.mace_utils import (
 calcpath = Path(sys.argv[1])
 INPUTFILE = calcpath / "input_train.json"
 input_config = MaceTrainingInput.from_file(INPUTFILE)
-input_config.validate()
-
-for f in input_config.database_files:
-    assert os.path.exists(calcpath / f), f"missing database file {f}"
-assert os.path.exists(
-    calcpath / input_config.config_file
-), "Missing config_file"
+# Validate against calcpath so in-bundle paths (database_files, config_file)
+# are checked for existence here, before training starts.
+input_config.validate(calcpath)
 
 # (paths in JSON are relative to calcpath, e.g. "../../db.extxyz")
 database_path = combine_databases(input_config.database_files, calcpath)

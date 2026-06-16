@@ -1,6 +1,6 @@
+import os
 import sys
 from pathlib import Path
-import os
 
 import ase.io
 from ase.calculators.singlepoint import SinglePointCalculator
@@ -14,7 +14,7 @@ from remote_handler.scripts.input_models import DftSinglepointInput
 calcpath = Path(sys.argv[1])
 INPUTFILE = calcpath / "input_dft.json"
 input_config = DftSinglepointInput.from_file(INPUTFILE)
-input_config.validate()
+input_config.validate(calcpath)
 # ----------------------------------------------------------------------
 
 atoms = ase.io.read(calcpath / input_config.DATABASE)
