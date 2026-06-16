@@ -26,10 +26,11 @@ if TYPE_CHECKING:  # avoid a runtime import cycle (cluster_handler imports us)
     from remote_handler.core.cluster_handler import ClusterConfig
 
 # Backend names understood by the factory. SLURM is the default/back-compat
-# backend; further backends (e.g. a scheduler-free "direct" one) are added by
-# extending this tuple and the dispatch in the factories below.
+# backend; DIRECT runs scripts scheduler-free (local subprocess or one SSH
+# exec). Add a backend by extending this tuple and the dispatch below.
 SLURM = "slurm"
-_KNOWN_BACKENDS = (SLURM,)
+DIRECT = "direct"
+_KNOWN_BACKENDS = (SLURM, DIRECT)
 
 
 class Executor(ABC):
@@ -100,6 +101,12 @@ def make_single_executor(
         return cluster_handler.SlurmJobHandler(
             cluster_config=cluster_config, **kwargs
         )
+    if backend == DIRECT:
+        from remote_handler.core import direct_executor
+
+        return direct_executor.DirectSingleExecutor(
+            cluster_config=cluster_config, **kwargs
+        )
     # Unreachable: _select_backend already rejected unknown backends.
     raise ConfigurationError(  # pragma: no cover
         f"No SingleExecutor registered for backend '{backend}'."
@@ -115,6 +122,12 @@ def make_array_executor(
 
     if backend == SLURM:
         return cluster_handler.SlurmArrayHandler(
+            cluster_config=cluster_config, **kwargs
+        )
+    if backend == DIRECT:
+        from remote_handler.core import direct_executor
+
+        return direct_executor.DirectArrayExecutor(
             cluster_config=cluster_config, **kwargs
         )
     raise ConfigurationError(  # pragma: no cover

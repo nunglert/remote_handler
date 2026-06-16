@@ -19,6 +19,7 @@ Either way these auto-skip when no endpoint is reachable, so they are safe to
 keep in the suite. Run just these with ``pytest -m sshlive``.
 """
 
+import json
 import os
 import shutil
 import socket
@@ -30,6 +31,8 @@ import numpy as np
 import pytest
 from ase import Atoms
 
+from remote_handler.core import tasks
+from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import RemoteFileSystem
 from remote_handler.core.ssh_connection import ConfigBasedSSHClientProvider
 
@@ -245,3 +248,126 @@ def test_write_read_ase(ssh_container_fs):
     np.testing.assert_allclose(
         loaded[0].get_positions(), atoms.get_positions(), atol=1e-6
     )
+
+
+# --------------------------------------------------------------------------
+# Scheduler-free task execution over a real SSH connection.
+# --------------------------------------------------------------------------
+# These drive full SingleScriptTask/ArrayScriptTask pipelines through the
+# ``direct`` executor against the live sshd: real SFTP transfer + a real remote
+# ``python`` invocation + SFTP poll/collect, with NO scheduler and nothing
+# mocked. This is the executor+transport integration the SLURM-gated task
+# tests can't cover. (RemoteAtomsHandler adds ase-based sharding on top, which
+# is unit-tested separately and would need ase installed on the remote.)
+#
+# Payloads are stdlib-only, but they still need a remote ``python`` and
+# ``bash``: present on the CI ``SSHLIVE_HOST`` (localhost), absent on the bare
+# openssh-server container used for local dev -- hence the capability skip.
+
+# Writes its result + success marker into the cwd (the launcher cd's into the
+# calcdir; the input file is passed as an absolute path).
+_SINGLE_PAYLOAD = """
+import json, sys
+from pathlib import Path
+
+data = json.load(open(sys.argv[1]))
+Path("result.json").write_text(json.dumps({"sum": data["A"] + data["B"]}))
+Path("is_finished.info").write_text("done")
+"""
+
+# Each array shard receives its own dir as argv[1]; all paths relative to it.
+_ARRAY_PAYLOAD = """
+import json, sys
+from pathlib import Path
+
+calc = Path(sys.argv[1])
+data = json.load(open(calc / "input.json"))
+(calc / "result.json").write_text(json.dumps({"sum": data["A"] + data["B"]}))
+(calc / "is_finished.info").write_text("done")
+"""
+
+
+@pytest.fixture
+def direct_remote(ssh_container_fs):
+    """(fs, savepath, cluster_config) for a direct-executor run on the sshd.
+
+    Skips when the remote lacks the ``python``/``bash`` the payload needs.
+    """
+    fs = ssh_container_fs
+    probe = fs.run_command("command -v python && command -v bash")
+    if probe.returncode != 0:
+        pytest.skip("remote has no python/bash interpreter for direct exec")
+
+    savepath = fs.create_tempdir()
+    config = ClusterConfig(
+        remote_machine="sshlive",
+        partition="p",
+        conda_env="",  # empty -> no activation -> ambient remote python
+        conda_source="",
+        savepath=str(savepath),
+        template="unused.sh.j2",
+        executor="direct",
+    )
+    return fs, Path(savepath), config
+
+
+def test_direct_single_task_over_ssh(direct_remote, tmp_path):
+    """SingleScriptTask runs end-to-end over real SSH, no scheduler."""
+    fs, savepath, config = direct_remote
+
+    script = tmp_path / "single.py"
+    script.write_text(_SINGLE_PAYLOAD)
+    input_file = tmp_path / "input.json"
+    input_file.write_text(json.dumps({"A": 4, "B": 5}))
+
+    task = tasks.SingleScriptTask(
+        script_file=script,
+        input_file=input_file,
+        local_savepath=tmp_path / "results",
+        cluster_config=config,
+        remote_fs=fs,
+        loop_time=1,
+        remote_savepath=str(savepath / "calc"),
+    )
+
+    task.allocate_data()
+    task.submit()
+
+    assert task.finish_check()  # marker written by the remote run
+    local_result = tmp_path / "got.json"
+    fs.get(str(Path(task.calcdir) / "result.json"), local_result)
+    assert json.loads(local_result.read_text())["sum"] == 9
+
+
+def test_direct_array_task_over_ssh(direct_remote, tmp_path):
+    """ArrayScriptTask shards run end-to-end over real SSH, no scheduler."""
+    fs, savepath, config = direct_remote
+
+    script = tmp_path / "array.py"
+    script.write_text(_ARRAY_PAYLOAD)
+
+    n_shards = 3
+    inputs = [
+        tasks.DictJSON({"A": 100, "B": i}, "input.json", fs)
+        for i in range(n_shards)
+    ]
+
+    task = tasks.ArrayScriptTask(
+        local_savepath=tmp_path / "results",
+        cluster_config=config,
+        remote_fs=fs,
+        python_script_file=script,
+        individual_ressources=[inputs],
+        shared_ressources=[],
+        loop_time=1,
+        remote_savepath=str(savepath),
+    )
+
+    task.allocate_data()
+    task.submit()
+
+    assert task.finish_check()
+    for i in range(n_shards):
+        local_result = tmp_path / f"got_{i}.json"
+        fs.get(str(task.calcdir / str(i) / "result.json"), local_result)
+        assert json.loads(local_result.read_text())["sum"] == 100 + i

@@ -8,9 +8,11 @@ import random
 import shutil
 import socket
 import string
+import subprocess
 import tempfile
 import time
 from abc import ABC, abstractmethod
+from collections import namedtuple
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +33,10 @@ from remote_handler.core.ssh_connection import (
 from remote_handler.exceptions import FileSystemError, RemoteConnectionError
 
 logger = logging.getLogger(__name__)
+
+# Result of ``run_command`` -- a uniform shape across local/remote execution so
+# callers (e.g. the scheduler-free DirectExecutor) don't branch on transport.
+CommandResult = namedtuple("CommandResult", ["returncode", "stdout", "stderr"])
 
 
 class NumpyEncoder(json.JSONEncoder):
@@ -378,6 +384,17 @@ class LocalFileSystem(FileSystemHandlerBase):
             path (str): The path of the file to remove.
         """
         os.remove(path)
+
+    def run_command(self, command: str) -> CommandResult:
+        """Run a shell command on the local machine.
+
+        Counterpart to :meth:`RemoteFileSystem.run_command`, so executor code
+        can launch work the same way regardless of where the filesystem lives.
+        """
+        result = subprocess.run(
+            command, shell=True, capture_output=True, text=True
+        )
+        return CommandResult(result.returncode, result.stdout, result.stderr)
 
 
 def reconnect_on_failure(func):
@@ -782,3 +799,19 @@ class RemoteFileSystem(FileSystemHandlerBase):
             raise FileSystemError(
                 f"Failed to remove remote file: {path}"
             ) from e
+
+    @reconnect_on_failure
+    def run_command(self, command: str) -> CommandResult:
+        """Run a command on the remote host over the SSH connection.
+
+        Uses the same authenticated paramiko client as the SFTP transport, so
+        it honours whatever ssh-config/credentials the filesystem connected
+        with (no separate ``ssh`` subprocess, no dependency on the default
+        ``~/.ssh/config``). Detached launches (``nohup ... &``) return at once
+        because the foreground statement exits immediately.
+        """
+        _, stdout, stderr = self.ssh_client.exec_command(command)
+        returncode = stdout.channel.recv_exit_status()
+        out = stdout.read().decode(errors="replace")
+        err = stderr.read().decode(errors="replace")
+        return CommandResult(returncode, out, err)
