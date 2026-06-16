@@ -11,8 +11,12 @@ from pathlib import Path
 import ase.io
 import numpy as np
 import pytest
-from _foundation import foundation_model_path
-from _mace import mace_available, mace_freeze_available, mace_run_train_script
+from _capabilities import (
+    foundation_model_path,
+    mace_available,
+    mace_freeze_available,
+    mace_run_train_script,
+)
 from _markers import requires_local_slurm
 from ase import Atoms
 

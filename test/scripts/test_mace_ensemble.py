@@ -9,7 +9,7 @@ import pytest
 torch = pytest.importorskip("torch")
 pytest.importorskip("torch_sim")
 
-from _foundation import MODEL_ASSET
+from _capabilities import MODEL_ASSET
 from ase.build import bulk
 from torch_sim.models.mace import MaceModel
 

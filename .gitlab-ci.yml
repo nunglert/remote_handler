@@ -41,7 +41,7 @@ test:
     - python -V
     - pip install --upgrade pip
     # Non-editable install -> exercises the real build + packaging pipeline.
-    - pip install ".[dev,mace,torch_sim,clinamen,quests]"
+    - pip install ".[dev,mace_freeze,torch_sim,clinamen,quests,neuralil]"
     - python -c "import remote_handler; print('install OK:', remote_handler.__file__)"
     # Best-effort: stand up a localhost sshd so the `sshlive` tier does a real
     # SSH/SFTP round-trip in CI. This needs in-container root (the Docker

@@ -9,8 +9,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from _foundation import foundation_model_available, foundation_model_path
-from _markers import requires_local_slurm
+from _capabilities import foundation_model_available, foundation_model_path
+from _markers import TEST_DEVICE, requires_local_slurm
 from ase import Atoms
 from ase.build import bulk
 from ase.constraints import FixAtoms
@@ -91,7 +91,7 @@ class TestTorchSimScriptIntegration:
             "n_steps_npt": 0,
             "n_steps_pt": 5,
             "seed": 42,
-            "device": "cuda",
+            "device": TEST_DEVICE,
             "dtype": "float64",
         }
         input_file.write_text(json.dumps(input_data))
@@ -157,7 +157,7 @@ class TestTorchSimScriptIntegration:
             "n_steps_npt": 0,
             "n_steps_pt": 5,
             "seed": 42,
-            "device": "cuda",
+            "device": TEST_DEVICE,
             "dtype": "float64",
         }
         input_file.write_text(json.dumps(input_data))
@@ -213,7 +213,7 @@ class TestTorchSimScriptIntegration:
             "n_steps_npt": 3,
             "n_steps_pt": 5,
             "seed": 42,
-            "device": "cuda",
+            "device": TEST_DEVICE,
             "dtype": "float64",
         }
         input_file.write_text(json.dumps(input_data))
@@ -271,7 +271,7 @@ class TestTorchSimScriptIntegration:
             "n_steps_npt": 0,
             "n_steps_pt": 5,
             "seed": 42,
-            "device": "cuda",
+            "device": TEST_DEVICE,
             "dtype": "float64",
         }
         input_file.write_text(json.dumps(input_data))
@@ -349,7 +349,7 @@ class TestTorchSimScriptIntegration:
             "n_steps_npt": 0,
             "n_steps_pt": 5,
             "seed": 42,
-            "device": "cuda",
+            "device": TEST_DEVICE,
             "dtype": "float64",
         }
         input_file.write_text(json.dumps(input_data))
@@ -436,7 +436,7 @@ class TestTorchSimSamplerIntegration:
             dt=0.001,
             n_steps_pt=5,
             seed=42,
-            device="cuda",
+            device=TEST_DEVICE,
             dtype="float64",
             stub=False,
             remote_savepath=remote_savepath,
@@ -504,7 +504,7 @@ class TestTorchSimSamplerIntegration:
             dt=0.001,
             n_steps_pt=5,
             seed=42,
-            device="cuda",
+            device=TEST_DEVICE,
             dtype="float64",
             stub=False,
             remote_savepath=remote_savepath,
@@ -617,7 +617,7 @@ class TestTorchSimSamplerIntegration:
             dt=0.001,
             n_steps_pt=5,
             seed=42,
-            device="cuda",
+            device=TEST_DEVICE,
             dtype="float64",
             stub=False,
             remote_savepath=remote_savepath,

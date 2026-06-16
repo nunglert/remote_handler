@@ -22,3 +22,24 @@ def requires_local_slurm(test):
         shutil.which("sbatch") is None,
         reason="SLURM (sbatch) not available on this machine",
     )(test)
+
+
+def _cuda_available():
+    """True if a CUDA GPU is visible to torch (False if torch is absent)."""
+    try:
+        import torch
+
+        return torch.cuda.is_available()
+    except Exception:
+        return False
+
+
+# Skip a test that genuinely requires an NVIDIA GPU (no CPU code path).
+requires_cuda = pytest.mark.skipif(
+    not _cuda_available(), reason="needs an NVIDIA GPU (CUDA)"
+)
+
+# Device for *device-flexible* integration tests: the GPU when present (dev
+# boxes) else CPU (CPU-only CI). The torch_sim sampling script runs on both,
+# so these tests exercise it on whatever hardware is available.
+TEST_DEVICE = "cuda" if _cuda_available() else "cpu"

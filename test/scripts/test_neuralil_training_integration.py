@@ -26,7 +26,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from _neuralil import jax_available, neuralil_available
+from _capabilities import jax_available, neuralil_available
 
 NEURALIL_SCRIPT = "remote_handler.scripts.neuralil.neuralil_training"
 

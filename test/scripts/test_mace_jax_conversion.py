@@ -15,8 +15,7 @@ import pickle
 from pathlib import Path
 
 import pytest
-from _foundation import foundation_model_path
-from _mace import mace_jax_available
+from _capabilities import foundation_model_path, mace_jax_available
 
 
 def test_finetuning_stub_convert_to_jax(tmp_path, local_fs):
