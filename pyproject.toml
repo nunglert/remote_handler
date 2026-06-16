@@ -118,7 +118,7 @@ testpaths = ["test"]
 # Default run = unit only: integration and sshlive are deselected here; the
 # remote tier is left in so it reports an informative skip when unconfigured.
 # -ra prints a summary of skip/xfail/error reasons so nothing is hidden.
-addopts = "-m 'not integration and not remote' -ra"
+addopts = "-m 'not remote' -ra"
 markers = [
     "remote: needs a configured live cluster; auto-skips when REMOTE_HANDLER_CONFIG_DIR/remote.json is absent",
     "local: file-handler variant running against the local filesystem; no cluster needed",
