@@ -13,7 +13,7 @@ pre-commit hooks:
 
 .. code-block:: bash
 
-   git clone <repo-url>
+   git clone git@gitlab.tuwien.ac.at:e165-03-1_theoretische_materialchemie/madsen-s-research-group/remote_handler.git
    cd remote_handler
    pip install -e ".[dev]"      # pytest + pytest-cov + pre-commit
    pre-commit install           # run black/isort/eof checks on every commit

@@ -704,8 +704,13 @@ class ActiveLearningHandler(ABC):
             # calchome may not exist yet: initial_*_out files are moved in
             # during __init__, before the per-iteration dir structure is built.
             os.makedirs(self.calchome, exist_ok=True)
-            file_home = self.calchome / os.path.split(file)[1]
-            shutil.copy(file, file_home)
+            file_home = self.calchome / file.name
+            # initial_*_out may be a directory (e.g. a mace-jax model bundle),
+            # not just a single file -- copy the whole tree in that case.
+            if file.is_dir():
+                shutil.copytree(file, file_home, dirs_exist_ok=True)
+            else:
+                shutil.copy(file, file_home)
             file = file_home
         return file
 

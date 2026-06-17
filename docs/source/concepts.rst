@@ -18,19 +18,6 @@ results. The science runs on the remote, inside its own environment.
 
 The package is organised in three layers:
 
-.. mermaid::
-
-   flowchart TB
-       subgraph host ["Host machine (orchestration)"]
-           W["workflows/ -- active-learning loop"]
-           C["core/ -- transport + execution primitives"]
-           W --> C
-       end
-       subgraph remote ["Remote cluster (compute)"]
-           S["scripts/ -- remote payloads"]
-       end
-       C -->|"SSH / SFTP"| S
-
 ``core/``
     Transport and execution primitives: SSH/SFTP connections, filesystem
     handlers, the executor abstraction, and the task definitions.

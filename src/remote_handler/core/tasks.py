@@ -351,6 +351,19 @@ class SingleScriptTask(RemoteTask):
         """
         return self.file_allocator.copy_file(local_path)
 
+    def copy_path(self, local_path):
+        """Copy a local file *or* directory tree to the remote calcdir.
+
+        Use this instead of :meth:`copy_file` when the artifact may be a
+        directory (e.g. a mace-jax model bundle); files behave identically.
+
+        Args:
+            local_path: Path to the local file or directory.
+        Returns:
+            The path to the file/directory on the remote machine.
+        """
+        return self.file_allocator.copy_path(local_path)
+
     def allocate_data(self):
         """Allocate the script and input file on the remote machine and
         prepare the slurm job script.
@@ -533,6 +546,27 @@ class FileAllocator:
         moved_path = self.rootpath / os.path.split(local_path)[-1]
         self.remote_fs.put(local_path, moved_path)
         logger.debug(f"Copied {local_path} to {moved_path}")
+        return moved_path
+
+    def copy_path(self, local_path: os.PathLike) -> Path:
+        """Copy a local file *or* directory tree to remote rootpath.
+
+        Like :meth:`copy_file`, but if ``local_path`` is a directory (e.g. a
+        mace-jax model bundle of ``config.json`` + ``params.msgpack``) it is
+        uploaded recursively via ``put_dir`` rather than the single-file
+        ``put``. A plain file is handled exactly as ``copy_file`` would.
+
+        Args:
+            local_path: Path to the local file or directory to copy
+
+        Returns:
+            Path to the file/directory on the remote machine
+        """
+        if not Path(local_path).is_dir():
+            return self.copy_file(local_path)
+        moved_path = self.rootpath / Path(local_path).name
+        self.remote_fs.put_dir(local_path, moved_path)
+        logger.debug(f"Copied directory {local_path} to {moved_path}")
         return moved_path
 
     def allocate_shared_resources(
@@ -891,6 +925,19 @@ class ArrayScriptTask(RemoteTask):
             The path to the file on the remote machine.
         """
         return self.file_allocator.copy_file(local_path)
+
+    def copy_path(self, local_path):
+        """Copy a local file *or* directory tree to the remote rootpath.
+
+        Use this instead of :meth:`copy_file` when the artifact may be a
+        directory (e.g. a mace-jax model bundle); files behave identically.
+
+        Args:
+            local_path: Path to the local file or directory.
+        Returns:
+            The path to the file/directory on the remote machine.
+        """
+        return self.file_allocator.copy_path(local_path)
 
     def allocate_data(self, slurm_only: bool = False):
         """Allocate the script and input files on the remote machine and

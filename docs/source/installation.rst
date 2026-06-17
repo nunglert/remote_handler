@@ -24,7 +24,7 @@ Clone the repository and install in editable (development) mode:
 
 .. code-block:: bash
 
-   git clone <your-gitlab-repo-url>
+   git clone git@gitlab.tuwien.ac.at:e165-03-1_theoretische_materialchemie/madsen-s-research-group/remote_handler.git
    cd remote_handler
    pip install -e .
 
