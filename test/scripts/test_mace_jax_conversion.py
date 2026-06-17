@@ -95,7 +95,6 @@ def test_convert_torch_model_to_jax(tmp_path):
 
 
 @pytest.mark.integration
-@pytest.mark.heavy
 @pytest.mark.skipif(
     not mace_jax_available(),
     reason="needs torch MACE + mace-jax (.[mace_freeze,mace_jax])",

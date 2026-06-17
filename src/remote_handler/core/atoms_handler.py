@@ -30,10 +30,11 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
     into the original file structure.
 
     Architecture:
-        - Inherits from ArrayScriptTask for SLURM job submission infrastructure
-        - Composes AtomsShardManager for domain-specific Atoms handling logic
-        - Delegates trajectory operations to shard_manager
-        - Orchestrates the overall workflow
+
+    - Inherits from ArrayScriptTask for SLURM job submission infrastructure
+    - Composes AtomsShardManager for domain-specific Atoms handling logic
+    - Delegates trajectory operations to shard_manager
+    - Orchestrates the overall workflow
 
     Args:
         traj_files: List of extxyz files containing atomic configurations.
@@ -67,18 +68,18 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
         Given a set of 3 trajectory files, containing 50 configs per file,
         with a shard_size of 20, this will shard the configs in 8 batches
         (arising from ceil(3 * 50 / 20)). For each batch a directory will be
-        created in `savepath/calcdirs`. After the computations were run,
-        the `savepath` should look like this:
+        created in ``savepath/calcdirs``. After the computations were run,
+        the ``savepath`` should look like this::
 
-        savepath
-        |___calcdirs
-            |___0
-            |   |___0.extxyz
-            |   |___input_opt.json
-            |   |___opt_0.extxyz
-            |
-            |___1
-                |___ ...
+            savepath
+            |___calcdirs
+                |___0
+                |   |___0.extxyz
+                |   |___input_opt.json
+                |   |___opt_0.extxyz
+                |
+                |___1
+                    |___ ...
 
         The opt_X.extxyz files are collected and redistributed into the shape
         of the original trajectory files.

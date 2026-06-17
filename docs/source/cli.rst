@@ -23,10 +23,16 @@ Overview
      - Build the **global** configuration and persist it.
    * - ``remote_handler configure cluster [NAME]``
      - Create or edit a per-cluster ``ClusterConfig`` JSON.
+   * - ``remote_handler configure test [NAME]``
+     - Set which cluster the ``remote`` test tier targets.
    * - ``remote_handler check [--connect]``
      - Validate the configuration and diagnose remote setup.
    * - ``remote_handler show [--json]``
      - Print the resolved configuration and where it came from.
+   * - ``remote_handler show templates``
+     - List the registered SLURM templates and their file paths.
+   * - ``remote_handler show clusters``
+     - List the registered cluster configs and their file paths.
    * - ``remote_handler --version``
      - Print the package version.
 
@@ -82,6 +88,11 @@ guaranteed to load:
    from remote_handler.core.cluster_handler import ClusterConfig
 
    config = ClusterConfig.from_file("lugus.json")   # no env var needed
+   config = ClusterConfig.from_name("lugus")        # same, by registered name
+
+``ClusterConfig.from_name("lugus")`` looks up ``lugus.json`` in the config
+directory written by ``configure cluster`` and raises a helpful error listing
+the available clusters if it is not registered.
 
 ``configure cluster``
 ---------------------
@@ -115,6 +126,23 @@ Prompts for the global defaults and writes the persistent config file:
    Default conda activation source [~/miniconda3/bin/activate]:
    Wrote /home/me/.config/remote_handler/config.json
    Configuration persisted; REMOTE_HANDLER_CONFIG_DIR is no longer required.
+
+``configure test``
+------------------
+
+Records which cluster the ``remote`` test tier runs against, by writing a
+``test_cluster`` entry into the global config. The test fixtures then load
+``<test_cluster>.json`` instead of defaulting to ``remote.json``:
+
+.. code-block:: bash
+
+   $ remote_handler configure test lugus
+   Set test_cluster to lugus (was (remote.json))
+
+Pass the name as an argument or you will be prompted (the known clusters are
+offered as a hint). Passing an empty value clears the setting, restoring the
+``remote.json`` default. A warning is shown if the named cluster JSON does not
+exist yet, but the setting is still written.
 
 ``check``
 ---------
@@ -166,6 +194,29 @@ discovered cluster configs). Use ``--json`` for machine-readable output:
    default_partition: normal
    default_conda_env: base
    default_conda_source: ~/miniconda3/bin/activate
+   test_cluster: (remote.json)
    template search dirs:
      - .../remote_handler/templates
    clusters: lugus
+
+When ``REMOTE_HANDLER_CONFIG_DIR`` is set it is shown as an explicit override
+line, and ``test_cluster`` reflects any value set via ``configure test``.
+
+``show templates`` / ``show clusters``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Two sub-listings print the discovered resources as ``name<TAB>path`` pairs,
+handy for scripting or confirming what the resolver sees:
+
+.. code-block:: bash
+
+   $ remote_handler show templates
+   datalab.sh.j2	/.../remote_handler/templates/datalab.sh.j2
+   dirona.sh.j2	/.../remote_handler/templates/dirona.sh.j2
+
+   $ remote_handler show clusters
+   lugus	~/.config/remote_handler/lugus.json
+
+``show templates`` walks the template search path in priority order, so when
+the same template name exists in both a custom directory and the built-ins, the
+higher-priority one wins (matching how jobs actually resolve templates).

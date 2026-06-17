@@ -10,10 +10,12 @@ computational workflows involving atomic simulations, DFT calculations, and acti
    :caption: Contents:
 
    installation
+   concepts
    cli
    quickstart
    api/index
    examples
+   contributing
 
 Features
 --------

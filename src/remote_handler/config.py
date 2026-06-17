@@ -46,27 +46,23 @@ def get_persistent_config_file() -> Path:
 class RemoteHandlerConfig:
     """Centralized configuration for remote_handler.
 
-    Attributes:
-        config_dir: Directory containing cluster configuration JSON files
-        slurm_templates_dir: Directory containing custom SLURM job templates
-        default_partition: Default SLURM partition for job submission
-        default_conda_env: Default conda environment name
-        default_conda_source: Default path to conda activation script
-        test_cluster: Name (without ``.json``) of the per-cluster config used
-            as the target for the ``remote`` test tier. ``None`` means fall
-            back to ``remote.json``.
+    Each field is documented inline below.
     """
 
-    # Directories
+    #: Directory containing cluster configuration JSON files.
     config_dir: Optional[Path] = None
+    #: Directory containing custom SLURM job templates.
     slurm_templates_dir: Optional[Path] = None
 
-    # Default cluster settings
+    #: Default SLURM partition for job submission.
     default_partition: str = "normal"
+    #: Default conda environment name.
     default_conda_env: str = "base"
+    #: Default path to conda activation script.
     default_conda_source: str = "~/miniconda3/bin/activate"
 
-    # Which cluster the ``remote`` test tier targets (name without ".json").
+    #: Name (without ``.json``) of the per-cluster config used as the target
+    #: for the ``remote`` test tier. ``None`` falls back to ``remote.json``.
     test_cluster: Optional[str] = None
 
     @classmethod

@@ -129,6 +129,64 @@ class ClusterConfig:
         return cls(**known)
 
     @classmethod
+    def from_name(cls, name: str) -> "ClusterConfig":
+        """Load the cluster registered under ``name`` (e.g. ``"lugus"``).
+
+        Looks for ``<name>.json`` in the resolved config directory -- where
+        ``remote_handler configure cluster <name>`` writes it -- and loads it.
+        A trailing ``.json`` in ``name`` is accepted and ignored, so both
+        ``from_name("lugus")`` and ``from_name("lugus.json")`` work.
+
+        Args:
+            name: Registered cluster name (the ``<name>.json`` stem).
+
+        Returns:
+            ClusterConfig loaded from the registered JSON.
+
+        Raises:
+            ConfigurationError: If no cluster is registered under ``name``.
+                The message lists the names that *are* available.
+
+        Example:
+            >>> config = ClusterConfig.from_name("lugus")
+        """
+        stem = name[:-5] if name.endswith(".json") else name
+        config_dir = get_config().config_dir
+        config_path = Path(config_dir) / f"{stem}.json" if config_dir else None
+
+        if config_path is None or not config_path.exists():
+            available = cls.available_names()
+            hint = (
+                "Available clusters: " + ", ".join(available)
+                if available
+                else "No clusters are configured yet -- create one with "
+                f"'remote_handler configure cluster {stem}'."
+            )
+            raise ConfigurationError(
+                f"No cluster named '{stem}' is configured in {config_dir}.\n"
+                f"{hint}"
+            )
+
+        return cls.from_file(str(config_path))
+
+    @classmethod
+    def available_names(cls) -> list[str]:
+        """Names of clusters registered in the resolved config directory.
+
+        These are the ``<name>.json`` stems (excluding the global
+        ``config.json``) that :meth:`from_name` accepts. Returns an empty
+        list when nothing is configured.
+        """
+        config_dir = get_config().config_dir
+        if not config_dir or not Path(config_dir).is_dir():
+            return []
+        return sorted(
+            p.stem
+            for p in Path(config_dir).glob("*.json")
+            if p.name != "config.json"
+        )
+
+    @classmethod
     def from_dict(cls, config_dict: dict) -> "ClusterConfig":
         """
         Create a ClusterConfig from a dictionary.

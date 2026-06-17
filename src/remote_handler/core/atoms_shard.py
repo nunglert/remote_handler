@@ -153,13 +153,14 @@ class AtomsShardManager:
             local_fs: Filesystem handler for reading trajectory files.
 
         Returns:
-            List of Atoms objects. Two attributes are stored as entries in the info
-            dict:
-                file_index: The index of the trajectory file from which the
-                    configuration was taken.
-                iteration_index: The index of the configuration in its
-                    original file.
-            This makes each Atoms object unambiguously attributable to its origin.
+            List of Atoms objects. Two attributes are stored as entries in the
+            ``info`` dict, making each Atoms object unambiguously attributable
+            to its origin:
+
+            - ``file_index``: The index of the trajectory file from which the
+              configuration was taken.
+            - ``iteration_index``: The index of the configuration in its
+              original file.
         """
         all_atoms = []
         for file_idx, file in enumerate(traj_files):

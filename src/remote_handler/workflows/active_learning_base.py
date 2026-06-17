@@ -170,7 +170,7 @@ def process_progress(
         iteration_idx = last_iteration_key
 
         if steps in [[1, 1, 1], [1, 1, 0], [1, 0, 0]]:
-            if not combine_trainer_outputs and last_iteration_key is not 0:
+            if not combine_trainer_outputs and last_iteration_key != 0:
                 # not needed if combine is true since the previous generation
                 # trainer_output would have already been added above
                 append_or_extend(

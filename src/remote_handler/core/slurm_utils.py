@@ -69,7 +69,7 @@ def submit_job(
     # Execute the submission command and capture the output
     result = _run_ssh(submit_cmd, connection_policy)
     # In the stdout, we expect to find the job ID
-    match = re.search("(\d+)", result.stdout)
+    match = re.search(r"(\d+)", result.stdout)
     if match is not None:
         return match.groups()[0]
     else:
@@ -229,6 +229,7 @@ def get_array_slurm_str(
     Get the SLURM script for an array job as a string.
     The directories contained in TEMPLATE_DIRS will be scanned in order
     until the first succesful hit of a `header_template` file.
+
     Args:
         calcdir (os.PathLike): Path to the calculation directory.
         python_script_path (os.PathLike): Path to the python script to be executed.

@@ -208,6 +208,7 @@ class SlurmJobHandler(SlurmHandlerBase, SingleExecutor):
     ):
         """
         Write the slurm jobfile for a single job.
+
         Args:
             input_file: Path to the input file that is used in the job.
             python_script_path: Path to the python script that is executed in
@@ -339,6 +340,7 @@ class SlurmArrayHandler(SlurmHandlerBase, ArrayExecutor):
     def write_jobfile(self, python_script_path, num_array_tasks):
         """
         Write the slurm jobfile for the array job.
+
         Args:
             python_script_path: Path to the python script that is executed in
                 each array job.

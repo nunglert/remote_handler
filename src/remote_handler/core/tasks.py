@@ -43,18 +43,19 @@ class RemoteTask(ABC):
     - how can I properly check (on top of slurm) whether your job finished?
 
     Methods that need to be implemented are:
-    - `allocate_data`: Logic for the allocation of files on the remote file
-        system required for the task.
-    - `submit`: Logic for the submission of the job. This can be a simple
-        `subprocess.run(...)` call, but can also include more elaborate slurm
-        handling via `remote_handler.core.cluster_handler`.
-    - `collect_results`: Logic for the collection of results. This can be a
-        simple copy of files from the remote machine to the host, but can also
-        include parsing of files and returning only the relevant information.
-    - `finish_check` (optional): Logic for an additional check whether the job
-        finished properly. This is useful, as slurm does not know anything about
-        your job itself. Hence, this can be a good complementary way of checking
-        whether a job has really finished.
+
+    - ``allocate_data``: Logic for the allocation of files on the remote file
+      system required for the task.
+    - ``submit``: Logic for the submission of the job. This can be a simple
+      ``subprocess.run(...)`` call, but can also include more elaborate slurm
+      handling via ``remote_handler.core.cluster_handler``.
+    - ``collect_results``: Logic for the collection of results. This can be a
+      simple copy of files from the remote machine to the host, but can also
+      include parsing of files and returning only the relevant information.
+    - ``finish_check`` (optional): Logic for an additional check whether the
+      job finished properly. This is useful, as slurm does not know anything
+      about your job itself. Hence, this can be a good complementary way of
+      checking whether a job has really finished.
 
     Args:
         logfile: A log file on the host machine where output is printed
@@ -465,9 +466,10 @@ class Writeable(ABC):
         prepare in the directory of the job.
 
         Methods that need to be implemented are:
-        - `write`: Logic for writing the content to disk. This can be a simple
-            write to a file, but can also include more elaborate logic like
-            writing an ASE trajectory file.
+
+        - ``write``: Logic for writing the content to disk. This can be a
+          simple write to a file, but can also include more elaborate logic
+          like writing an ASE trajectory file.
     """
 
     content: Any

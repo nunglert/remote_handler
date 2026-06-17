@@ -27,6 +27,7 @@ extensions = [
     "sphinx.ext.intersphinx",  # Link to other projects' docs
     "sphinx.ext.autosummary",  # Generate summary tables
     "sphinx_autodoc_typehints",  # Better type hint rendering
+    "sphinxcontrib.mermaid",  # Mermaid diagrams in docs
 ]
 
 templates_path = ["_templates"]

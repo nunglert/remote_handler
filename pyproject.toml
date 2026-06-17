@@ -41,6 +41,8 @@ docs = [
     "sphinx>=7.0",
     "sphinx-autodoc-typehints",
     "sphinx-rtd-theme",
+    "sphinx-autobuild",
+    "sphinxcontrib-mermaid",
 ]
 torch_sim = [
     "mace-torch==0.3.14",
@@ -125,7 +127,6 @@ markers = [
     "integration: needs the ML stack (mace/torch_sim/clinamen) installed; deselected by default",
     "slurm: needs a working local sbatch (job-submission orchestration); auto-skips when sbatch is absent",
     "sshlive: real SSH/SFTP round-trip against a throwaway Docker container; auto-skips when Docker is unavailable; deselected by default",
-    "heavy: slow tests",
 ]
 
 [tool.coverage.run]

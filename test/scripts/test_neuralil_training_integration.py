@@ -9,7 +9,7 @@ NeuralIL stack (``pip install .[neuralil]``):
   load the module);
 * the end-to-end ``neuralil_training.py`` entry point, run as a subprocess in
   stub mode (fast, proves the import chain works without jaxnest) and in a
-  minimal real-training mode (``heavy``).
+  minimal real-training mode.
 
 All ``remote_handler.scripts.neuralil`` imports are done *inside* the tests so
 that collecting this file never fails when the stack is absent -- the skipif
@@ -290,7 +290,6 @@ class TestNeuralilTrainingScript:
         ]:
             assert (out_dir / name).exists(), f"missing stub output {name}"
 
-    @pytest.mark.heavy
     def test_real_training_writes_model(self, tmp_path):
         """A minimal real training run (1 epoch, 2-model ensemble, onecycle).
 

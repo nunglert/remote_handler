@@ -56,17 +56,9 @@ class FileSystemHandlerBase(ABC):
     file system.
 
     This class provides an abstract interface for common file operations
-    that can work with both local and remote file systems.
-
-    Methods:
-        get(remote, local): Abstract method to copy a file from a remote
-            machine to the local machine.
-        put(local, remote): Abstract method to copy a file or directory from
-            the local machine to a remote machine.
-        makedirs(path, exist_ok=False): Abstract method to create a directory
-            at the specified path, including any necessary parent directories.
-        mkdir(path): Abstract method to create a directory at the specified
-            path.
+    that can work with both local and remote file systems. The concrete
+    operations (``get``, ``put``, ``makedirs``, ``mkdir``, ...) are documented
+    on their individual methods below.
     """
 
     def __init__(self):
@@ -221,10 +213,12 @@ class FileSystemHandlerBase(ABC):
         """
         Ensure that the provided path is unique by appending a timestamp if it
         already exists.
+
         Args:
             path (str): The original file or directory path.
             is_directory (bool, optional): If True, indicates that the path is a
                 directory. Defaults to False.
+
         Returns:
             str: A unique file or directory path.
         """
@@ -280,6 +274,7 @@ class LocalFileSystem(FileSystemHandlerBase):
         """
         Create a directory at the specified path, including any necessary
         parent directories.
+
         Args:
             path (str): The directory path to create.
             exist_ok (bool, optional): If True, do not raise an error if the
@@ -290,6 +285,7 @@ class LocalFileSystem(FileSystemHandlerBase):
     def mkdir(self, path: os.PathLike) -> None:
         """
         Create a directory at the specified path.
+
         Args:
             path (str): The directory path to create.
         """
@@ -297,6 +293,7 @@ class LocalFileSystem(FileSystemHandlerBase):
 
     def rmtree(self, path: os.PathLike, ignore_errors=True) -> None:
         """Recursively delete a directory on the local filesystem.
+
         Args:
             path (str): The path of the directory to delete.
             ignore_errors (bool, optional): If True, ignore errors during
@@ -583,10 +580,12 @@ class RemoteFileSystem(FileSystemHandlerBase):
     @reconnect_on_failure
     def makedirs(self, path: os.PathLike, exist_ok=False) -> None:
         """SFTP makedirs with automatic reconnect on failure.
+
         Args:
             path (str): The directory path to create.
             exist_ok (bool, optional): If True, do not raise an error if the
-                directory already exists. Defaults to False."""
+                directory already exists. Defaults to False.
+        """
         path = str(path)
         try:
             self.sftp_client.mkdir(path)
