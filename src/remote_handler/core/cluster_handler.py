@@ -1,180 +1,25 @@
-"""Cluster and SLURM job management for remote HPC systems."""
+"""SLURM job submission/management for remote HPC systems.
 
-import importlib.resources as pkg_resources
-import json
+The backend-agnostic ``ClusterConfig`` now lives in
+:mod:`remote_handler.core.cluster_config`; it is re-exported here for backward
+compatibility (``from ...cluster_handler import ClusterConfig`` still works).
+"""
+
 import logging
 import os
-import re
 import subprocess
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, fields
-from importlib import resources
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
-from jinja2 import Environment, FileSystemLoader
-
-from remote_handler.config import get_config
-from remote_handler.core import file_handler, resilience, slurm_utils
+from remote_handler.core import file_handler, remote_env, slurm_utils
+from remote_handler.core.cluster_config import ClusterConfig
 from remote_handler.core.executors import ArrayExecutor, SingleExecutor
 from remote_handler.core.file_handler import FileSystemHandlerBase
-from remote_handler.exceptions import (
-    ConfigurationError,
-    DependencyError,
-    FileSystemError,
-)
+from remote_handler.exceptions import DependencyError, FileSystemError
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class ClusterConfig:
-    """
-    Configuration for a remote cluster with SLURM job scheduling.
-
-    This class encapsulates all cluster-specific settings needed for
-    submitting and managing SLURM jobs on a remote HPC system.
-
-    Args:
-        remote_machine: SSH alias or hostname of the remote cluster
-        partition: SLURM partition name to submit jobs to
-        conda_env: Name of the conda environment to activate on the cluster
-        savepath: Default path on the cluster where computations are saved
-        template: Name of the Jinja2 template file for SLURM job headers
-        resilient_connection: Opt-in. When True, SSH operations to this cluster
-            pause-and-retry instead of crashing if the connection/credential
-            drops (e.g. an expired ``step ssh login`` cert), resuming once it
-            is refreshed. Off by default; most clusters don't need it.
-        connection_retry_interval: Seconds between retries while paused.
-        connection_max_wait: Give up after this many seconds paused; ``None``
-            (default) waits indefinitely until the credential is refreshed.
-        executor: Which execution backend to run jobs through. ``"slurm"``
-            (default) submits via sbatch; other backends are selected by the
-            executor factory. Unset in a config JSON means ``"slurm"``.
-
-    Example:
-        >>> config = ClusterConfig.from_file("my_cluster.json")
-        >>> print(config.remote_machine)
-        'my-hpc-cluster'
-    """
-
-    remote_machine: str
-    partition: str
-    conda_env: str
-    conda_source: str
-    savepath: str
-    template: str
-    resilient_connection: bool = False
-    connection_retry_interval: float = 60.0
-    connection_max_wait: Optional[float] = None
-    executor: str = "slurm"
-
-    def __post_init__(self) -> None:
-        # SFTP never expands '~', so a tilde savepath can never resolve. Reject
-        # it at construction (covers from_dict / from_file / direct) instead of
-        # letting it fail deep in a transfer as a bare "No such file".
-        if str(self.savepath).startswith("~"):
-            raise ConfigurationError(
-                f"savepath '{self.savepath}' uses '~', which is not "
-                "supported: SFTP does not expand '~'. Use an absolute remote "
-                "path (e.g. '/home/<user>/...')."
-            )
-
-    @property
-    def connection_policy(self) -> "resilience.ConnectionPolicy":
-        """Build the ``ConnectionPolicy`` described by this config."""
-        return resilience.ConnectionPolicy(
-            enabled=self.resilient_connection,
-            poll_interval=self.connection_retry_interval,
-            max_wait=self.connection_max_wait,
-        )
-
-    @classmethod
-    def from_file(cls, config_file: str) -> "ClusterConfig":
-        """
-        Load cluster configuration from a JSON file.
-
-        Args:
-            config_file: Path to the configuration file. Can be either:
-                - An absolute path to a JSON file
-                - A relative filename (will be searched in REMOTE_HANDLER_CONFIG_DIR)
-
-        Returns:
-            ClusterConfig instance with loaded configuration
-
-        Raises:
-            ConfigurationError: If the config file doesn't exist or config directory not set
-                               for relative paths
-
-        Example:
-            >>> # Using absolute path
-            >>> config = ClusterConfig.from_file("/home/user/configs/cluster.json")
-            >>> # Using relative path (requires REMOTE_HANDLER_CONFIG_DIR)
-            >>> config = ClusterConfig.from_file("cluster.json")
-        """
-        if os.path.isabs(config_file):
-            config_path = Path(config_file)
-            if not config_path.exists():
-                raise ConfigurationError(
-                    f"Configuration file does not exist: {config_file}"
-                )
-        else:
-            # Use centralized configuration
-            config = get_config()
-            config_path = config.get_config_file(config_file)
-
-        logger.info(f"Reading ClusterConfig from {config_path}")
-        with open(config_path, "r") as f:
-            config_dict = json.load(f)
-
-        known = cls.get_known(config_dict)
-
-        return cls(**known)
-
-    @classmethod
-    def from_dict(cls, config_dict: dict) -> "ClusterConfig":
-        """
-        Create a ClusterConfig from a dictionary.
-
-        Args:
-            config_dict: Dictionary containing cluster configuration
-
-        Returns:
-            ClusterConfig instance
-
-        Example:
-            >>> config = ClusterConfig.from_dict({
-            ...     "remote_machine": "my-cluster",
-            ...     "partition": "normal",
-            ...     "conda_env": "myenv",
-            ...     "savepath": "/scratch/user/jobs",
-            ...     "template": "slurm_template.sh.j2"
-            ... })
-        """
-        known = cls.get_known(config_dict)
-        return cls(**known)
-
-    @classmethod
-    def get_known(cls, args_dict):
-        field_names = {f.name for f in fields(cls)}
-
-        # Split known / unknown keys
-        known = {}
-        unknown = {}
-        for k, v in args_dict.items():
-            if k in field_names:
-                known[k] = v
-            else:
-                unknown[k] = v
-
-        if unknown:
-            logger.warning(
-                f"Ignoring unknown ClusterConfig keys: {list(unknown.keys())}"
-            )
-
-        return known
 
 
 class SlurmHandlerBase(ABC):
@@ -263,63 +108,22 @@ class SlurmHandlerBase(ABC):
             )
 
     def _validate_savepath(self):
-        savepath = str(self.savepath)
-        # SFTP does not expand '~'; a tilde path can never resolve. Catch it
-        # explicitly -- otherwise it surfaces deep in a transfer as a bare
-        # "No such file" with no hint as to why.
-        if savepath.startswith("~"):
-            raise FileSystemError(
-                f"Save path '{savepath}' uses '~', which is not supported: "
-                "SFTP does not expand '~'. Use an absolute remote path "
-                "(e.g. '/home/<user>/...') as the cluster config 'savepath'.\n"
-                f"Remote machine: {self.cluster_config.remote_machine}"
-            )
-        if not self.remote_fs.exists(self.savepath):
-            raise FileSystemError(
-                "Save path does not exist on the remote filesystem: "
-                f"{self.savepath}\n"
-                "Create it on the remote, or set an existing absolute path "
-                "as the cluster config 'savepath'.\n"
-                f"Remote machine: {self.cluster_config.remote_machine}"
-            )
+        remote_env.validate_savepath(
+            self.savepath,
+            self.remote_fs,
+            remote_machine=self.cluster_config.remote_machine,
+        )
 
     def _validate_conda(self):
-        if self.conda_source.strip().endswith("miniconda3"):
-            miniconda_home = Path(self.conda_source)
-            self.conda_source = Path(self.conda_source) / "bin/activate"
-        elif "micromamba" in self.conda_source:
-            miniconda_home = self.conda_source
-            self.conda_source = 'eval "$(micromamba shell hook --shell bash)"'  # run `eval "$(micromamba shell hook --shell bash)"` instead in the config, no path should be needed
-        elif "bin/activate" in self.conda_source:
-            miniconda_home = Path(self.conda_source).parents[1]
-            self.conda_source = Path(self.conda_source)
-        else:
-            raise ConfigurationError(
-                f"Invalid conda_source format: {self.conda_source}\n"
-                "Expected format: /home/user/miniconda3/ or /path/to/bin/activate\n"
-                "Note: Only miniconda3 is currently supported"
-            )
-        if "micromamba" not in str(self.conda_source):
-            if not self.remote_fs.exists(self.conda_source):
-                raise FileSystemError(
-                    "Conda activation script not found at: "
-                    f"{self.conda_source}. We currently do not "
-                    "support '~', write the full path!\n"
-                    f"Remote machine: {self.cluster_config.remote_machine}"
-                )
-            conda_env_path = miniconda_home / "envs" / self.conda_env
-            dot_conda_env_path = (
-                Path(os.path.expanduser("~")) / ".conda/envs" / self.conda_env
-            )
-            if not self.remote_fs.exists(
-                conda_env_path
-            ) and not self.remote_fs.exists(dot_conda_env_path):
-                raise ConfigurationError(
-                    f"Conda environment '{self.conda_env}' not found on "
-                    f"{self.cluster_config.remote_machine}\n"
-                    f"Expected path: {conda_env_path} or "
-                    f"{dot_conda_env_path}"
-                )
+        # Resolve + existence-check via the shared helper; store the resolved
+        # activation source (templates hard-code activation, so this value is
+        # only used by the validation itself, but keep the historical behaviour).
+        self.conda_source = remote_env.validate_conda_on_fs(
+            self.conda_source,
+            self.conda_env,
+            self.remote_fs,
+            remote_machine=self.cluster_config.remote_machine,
+        )
 
     @abstractmethod
     def submit(self):
@@ -518,7 +322,7 @@ class SlurmArrayHandler(SlurmHandlerBase, ArrayExecutor):
         self.slurm_script_path = self.rootpath / self.jobfile_name
         # Create output and calcdir directories
         self.output_path = self.rootpath / "slurm_output"
-        self.calcdir = self.rootpath / "calcdirs"
+        self.calcdir = self.rootpath / remote_env.CALCDIRS_DIRNAME
         remote_fs.makedirs(self.output_path, exist_ok=True)
         remote_fs.makedirs(self.calcdir, exist_ok=True)
 

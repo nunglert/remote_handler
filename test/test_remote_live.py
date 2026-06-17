@@ -27,11 +27,14 @@ import subprocess
 import time
 from pathlib import Path
 
+import ase.io
 import numpy as np
 import pytest
 from ase import Atoms
 
 from remote_handler.core import tasks
+from remote_handler.core.atoms_handler import RemoteAtomsHandler
+from remote_handler.core.atoms_shard import front_tag
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import RemoteFileSystem
 from remote_handler.core.ssh_connection import ConfigBasedSSHClientProvider
@@ -371,3 +374,95 @@ def test_direct_array_task_over_ssh(direct_remote, tmp_path):
         local_result = tmp_path / f"got_{i}.json"
         fs.get(str(task.calcdir / str(i) / "result.json"), local_result)
         assert json.loads(local_result.read_text())["sum"] == 100 + i
+
+
+# A shard processor: read the shipped configs, flag them finished, write the
+# result file RemoteAtomsHandler.collect() expects (front_tag("opt.extxyz",
+# tag)). Needs ase on the remote -- the test skips otherwise.
+_ATOMS_PAYLOAD = """
+import sys
+from pathlib import Path
+import ase.io
+
+calc = Path(sys.argv[1])
+atoms = ase.io.read(str(calc / "shard.extxyz"), index=":")
+for at in atoms:
+    at.info["is_finished"] = True
+ase.io.write(str(calc / "proc_opt.extxyz"), atoms)
+"""
+
+
+class _MarkFinishedAtomsHandler(RemoteAtomsHandler):
+    """Minimal concrete RemoteAtomsHandler for the test.
+
+    RemoteAtomsHandler leaves the payload script + per-shard resources to a
+    subclass (cf. RemoteOptimizationHandler). This ships each shard as
+    ``shard.extxyz`` and runs the marker script above.
+    """
+
+    def __init__(self, *args, script, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.python_script_file = script
+        batches = [
+            tasks.AtomsBatch(self.shards[i], "shard.extxyz", self.remote_fs)
+            for i in range(self.num_array_tasks)
+        ]
+        del self.shards
+        self.individual_ressources = [batches]
+
+
+def test_direct_remote_atoms_handler_over_ssh(direct_remote, tmp_path):
+    """RemoteAtomsHandler shards/runs/collects over real SSH, no scheduler.
+
+    The faithful end-to-end: local traj files are sharded, shipped over SFTP,
+    processed by a real remote ``python`` (via the direct executor), then
+    collected and redistributed back into per-traj result files.
+    """
+    fs, savepath, config = direct_remote
+    if fs.run_command("python -c 'import ase, ase.io'").returncode != 0:
+        pytest.skip("remote python lacks ase for atoms processing")
+
+    # Two local traj files, two configs each -> 4 configs.
+    traj_files = []
+    for fi in range(2):
+        configs = [
+            Atoms(
+                "Si2",
+                positions=[[0.0, 0.0, 0.0], [1.0 + ci + fi, 0.0, 0.0]],
+                cell=[6.0, 6.0, 6.0],
+                pbc=True,
+            )
+            for ci in range(2)
+        ]
+        path = tmp_path / f"traj_{fi}.extxyz"
+        ase.io.write(str(path), configs)
+        traj_files.append(str(path))
+
+    script = tmp_path / "process.py"
+    script.write_text(_ATOMS_PAYLOAD)
+
+    handler = _MarkFinishedAtomsHandler(
+        traj_files,
+        config,
+        fs,
+        2,  # shard_size -> ceil(4 / 2) = 2 shards
+        str(savepath),
+        2,  # num_parallel
+        every=1,
+        tag="proc",
+        loop_time=1,
+        local_savepath=str(tmp_path),
+        script=script,
+    )
+
+    handler.allocate_data()
+    handler.submit()
+    handler.collect_and_harvest()
+
+    # Results are redistributed back into per-traj files, tag-prefixed.
+    for original in traj_files:
+        result = Path(front_tag(original, "proc"))
+        assert result.exists(), f"missing redistributed result: {result}"
+        ats = ase.io.read(str(result), index=":")
+        assert len(ats) == 2
+        assert all(bool(at.info.get("is_finished")) for at in ats)

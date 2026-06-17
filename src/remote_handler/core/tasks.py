@@ -8,12 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Union
 
-from remote_handler.core import (
-    executors,
-    file_handler,
-    file_utils,
-    slurm_utils,
-)
+from remote_handler.core import executors, file_handler, file_utils, remote_env
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import (
     FileSystemHandlerBase,
@@ -31,7 +26,7 @@ logger = logging.getLogger(__name__)
 # the rootpath where shared resources are allocated. Reference shared resources
 # from a task's input JSON with this prefix; it is derived from the run-subdir
 # nesting so it stays correct if that layout ever changes.
-_ARRAY_TASK_RUN_SUBDIR = os.path.join("calcdirs", "0")
+_ARRAY_TASK_RUN_SUBDIR = os.path.join(remote_env.CALCDIRS_DIRNAME, "0")
 SHARED_RESOURCE_PREFIX = os.path.relpath(os.curdir, _ARRAY_TASK_RUN_SUBDIR)
 
 

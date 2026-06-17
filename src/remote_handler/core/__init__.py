@@ -1,3 +1,3 @@
-from remote_handler.core.cluster_handler import ClusterConfig
+from remote_handler.core.cluster_config import ClusterConfig
 
 __all__ = ["ClusterConfig"]

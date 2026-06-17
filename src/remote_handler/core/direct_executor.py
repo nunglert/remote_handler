@@ -21,8 +21,8 @@ import logging
 import time
 from pathlib import Path
 
+from remote_handler.core import remote_env
 from remote_handler.core.executors import ArrayExecutor, SingleExecutor
-from remote_handler.exceptions import FileSystemError
 
 logger = logging.getLogger(__name__)
 
@@ -33,30 +33,11 @@ SENTINEL = ".executor_finished"
 
 
 def _conda_activation(cluster_config) -> str:
-    """Best-effort conda activation lines for the launch script.
-
-    Mirrors the three source formats accepted by the SLURM path
-    (``.../miniconda3``, micromamba, ``.../bin/activate``) but never raises:
-    an unrecognised or empty ``conda_source``/``conda_env`` (e.g. a local or
-    dummy config) yields no activation, so the ambient ``python`` is used.
-    """
-    source = (getattr(cluster_config, "conda_source", "") or "").strip()
-    env = (getattr(cluster_config, "conda_env", "") or "").strip()
-    if not source or not env:
-        return ""
-    if source.endswith("miniconda3"):
-        return f"source {source}/bin/activate\nconda activate {env}\n"
-    if "micromamba" in source:
-        return (
-            'eval "$(micromamba shell hook --shell bash)"\n'
-            f"micromamba activate {env}\n"
-        )
-    if "bin/activate" in source:
-        return f"source {source}\nconda activate {env}\n"
-    logger.warning(
-        "Unrecognised conda_source '%s'; running without activation.", source
+    """Best-effort conda activation lines for this config's launch script."""
+    return remote_env.conda_activation_script(
+        getattr(cluster_config, "conda_source", ""),
+        getattr(cluster_config, "conda_env", ""),
     )
-    return ""
 
 
 class _DirectExecutorBase:
@@ -86,17 +67,13 @@ class _DirectExecutorBase:
         self._validate_savepath()
 
     def _validate_savepath(self):
-        savepath = str(self.savepath)
-        if savepath.startswith("~"):
-            raise FileSystemError(
-                f"Save path '{savepath}' uses '~', which is not supported: "
-                "SFTP does not expand '~'. Use an absolute path."
-            )
-        if not self.remote_fs.exists(self.savepath):
-            raise FileSystemError(
-                "Save path does not exist on the target filesystem: "
-                f"{self.savepath}"
-            )
+        remote_env.validate_savepath(
+            self.savepath,
+            self.remote_fs,
+            remote_machine=getattr(
+                self.cluster_config, "remote_machine", None
+            ),
+        )
 
     def _launch(self, workdir: Path):
         """Launch ``jobfile_name`` detached in ``workdir`` and return at once.
@@ -156,7 +133,7 @@ class DirectArrayExecutor(_DirectExecutorBase, ArrayExecutor):
         self.map_indices = map_indices
         self.rootpath = self.savepath
         # Must match SlurmArrayHandler so the task allocates shards here.
-        self.calcdir = self.rootpath / "calcdirs"
+        self.calcdir = self.rootpath / remote_env.CALCDIRS_DIRNAME
         self.output_path = self.rootpath / "direct_output"
         self.remote_fs.makedirs(self.calcdir, exist_ok=True)
         self.remote_fs.makedirs(self.output_path, exist_ok=True)
