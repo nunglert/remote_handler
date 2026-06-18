@@ -21,11 +21,11 @@ classifiers = [
     "Natural Language :: English"
 ]
 dependencies = [
-    "jinja2==3.1.6",
-    "numpy==2.2.6",
-    "paramiko==3.5.1",
-    "natsort==8.4.0",
-    "ase==3.25.0",
+    "jinja2>=3.1",
+    "numpy>=2.0",
+    "paramiko>=3.0",
+    "natsort>=8.0",
+    "ase>=3.23",
     "pyyaml>=6.0",
 ]
 readme = "README.md"
@@ -33,7 +33,7 @@ version = "0.1.0"
 
 [project.optional-dependencies]
 dev = [
-    "pytest==7.4.0",
+    "pytest>=7.4.0",
     "pytest-cov",
     "pre-commit"
 ]
@@ -138,7 +138,3 @@ branch = true
 # site-packages) back onto the src tree, so the cobertura report's file paths
 # are repo-relative -- required for GitLab's MR line-coverage visualization.
 source = ["src/remote_handler", "*/site-packages/remote_handler"]
-
-
-# [tool.setuptools.dynamic]
-# version = { attr = "jaxnest.__version__" }
