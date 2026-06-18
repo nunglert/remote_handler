@@ -15,12 +15,23 @@ def local_dir(data_dir):
 
 @pytest.fixture()
 def remote_target_dir(remote_fs, remote_cluster_config):
-    """Target directory for remote filesystem tests."""
-    return (
-        Path(remote_cluster_config.savepath)
-        if remote_cluster_config.savepath
-        else remote_fs.create_tempdir()
-    )
+    """Target directory for remote filesystem tests.
+
+    Verifies the configured savepath actually exists on the remote up front,
+    so a misconfigured savepath fails with a clear message here instead of a
+    bare "No such file" deep inside an SFTP transfer.
+    """
+    savepath = remote_cluster_config.savepath
+    if not savepath:
+        return remote_fs.create_tempdir()
+    if not remote_fs.exists(savepath):
+        pytest.fail(
+            "Configured savepath does not exist on "
+            f"{remote_cluster_config.remote_machine}: {savepath}\n"
+            "Create it on the remote, or set an existing absolute path as "
+            "the cluster config 'savepath'."
+        )
+    return Path(savepath)
 
 
 class TestFileSystem:
@@ -75,6 +86,7 @@ class TestFileSystem:
         assert fs.exists(temppath)
 
 
+@pytest.mark.remote
 def test_reconnect(remote_fs, remote_target_dir, local_dir):
     """Test reconnection for remote filesystem."""
     filename = "single_file.txt"

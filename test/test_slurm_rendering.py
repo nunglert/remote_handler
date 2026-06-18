@@ -1,0 +1,116 @@
+"""Characterization tests for the SLURM jobfile rendering.
+
+These pin the *output artifact* of the SLURM execution backend -- the rendered
+sbatch script -- independent of any live scheduler. They are the guardrail for
+the executor-decoupling refactor (Phase 1): that change rewires how the
+executor is constructed/injected but must not alter the script it produces.
+
+Pure Jinja rendering, no ``sbatch`` needed, so they run in the default tier
+(unlike the ``slurm``-gated end-to-end task tests, which skip without sbatch).
+"""
+
+import pytest
+
+from remote_handler.core.slurm_utils import get_array_slurm_str, get_slurm_str
+from remote_handler.exceptions import TaskError
+
+HEADER = "musica.sh.j2"  # a shipped header template (no external deps)
+
+
+def test_single_jobfile_render_is_stable():
+    """A single job renders the conda activation + the one python call."""
+    script = get_slurm_str(
+        input_file="/remote/input.json",
+        python_script_path="/remote/script.py",
+        jobname="charjob",
+        partition="charpart",
+        n_cores=4,
+        conda_env="charenv",
+        conda_source="/home/u/miniconda3",
+        header_template=HEADER,
+        job_type_template="body_single.sh.j2",
+    )
+
+    assert "#SBATCH --job-name=charjob" in script
+    assert "#SBATCH --partition=charpart" in script
+    # The activation is rendered from the configured conda_source (not a
+    # hard-coded ~/miniconda3): the resolved activate path must appear.
+    assert "source /home/u/miniconda3/bin/activate" in script
+    assert "conda activate charenv" in script
+    # The defining behaviour of a single job: run the script on the input file.
+    assert "python /remote/script.py /remote/input.json" in script
+
+
+def test_array_jobfile_render_is_stable():
+    """An array job renders the per-shard loop over ``calcdir/$run_id``."""
+    script = get_array_slurm_str(
+        calcdir="/remote/calc",
+        python_script_path="/remote/script.py",
+        num_array_tasks=3,
+        num_parallel=10,
+        jobname="charjob",
+        partition="charpart",
+        n_processors=4,
+        conda_env="charenv",
+        conda_source="/home/u/miniconda3",
+        header_template=HEADER,
+        job_type_template="body_array.sh.j2",
+    )
+
+    assert "#SBATCH --job-name=charjob" in script
+    assert "source /home/u/miniconda3/bin/activate" in script
+    assert "conda activate charenv" in script
+    # map_indices defaults to arange(num_array_tasks).
+    assert "MAP=(0 1 2)" in script
+    # The defining behaviour of an array shard: run the script on calcdir/$id.
+    assert "python /remote/script.py /remote/calc/$run_id" in script
+    # Array sizing (--array=1-N%P) is a submit-time sbatch CLI arg, NOT baked
+    # into the jobfile body. Guards against that boundary shifting.
+    assert "--array" not in script
+
+
+def test_header_template_accepts_explicit_path(tmp_path):
+    """``template`` may be a path to a custom header, not just a name.
+
+    The custom header's directory is added to the search path so its body
+    ``{% include %}`` still resolves against the shipped ``body_*`` templates.
+    """
+    custom = tmp_path / "custom.sh.j2"
+    custom.write_text(
+        "#!/bin/bash\n#SBATCH --job-name={{ jobname }}\n"
+        "{{ conda_activation }}\nCUSTOM_HEADER_MARKER\n"
+        "{% include job_type_template %}\n"
+    )
+
+    script = get_slurm_str(
+        input_file="/remote/input.json",
+        python_script_path="/remote/script.py",
+        jobname="charjob",
+        partition="charpart",
+        n_cores=4,
+        conda_env="charenv",
+        conda_source="/home/u/miniconda3",
+        header_template=str(custom),
+        job_type_template="body_single.sh.j2",
+    )
+
+    assert "CUSTOM_HEADER_MARKER" in script
+    assert "conda activate charenv" in script
+    # The shipped body include still resolves from the package search path.
+    assert "python /remote/script.py /remote/input.json" in script
+
+
+def test_header_template_missing_path_errors():
+    """An explicit template path that does not exist fails clearly."""
+    with pytest.raises(TaskError, match="not found at the given path"):
+        get_slurm_str(
+            input_file="i.json",
+            python_script_path="s.py",
+            jobname="j",
+            partition="p",
+            n_cores=2,
+            conda_env="env",
+            conda_source="/home/u/miniconda3",
+            header_template="/no/such/dir/custom.sh.j2",
+            job_type_template="body_single.sh.j2",
+        )

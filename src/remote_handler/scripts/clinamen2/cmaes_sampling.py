@@ -13,7 +13,7 @@ from remote_handler.scripts.input_models import CmaesSamplingInput
 calcpath = Path(sys.argv[1]).parent
 INPUTFILE = Path(sys.argv[1])
 input_config = CmaesSamplingInput.from_file(INPUTFILE)
-input_config.validate()
+input_config.validate(calcpath)
 
 if input_config.continue_evolution:
     try:

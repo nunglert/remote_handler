@@ -59,7 +59,10 @@ def write_json(A, B, filename):
         json.dump(content, f)
 
 
-def test_SingleScriptTask_simple(data_dir, filesystem, cluster_config):
+@pytest.mark.integration
+def test_SingleScriptTask_simple(
+    data_dir, filesystem, cluster_config, tmp_path
+):
     """This test runs a SingleScriptTask. It generates the required python
     script and a corresponding input file on-the-fly.
 
@@ -74,13 +77,22 @@ def test_SingleScriptTask_simple(data_dir, filesystem, cluster_config):
     collected. This allows us to comfortably check the output files in case
     something crashed.
     """
+    # SLURM submission against the local machine needs sbatch; skip
+    # (rather than error with DependencyError) when it is absent.
+    if isinstance(filesystem, file_handler.LocalFileSystem) and (
+        shutil.which("sbatch") is None
+    ):
+        pytest.skip("SLURM (sbatch) not available on this machine")
+
     # os.environ["REMOTE_HANDLER_LOCAL"] = "datalab"
     relative_path = Path("SingleScriptTask") / "simple"
-    assetpath = data_dir / "assets" / relative_path
     local_savepath = data_dir / "temp" / relative_path
     local_results_path = local_savepath / "results"
 
-    script_path = assetpath / "python_script_single.py"
+    # The script + input are generated on the fly; write them to a scratch
+    # dir (NOT into test/data/assets, which is tracked -- writing there dirties
+    # git on every run).
+    script_path = tmp_path / "python_script_single.py"
     with open(script_path, "w") as f:
         f.write(SCRIPT_STR)
 
@@ -88,7 +100,7 @@ def test_SingleScriptTask_simple(data_dir, filesystem, cluster_config):
         shutil.rmtree(local_savepath)
     os.makedirs(local_savepath, exist_ok=True)
 
-    input_file = assetpath / "input.json"
+    input_file = tmp_path / "input.json"
     write_json(1, 2, input_file)
 
     task = tasks.SingleScriptTask(
@@ -117,7 +129,10 @@ def test_SingleScriptTask_simple(data_dir, filesystem, cluster_config):
         )
 
 
-def test_ArrayScriptTask_simple(data_dir, filesystem, cluster_config):
+@pytest.mark.integration
+def test_ArrayScriptTask_simple(
+    data_dir, filesystem, cluster_config, tmp_path
+):
     """This test runs a ArrayScriptTask. It generates the required python
     script on-the-fly and sets up the directories on the remote machine with
     input and config files.
@@ -133,13 +148,20 @@ def test_ArrayScriptTask_simple(data_dir, filesystem, cluster_config):
     collected. This allows us to comfortably check the output files in case
     something crashed.
     """
+    # SLURM submission against the local machine needs sbatch; skip
+    # (rather than error with DependencyError) when it is absent.
+    if isinstance(filesystem, file_handler.LocalFileSystem) and (
+        shutil.which("sbatch") is None
+    ):
+        pytest.skip("SLURM (sbatch) not available on this machine")
+
     # os.environ["REMOTE_HANDLER_LOCAL"] = "datalab"
     relative_path = Path("ArrayScriptTask") / "simple"
-    assetpath = data_dir / "assets" / relative_path
     local_savepath = data_dir / "temp" / relative_path
     local_results_path = local_savepath / "results"
 
-    script_path = assetpath / "python_script_array.py"
+    # Generated on the fly -> scratch dir, not the tracked test/data/assets.
+    script_path = tmp_path / "python_script_array.py"
     with open(script_path, "w") as f:
         f.write(ARRAY_SCRIPT_STR)
 

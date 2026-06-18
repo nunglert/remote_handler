@@ -2,59 +2,117 @@ stages:
   - test
   - deploy
 
+# ---------------------------------------------------------------------------
+# Two jobs: the full test suite, and docs -> GitLab Pages.
+#
+# Each job runs in a clean official `python:3.13` container and does a
+# from-scratch, NON-editable `pip install` of the package. That install IS the
+# packaging check: it builds and installs the wheel exactly as an end user
+# would, so packaging problems (missing data files, bad metadata, unresolvable
+# deps) fail the pipeline. The suite then runs against the installed package.
+#
+# No custom image is built, so this needs no privileged mode and runs on any
+# docker/kubernetes runner. (A Dockerfile is kept in the repo for local dev:
+# `docker build --target dev -t remote_handler . && docker run --rm remote_handler`.)
+# ---------------------------------------------------------------------------
+
 variables:
-  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  # Full clone incl. tags so setuptools-scm derives the real version (a shallow
+  # clone misses tags -> it would fall back instead of computing X.Y.Z).
+  GIT_DEPTH: 0
 
-cache:
-  paths:
-    - .cache/pip
+# Run CI on every branch push, on merge requests, and on scheduled pipelines
+# (e.g. a weekly run configured under CI/CD > Schedules in GitLab -- catches
+# breakage from dependency drift even when nobody commits). Avoid the classic
+# duplicate pipeline (a branch pipeline + an MR pipeline for the same commit):
+# when an MR is open for the branch, only the MR pipeline runs.
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
+    - if: '$CI_COMMIT_BRANCH'
 
-# Run tests
+# Full suite with every optional extra installed, on every pipeline. With the
+# extras present the quests / torch_sim / mace tests un-skip; tests that need a
+# live cluster (remote), a local sbatch (slurm) or Docker (sshlive) self-skip or
+# stay deselected. `python:3.13` (not -slim) ships git + compilers for the
+# source builds some ML extras need.
 test:
   stage: test
-  image: python:3.10
-  tags:
-    - shared
+  image: python:3.13
   before_script:
+    - python -V
     - pip install --upgrade pip
-    - pip install -e ".[dev]"
+    # Non-editable install -> exercises the real build + packaging pipeline.
+    - pip install ".[dev,mace_freeze,torch_sim,clinamen,quests,neuralil]"
+    - python -c "import remote_handler; print('install OK:', remote_handler.__file__)"
+    # Best-effort: stand up a localhost sshd so the `sshlive` tier does a real
+    # SSH/SFTP round-trip in CI. This needs in-container root (the Docker
+    # executor default) but NOT privileged mode / a Docker daemon. If the
+    # runner forbids it (e.g. a hardened non-root Kubernetes runner), the whole
+    # block is a no-op and the sshlive tests simply skip, as they did before --
+    # it never fails the pipeline. The job log prints RUN vs SKIP.
+    - |
+      if apt-get update \
+         && apt-get install -y --no-install-recommends openssh-server openssh-client \
+         && useradd -m -s /bin/bash tester \
+         && install -d -m 700 -o tester -g tester /home/tester/.ssh \
+         && ssh-keygen -t ed25519 -N '' -q -f /tmp/sshlive_key \
+         && install -m 600 -o tester -g tester /tmp/sshlive_key.pub /home/tester/.ssh/authorized_keys \
+         && mkdir -p /run/sshd && ssh-keygen -A && /usr/sbin/sshd -p 2222 \
+         && ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                -i /tmp/sshlive_key -p 2222 tester@127.0.0.1 true; then
+        export SSHLIVE_HOST=127.0.0.1 SSHLIVE_PORT=2222 SSHLIVE_USER=tester SSHLIVE_KEY=/tmp/sshlive_key
+        echo 'sshlive: local sshd ready -> sshlive tests will RUN'
+      else
+        echo 'sshlive: no local sshd (insufficient privileges?) -> sshlive tests will SKIP'
+      fi
   script:
-    - pytest -v --tb=short
-  coverage: '/(?i)total.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
+    - >-
+      pytest --junitxml=report.xml -ra
+      --cov=remote_handler --cov-report=term --cov-report=xml:coverage.xml
+      --cov-fail-under=50
+  coverage: '/^TOTAL.+?(\d+\%)$/'
   artifacts:
-    reports:
-      junit: test-results.xml
     when: always
-  only:
-    - main
-    - merge_requests
+    reports:
+      junit: report.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+  rules:
+    # Weekly scheduled run: re-installs every (git/PyPI) extra and runs the
+    # full suite, so upstream breakage is caught without a commit.
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
 
-# Build and deploy documentation to GitLab Pages
+# docs -> GitLab Pages
 pages:
   stage: deploy
-  image: python:3.10
-  tags:
-    - shared
+  image: python:3.13
   before_script:
     - pip install --upgrade pip
-    # Install package with all dependencies (needed for autodoc to import modules)
-    - pip install -e .
-    # Install documentation dependencies
+    # Editable install with docs deps so autodoc can import the modules.
     - pip install -e ".[docs]"
-    # Verify installation
-    - python -c "import remote_handler; print(f'Successfully imported remote_handler from {remote_handler.__file__}')"
-    - python -c "import remote_handler.config; print('Config module imported successfully')"
+    - python -c "import remote_handler; print('imported from', remote_handler.__file__)"
   script:
-    # Build the Sphinx documentation
     - cd docs
     - make html
     - cd ..
-    # GitLab Pages expects output in 'public' directory
+    # GitLab Pages expects output in 'public'.
     - mv docs/build/html public
   artifacts:
     paths:
       - public
     expire_in: 1 week
-  only:
-    - main  # Only deploy docs from main branch
+  rules:
+    # Docs don't change between commits, so skip the redundant redeploy on the
+    # weekly scheduled run (which exists to re-test, not to publish).
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
   dependencies: []

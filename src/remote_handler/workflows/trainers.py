@@ -4,19 +4,20 @@ Trainers for Active Learning Workflows.
 Trainers fit machine learning models to evaluated configurations.
 """
 
+import json
 import logging
 import os
 import pickle
+from copy import deepcopy
 from pathlib import Path
 from typing import Optional
-from copy import deepcopy
-import json
 
 import numpy as np
 
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.core.tasks import (
+    SHARED_RESOURCE_PREFIX,
     ArrayScriptTask,
     DictJSON,
     SingleScriptTask,
@@ -26,10 +27,6 @@ from remote_handler.exceptions import (
     ConfigurationError,
     DependencyError,
     WorkflowError,
-)
-from remote_handler.scripts.input_models import (
-    MaceFinetuningInput,
-    MaceTrainingInput,
 )
 
 from .active_learning_base import ModelTrainer
@@ -105,21 +102,21 @@ class MaceModelTrainer(ModelTrainer):
 
         # In stub mode, we don't need to create the task
         if not self.stub:
-            # Shared resources live in rootpath/, but scripts run in
-            # rootpath/calcdirs/N/. Prefix with ../../ so the script can
-            # resolve them relative to its own calcpath.
+            # Shared resources live in rootpath/, but scripts run in a
+            # subdir of it; reference them via SHARED_RESOURCE_PREFIX so each
+            # script resolves them relative to its own calcpath.
             script_input_shared = {
                 "database_files": [
-                    f"../../{Path(p).name}" for p in self.db_files
+                    f"{SHARED_RESOURCE_PREFIX}/{Path(p).name}"
+                    for p in self.db_files
                 ],
-                "config_file": f"../../{Path(self.config_file).name}",
+                "config_file": (
+                    f"{SHARED_RESOURCE_PREFIX}/{Path(self.config_file).name}"
+                ),
                 "model_name": self.model_name,
                 "validation_fraction": self.validation_fraction,
                 "train_runner": Path(self.remote_mace_train_runner).as_posix(),
             }
-
-            # Validate input dict against the script's expected schema
-            MaceTrainingInput.from_dict(script_input_shared | {"seed": 0})
 
             # Create individual input files with different seeds
             individual_resources = [
@@ -255,6 +252,10 @@ class MaceFinetuningTrainer(ModelTrainer):
         remote_savepath: Path on remote machine for calculation files
         loop_time: Interval (seconds) to poll for job completion
         stub: If True, creates mock model outputs without training
+        convert_to_jax: If True, convert each trained torch model to a
+            mace-jax ``.pkl`` bundle in the same job and return those paths
+            from ``get_trained_model``. The training (cluster) environment
+            must then have both the torch MACE stack and ``mace-jax``.
     """
 
     def __init__(
@@ -270,6 +271,7 @@ class MaceFinetuningTrainer(ModelTrainer):
         remote_savepath: Optional[os.PathLike] = None,
         loop_time: float = 30,
         stub: bool = False,
+        convert_to_jax: bool = False,
     ):
         super().__init__()
         self.training_script = training_script
@@ -283,6 +285,7 @@ class MaceFinetuningTrainer(ModelTrainer):
         self.remote_savepath = remote_savepath
         self.loop_time = loop_time
         self.stub = stub
+        self.convert_to_jax = convert_to_jax
         self.model_name = "Model"  # Default model name
 
     def update(
@@ -308,22 +311,26 @@ class MaceFinetuningTrainer(ModelTrainer):
 
         # In stub mode, we don't need to create the task
         if not self.stub:
-            # Shared resources live in rootpath/, but scripts run in
-            # rootpath/calcdirs/N/. Prefix with ../../ so the script can
-            # resolve them relative to its own calcpath.
+            # Shared resources live in rootpath/, but scripts run in a
+            # subdir of it; reference them via SHARED_RESOURCE_PREFIX so each
+            # script resolves them relative to its own calcpath.
             script_input_shared = {
                 "database_files": [
-                    f"../../{Path(p).name}" for p in self.db_files
+                    f"{SHARED_RESOURCE_PREFIX}/{Path(p).name}"
+                    for p in self.db_files
                 ],
-                "config_file": f"../../{Path(self.config_file).name}",
-                "foundation_model": f"../../{Path(self.foundation_model).name}",
+                "config_file": (
+                    f"{SHARED_RESOURCE_PREFIX}/{Path(self.config_file).name}"
+                ),
+                "foundation_model": (
+                    f"{SHARED_RESOURCE_PREFIX}/"
+                    f"{Path(self.foundation_model).name}"
+                ),
                 "model_name": self.model_name,
                 "validation_fraction": self.validation_fraction,
                 "train_runner": Path(self.remote_mace_train_runner).as_posix(),
+                "convert_to_jax": self.convert_to_jax,
             }
-
-            # Validate input dict against the script's expected schema
-            MaceFinetuningInput.from_dict(script_input_shared | {"seed": 0})
 
             # Create individual input files with different seeds
             individual_resources = [
@@ -388,8 +395,17 @@ class MaceFinetuningTrainer(ModelTrainer):
             with open(model_path, "wb") as f:
                 pickle.dump(mock_model, f)
 
-            model_paths.append(model_path)
-            logger.info(f"Created stub finetuned model: {model_path}")
+            if self.convert_to_jax:
+                jax_path = model_dir / f"{self.model_name}-jax.pkl"
+                with open(jax_path, "wb") as f:
+                    pickle.dump(
+                        {"config": mock_model, "params": b"", "head": None}, f
+                    )
+                model_paths.append(jax_path)
+                logger.info(f"Created stub mace-jax bundle: {jax_path}")
+            else:
+                model_paths.append(model_path)
+                logger.info(f"Created stub finetuned model: {model_path}")
 
         return model_paths
 
@@ -412,9 +428,16 @@ class MaceFinetuningTrainer(ModelTrainer):
             self.training_task.submit()
             self.training_task.collect_results()
 
+            # When converting, the artifact handed to the next sampler is the
+            # mace-jax .pkl bundle produced alongside the torch .model.
+            model_filename = (
+                f"{self.model_name}-jax.pkl"
+                if self.convert_to_jax
+                else f"{self.model_name}.model"
+            )
             model_paths = []
             for calcpath in grep(str(self.results_dir / "calcdirs"), ""):
-                model_path = Path(calcpath) / f"models/{self.model_name}.model"
+                model_path = Path(calcpath) / "models" / model_filename
                 if model_path.exists():
                     model_paths.append(model_path)
                 else:
@@ -445,7 +468,7 @@ class NeuralilILTrainer(ModelTrainer):
         stub: If True, creates mock model outputs without training
         loop_time: Interval (seconds) to poll for job completion
     """
-    
+
     default_training_kwargs: dict = {
         "r_cut": 4.0,
         "training_fraction": 0.75,
@@ -470,7 +493,7 @@ class NeuralilILTrainer(ModelTrainer):
             max_learning_rate=1e-2,
             min_learning_rate=1e-3,
             fin_learning_rate=1e-5,
-        )
+        ),
     }
 
     def __init__(
@@ -499,12 +522,15 @@ class NeuralilILTrainer(ModelTrainer):
         self.stub = stub
         self.training_kwargs["stub"] = stub
 
-        self.input_file = Path(os.getcwd()) / "input_nnff.json"  # Local path for input file
-        with open(self.input_file, "w") as f:
-            json.dump(self.training_kwargs, f)
+        # The local staging input file is written lazily in update(),
+        # under this iteration's training directory -- never in the cwd.
+        self.input_file = None
 
     def update(
-        self, calcdir: os.PathLike, trainer_input: Path | list[os.PathLike], **kwargs
+        self,
+        calcdir: os.PathLike,
+        trainer_input: Path | list[os.PathLike],
+        **kwargs,
     ) -> None:
         """
         Prepare trainer for a new iteration.
@@ -527,7 +553,11 @@ class NeuralilILTrainer(ModelTrainer):
 
         # In stub mode, we don't need to create the task
         if not self.stub:
-            # Create JSON input file for training script
+            # Create JSON input file for the training script inside this
+            # iteration's training directory.
+            self.input_file = self.train_dir / "input_nnff.json"
+            with open(self.input_file, "w") as f:
+                json.dump(self.training_kwargs, f)
 
             self.train_task = SingleScriptTask(
                 cluster_config=self.cluster_config,
@@ -551,7 +581,7 @@ class NeuralilILTrainer(ModelTrainer):
 
             with open(self.input_file, "r") as f:
                 self.training_kwargs = json.load(f)
-                
+
             self.training_kwargs["structure_databases"] = remote_dbs
             self.training_kwargs["filepath"] = str(self.train_task.calcdir)
             self.training_kwargs["pickle_file_name"] = str(
@@ -628,9 +658,7 @@ class NeuralilILTrainer(ModelTrainer):
             # Get model file path from training kwargs
             model_file = (
                 self.results_dir
-                / os.path.split(
-                    self.training_kwargs["pickle_file_name"]
-                )[-1]
+                / os.path.split(self.training_kwargs["pickle_file_name"])[-1]
             )
 
             if not os.path.exists(model_file):

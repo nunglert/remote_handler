@@ -10,10 +10,12 @@ from remote_handler.scripts.input_models import (
     CmaesSamplingInput,
     DftSinglepointInput,
     LammpsSamplingInput,
+    MaceFinetuningInput,
     MaceTrainingInput,
     OptimizeTrajInput,
     OrcaSinglepointInput,
     ScriptInput,
+    TorchSimSamplingInput,
 )
 
 
@@ -585,6 +587,84 @@ class TestCmaesSamplingInput:
         )
 
         config.validate()  # Should not raise
+
+
+class TestValidateWithRoot:
+    """Path-existence checks run only when ``validate`` gets a ``root``."""
+
+    def _mace(self, root, **over):
+        data = dict(
+            database_files=["db.xyz"],
+            train_runner="mace_run_train",
+            config_file="config.yaml",
+            model_name="m",
+            seed=0,
+        )
+        data.update(over)
+        return MaceTrainingInput.from_dict(data)
+
+    def test_no_root_skips_path_checks(self, tmp_path):
+        # Files don't exist, but without a root no path check runs.
+        self._mace(tmp_path).validate()  # must not raise
+
+    def test_root_flags_missing_data_file(self, tmp_path):
+        (tmp_path / "config.yaml").write_text("x")  # config present
+        with pytest.raises(ScriptInputError, match="database file"):
+            self._mace(tmp_path).validate(tmp_path)  # db.xyz missing
+
+    def test_root_passes_when_all_present(self, tmp_path):
+        (tmp_path / "db.xyz").write_text("x")
+        (tmp_path / "config.yaml").write_text("x")
+        self._mace(tmp_path).validate(tmp_path)  # must not raise
+
+    def test_relative_resolved_against_root(self, tmp_path):
+        # A "../shared.xyz" path resolves above the calc dir.
+        calc = tmp_path / "calcdirs" / "0"
+        calc.mkdir(parents=True)
+        (tmp_path / "shared.xyz").write_text("x")
+        (tmp_path / "config.yaml").write_text("x")
+        cfg = self._mace(
+            calc,
+            database_files=["../../shared.xyz"],
+            config_file="../../config.yaml",
+        )
+        cfg.validate(calc)  # ../../shared.xyz -> tmp_path/shared.xyz, exists
+
+    def test_finetuning_checks_foundation_model(self, tmp_path):
+        (tmp_path / "db.xyz").write_text("x")
+        (tmp_path / "config.yaml").write_text("x")
+        cfg = MaceFinetuningInput.from_dict(
+            dict(
+                database_files=["db.xyz"],
+                train_runner="mace_run_train",
+                config_file="config.yaml",
+                foundation_model="found.model",  # missing
+                model_name="m",
+                seed=0,
+            )
+        )
+        with pytest.raises(ScriptInputError, match="foundation_model"):
+            cfg.validate(tmp_path)
+
+    def test_torchsim_skips_foundation_sentinel(self, tmp_path):
+        (tmp_path / "start.xyz").write_text("x")
+        cfg = TorchSimSamplingInput.from_dict(
+            dict(
+                founder="start.xyz",
+                model_paths=["foundation"],  # sentinel, not a path
+                ensemble="nvt",
+                temperatures=[300.0],
+                target_temperature=300.0,
+            )
+        )
+        cfg.validate(tmp_path)  # must not try to stat "foundation"
+
+    def test_dft_root_checks_database(self, tmp_path):
+        cfg = DftSinglepointInput(
+            DATABASE="missing.xyz", launch_command="vasp", INCAR_kwargs={}
+        )
+        with pytest.raises(ScriptInputError, match="DATABASE"):
+            cfg.validate(tmp_path)
 
 
 class TestScriptInputBaseClass:

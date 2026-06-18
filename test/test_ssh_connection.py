@@ -169,6 +169,7 @@ class TestConnectionStrategies:
         mock_client.set_missing_host_key_policy.assert_called_once()
         mock_client.connect.assert_called_once_with(
             "test.example.com",
+            port=22,
             username="testuser",
             key_filename="~/.ssh/test_key",
         )
@@ -204,6 +205,7 @@ class TestConnectionStrategies:
         # Verify jump client connection
         jump_client.connect.assert_called_once_with(
             "jump.example.com",
+            port=22,
             username="jumpuser",
             key_filename="~/.ssh/jump_key",
         )
@@ -216,6 +218,7 @@ class TestConnectionStrategies:
         # Verify target client connection through channel
         target_client.connect.assert_called_once_with(
             "target.example.com",
+            port=22,
             username="targetuser",
             key_filename="~/.ssh/target_key",
             sock=channel,

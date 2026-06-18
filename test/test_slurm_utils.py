@@ -11,7 +11,7 @@ def test_get_slurm_str(cluster_config):
     slurm_str = slurm_utils.get_slurm_str(
         calcdir,
         slurm_script,
-        header_template=f"{cluster_config.remote_machine}.sh.j2",
+        header_template=cluster_config.template,
     )
 
     print(slurm_str)
@@ -25,7 +25,7 @@ def test_get_array_slurm_str(cluster_config):
     slurm_str = slurm_utils.get_array_slurm_str(
         calcdir,
         slurm_script,
-        header_template=f"{cluster_config.remote_machine}.sh.j2",
+        header_template=cluster_config.template,
     )
 
     print(slurm_str)

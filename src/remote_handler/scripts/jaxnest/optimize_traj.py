@@ -11,7 +11,7 @@ from remote_handler.scripts.input_models import OptimizeTrajInput
 calcpath = Path(sys.argv[1])
 INPUTFILE = calcpath / "input_opt.json"
 input_config = OptimizeTrajInput.from_file(INPUTFILE)
-input_config.validate()
+input_config.validate(calcpath)
 
 TAG = input_config.tag
 DATABASE = calcpath / input_config.DATABASE  # Initial file with structures

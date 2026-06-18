@@ -7,14 +7,17 @@ from natsort import natsorted
 
 
 def grep(path: str, expression: str, with_path: bool = True):
-    """Function to extract information from the input file.
+    r"""Function to extract information from the input file.
 
     Args:
         path: Path which is crawled for an expression.
         expression: Regular expression pattern.
         with_path: Controls whether full paths to the files are returned or
             only filenames.
-    Returns: List of files matching the expression.
+
+    Returns:
+        List of files matching the expression.
+
     Example:
         >>> grep("/home/user/dir", ".*\.out", with_path=True)
         ['/home/user/dir/file1.out', '/home/user/dir/file2.out']

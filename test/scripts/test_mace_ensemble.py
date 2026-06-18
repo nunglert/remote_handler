@@ -3,7 +3,13 @@
 import os
 
 import pytest
-import torch
+
+# These tests need the optional torch / torch_sim extras. Skip the whole module
+# (rather than erroring at collection) when they are not installed.
+torch = pytest.importorskip("torch")
+pytest.importorskip("torch_sim")
+
+from _capabilities import MODEL_ASSET
 from ase.build import bulk
 from torch_sim.models.mace import MaceModel
 
@@ -12,9 +18,10 @@ from remote_handler.scripts.torch_sim.mace_ensemble import MaceEnsembleModel
 
 @pytest.fixture(scope="module")
 def foundation_model_path():
-    path = os.getenv("FOUNDATION_MODEL")
-    if not path:
-        pytest.skip("FOUNDATION_MODEL environment variable must be set")
+    """Path to the MACE model shipped under test/data/assets."""
+    path = str(MODEL_ASSET)
+    if not os.path.isfile(path):
+        pytest.skip(f"MACE model not found: {path}")
     return path
 
 

@@ -22,11 +22,6 @@ from remote_handler.exceptions import (
     FileSystemError,
     WorkflowError,
 )
-from remote_handler.scripts.input_models import (
-    CmaesSamplingInput,
-    LammpsSamplingInput,
-    TorchSimSamplingInput,
-)
 from remote_handler.workflows.selectors import ConfigSelector
 
 from .active_learning_base import Sampler
@@ -122,9 +117,6 @@ class LammpsSampler(Sampler):
                 "bin_count": self.num_samples,
                 "seed": np.random.randint(1e6),
             }
-
-            # Validate input dict against the script's expected schema
-            LammpsSamplingInput.from_dict(script_input)
 
             self.script_input_file = self.results_dir / "input_sample.json"
             with open(self.script_input_file, "w") as f:
@@ -354,9 +346,6 @@ class CMAESSampler(Sampler):
             self.script_input_file = self.sample_dir / "input_cmaes.json"
 
             update_default_args(kwargs, script_input)
-
-            # Validate input dict against the script's expected schema
-            CmaesSamplingInput.from_dict(script_input)
 
             with open(self.script_input_file, "w") as f:
                 f.write(json.dumps(script_input, indent=2))
@@ -644,7 +633,7 @@ class NSTrajectorySampler(Sampler):
         self.optimize_walkers = optimize_walkers
         self.energy_uncty_weight = energy_uncty_weight
         self.force_uncty_weight = force_uncty_weight
-        self.stub = stub  
+        self.stub = stub
         self.remote_savepath = (
             Path(remote_savepath) if remote_savepath else None
         )
@@ -710,7 +699,7 @@ class NSTrajectorySampler(Sampler):
                 collect_only=False,
                 loop_time=self.loop_time,
                 jobname=f"AL_NS_{it}",
-                additional_files = self.additional_files,
+                additional_files=self.additional_files,
                 job_type_template="body_ns.sh.j2",
             )
 
@@ -1101,9 +1090,6 @@ class TorchSimSampler(Sampler):
                 "dtype": self.dtype,
             }
 
-            # Validate input dict against the script's expected schema
-            TorchSimSamplingInput.from_dict(script_input)
-
             self.script_input_file = self.results_dir / "input_torchsim.json"
             with open(self.script_input_file, "w") as f:
                 f.write(json.dumps(script_input, indent=2))
@@ -1235,10 +1221,12 @@ class SSPDSampler(Sampler):
         cluster_config: ClusterConfig,
         remote_savepath: Optional[os.PathLike] = None,
         loop_time: float = 30,
+        selector: Optional[ConfigSelector] = None,
+        torch_sim: bool = False,
     ):
         """
         Args:
-            remote_fs: `FileSystemHandlerBase` for the machine on which the sampling
+            remote_fs:FileSystemHandlerBase` for the machine on which the sampling
                 should be run
             sampling_script: Path to SSPD_sampling.py or another compatible sampling
                 script
@@ -1253,6 +1241,8 @@ class SSPDSampler(Sampler):
         self.remote_savepath = remote_savepath
         self.loop_time = loop_time
         self.cluster_config = cluster_config
+        self.selector = selector
+        self.torch_sim = torch_sim
 
     def update(
         self, calcdir: Path, sampler_input: list[Path], **kwargs
@@ -1263,20 +1253,26 @@ class SSPDSampler(Sampler):
         os.makedirs(self.results_dir, exist_ok=True)
 
         self.model_files = sampler_input
-
+        # suggestion: go over everything in kwargs and just write it in there,
+        # implement defaults for each omission
+        # see the nested sampling sampler above
+        if "struct" in kwargs.keys():
+            self.data_path = kwargs["struct"]
         script_input = {
             "input_struct_path": Path(self.data_path).name,
-            "threshold": kwargs["threshold"],
-            "inv_beta": kwargs["inv_beta"],
+            "threshold": kwargs.get("threshold"),
+            "inv_beta": kwargs.get("inv_beta", 0.05),
             "max_acceptance": 1.0,
             "min_acceptance": 0.5,
-            "initial_timestep": 0.00075,
-            "num_iterations": 100,
-            "sampling_threshold": kwargs["sampling_threshold"],
-            "sampling_frequency": 10,
-            "N": 100,
+            "initial_timestep": kwargs.get("initial_timestep", 0.01),
+            "num_iterations": kwargs.get("num_iterations", 10000),
+            "sampling_threshold": kwargs.get("sampling_threshold", 0),
+            "sampling_frequency": kwargs.get("sampling_frequency", 50),
+            "N": kwargs.get("N", 100),
             "model_file": Path(self.model_files).name,
             "seed": np.random.randint(1e6),
+            "num_iterations_OL": kwargs.get("num_iterations_OL"),
+            "hessian_method": kwargs.get("hessian_method", "hessian"),
         }
 
         self.script_input_file = (
@@ -1305,9 +1301,56 @@ class SSPDSampler(Sampler):
         self.sampling_task.copy_file(self.data_path)
         self.sampling_task.copy_file(self.model_files)
 
-
     def get_sampled_configs(self) -> Path:
         self.sampling_task.submit()
         self.sampling_task.collect_results()
+        # TODO: check possibilities with the sampler
+        # would be nice to separate the "reader" functions. Or simply discontinue the support for the non torch-sim version
+        results_path = Path(self.sampling_task.local_savepath) / "out"
+        if self.torch_sim:
+            # there is also the option to write the trajectory in the script, but the h5 format is nicer
+            torch_sim_alist = []
+            from torch_sim.trajectory import TorchSimTrajectory
 
-        return Path(self.sampling_task.local_savepath) / "out/samples.xyz"
+            traj_paths = sorted(results_path.glob("SSPD_trajectory_*.h5md"))
+            for tp in traj_paths:
+                with TorchSimTrajectory(tp) as traj:
+                    for i in range(len(traj)):
+                        atoms = traj.get_atoms(frame=i)
+                        # TODO: figure out why the following is required
+                        atoms.cell.array = atoms.cell.array.T
+                        torch_sim_alist.append(atoms)
+
+        if self.selector is not None:
+            grouped_frames = None
+            if not self.torch_sim:
+                # Read all trajectory frames and pass to selector
+                traj_paths = sorted(results_path.glob("*.xyz"))
+                if traj_paths:
+                    grouped_frames: list[list[Atoms]] = []
+                    for traj_path in traj_paths:
+                        traj = ase.io.read(str(traj_path), index=":")
+                        grouped_frames.append(traj)
+
+            else:
+                grouped_frames = [torch_sim_alist]
+            if grouped_frames:
+                selected = self.selector.select(grouped_frames)
+                os.makedirs(results_path, exist_ok=True)
+                output_path = results_path / "samples.extxyz"
+                ase.io.write(output_path, selected)
+            else:
+                logger.warning(
+                    "No output trajectory files found in %s, "
+                    "falling back to script output",
+                    results_path,
+                )
+                output_path = results_path / "samples.extxyz"
+
+        else:
+            output_path = results_path / "samples.extxyz"
+            if self.torch_sim:
+                ase.io.write(output_path, torch_sim_alist)
+
+        logger.info(f"SSPD sampled configurations written to {output_path}")
+        return output_path

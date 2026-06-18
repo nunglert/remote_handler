@@ -3,6 +3,7 @@
 import logging
 import pathlib
 import subprocess
+import sys
 from typing import Optional
 
 import ase.io
@@ -50,6 +51,32 @@ def combine_databases(
         return calcpath / database_files[0]
 
 
+def write_with_keys(
+    file_name: pathlib.Path,
+    alist: list[Atoms],
+    energy_key: str = "REF_energy",
+    forces_key: str = "REF_forces",
+) -> None:
+    """
+    starting from MACE 0.3.13, they disallowed energy and forces keys
+    need to change to something else
+    Make sure that energy_key and forces_key are in the config for the training script for lower versions!
+    TODO: check actual MACE version to avoid compatibility issues
+
+    Args:
+        file_name: Path to file to write
+        alist: List of Atoms objects to write
+        energy_key: Key to use for energy, default is MACE default
+        forces_key: Key to use for forces, default is MACE default
+    """
+    for atoms in alist:
+        if energy_key not in atoms.info.keys():
+            atoms.info[energy_key] = atoms.get_potential_energy()
+        if forces_key not in atoms.arrays.keys():
+            atoms.arrays[forces_key] = atoms.get_forces()
+    ase.io.write(file_name, alist)
+
+
 def split_db(
     database: pathlib.Path,
     out_file: pathlib.Path,
@@ -81,8 +108,9 @@ def split_db(
     out_suffix = out_file.suffix
     train_file = out_file.parent / (out_stem + "_train" + out_suffix)
     valid_file = out_file.parent / (out_stem + "_val" + out_suffix)
-    ase.io.write(train_file.resolve(), training_set)
-    ase.io.write(valid_file.resolve(), validation_set)
+
+    write_with_keys(train_file.resolve(), training_set)
+    write_with_keys(valid_file.resolve(), validation_set)
     return (train_file, valid_file) if do_return_path else None
 
 
@@ -185,13 +213,21 @@ def run_training_from_config(
 
     # Run training
     try:
-        subprocess.run(
-            [
-                "python",
+        # check if train_runner is the executable, not a full path
+        if "mace_run_train" in str(train_runner):
+            cmd = [str(train_runner), "--config", str(config_file.resolve())]
+        else:
+            cmd = [
+                # Same interpreter running this script (works locally and on
+                # the cluster where the env is activated); bare "python" could
+                # resolve to an interpreter without torch.
+                sys.executable,
                 str(train_runner),
                 "--config",
                 str(config_file.resolve()),
-            ],
+            ]
+        subprocess.run(
+            cmd,
             check=True,
             stderr=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -204,3 +240,74 @@ def run_training_from_config(
             )
             logger.error(run_error.stderr.decode("utf-8"))
         raise RuntimeError(run_error)
+
+
+def convert_torch_model_to_jax(
+    model_path: pathlib.Path,
+    output_path: Optional[pathlib.Path] = None,
+    head: Optional[str] = None,
+) -> pathlib.Path:
+    """Convert a trained torch MACE model to a mace-jax ``.pkl`` bundle.
+
+    Reuses mace-jax's own conversion engine (``convert_model``) and writes the
+    same ``{'config', 'params', 'head'}`` pickle that ``mace-jax-predict`` /
+    ``MACEJAXCalculator`` load -- i.e. what ``mace-create-lammps-model``
+    produces, but without building the (unused, dependency-heavy) LAMMPS-MLIAP
+    wrapper.
+
+    Runs in the same environment as training, so it requires both the torch
+    MACE stack (``mace.tools.scripts_utils``) and ``mace-jax`` importable.
+
+    Args:
+        model_path: Path to the trained torch ``.model`` file.
+        output_path: Destination ``.pkl``. Defaults to
+            ``<model_path stem>-jax.pkl`` next to the input.
+        head: Optional head name to record in the bundle.
+
+    Returns:
+        Path to the written ``.pkl`` bundle.
+    """
+    # Lazy imports: keep this module importable without torch / mace-jax (the
+    # conversion only runs on the cluster env that has both stacks).
+    import pickle
+
+    import torch
+    from flax import serialization
+    from mace.tools.scripts_utils import extract_config_mace_model
+    from mace_jax.cli.mace_jax_from_torch import convert_model
+    from mace_jax.nnx_utils import state_to_serializable_dict
+
+    model_path = pathlib.Path(model_path)
+    bundle = torch.load(model_path, map_location="cpu", weights_only=False)
+    torch_model = (
+        bundle["model"]
+        if isinstance(bundle, dict) and "model" in bundle
+        else bundle
+    )
+    torch_model.eval()
+
+    config = extract_config_mace_model(torch_model)
+    if "error" in config:
+        raise RuntimeError(config["error"])
+    config["torch_model_class"] = torch_model.__class__.__name__
+
+    graphdef, state, _ = convert_model(torch_model, config)
+    # Use state_to_serializable_dict (not state_to_pure_dict): it converts the
+    # ConfigDict leaves the MACE model carries into plain dicts, which msgpack
+    # / flax.serialization can pack (pure_dict leaves a raw ConfigDict and
+    # to_bytes then raises "can not serialize 'ConfigDict' object").
+    variables = state_to_serializable_dict(state)
+
+    artifact = {
+        "config": config,
+        "params": serialization.to_bytes(variables),
+        "head": head,
+    }
+
+    if output_path is None:
+        output_path = model_path.with_name(model_path.stem + "-jax.pkl")
+    output_path = pathlib.Path(output_path)
+    with output_path.open("wb") as f:
+        pickle.dump(artifact, f)
+
+    return output_path

@@ -8,9 +8,11 @@ import random
 import shutil
 import socket
 import string
+import subprocess
 import tempfile
 import time
 from abc import ABC, abstractmethod
+from collections import namedtuple
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -18,9 +20,11 @@ from stat import S_ISDIR
 from typing import Optional
 
 import ase.io
+import numpy as np
 import paramiko
 from ase import Atoms
 
+from remote_handler.core import resilience
 from remote_handler.core.file_utils import tag_path as tag_path_util
 from remote_handler.core.ssh_connection import (
     ConfigBasedSSHClientProvider,
@@ -30,6 +34,21 @@ from remote_handler.exceptions import FileSystemError, RemoteConnectionError
 
 logger = logging.getLogger(__name__)
 
+# Result of ``run_command`` -- a uniform shape across local/remote execution so
+# callers (e.g. the scheduler-free DirectExecutor) don't branch on transport.
+CommandResult = namedtuple("CommandResult", ["returncode", "stdout", "stderr"])
+
+
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
 
 class FileSystemHandlerBase(ABC):
     """
@@ -37,17 +56,9 @@ class FileSystemHandlerBase(ABC):
     file system.
 
     This class provides an abstract interface for common file operations
-    that can work with both local and remote file systems.
-
-    Methods:
-        get(remote, local): Abstract method to copy a file from a remote
-            machine to the local machine.
-        put(local, remote): Abstract method to copy a file or directory from
-            the local machine to a remote machine.
-        makedirs(path, exist_ok=False): Abstract method to create a directory
-            at the specified path, including any necessary parent directories.
-        mkdir(path): Abstract method to create a directory at the specified
-            path.
+    that can work with both local and remote file systems. The concrete
+    operations (``get``, ``put``, ``makedirs``, ``mkdir``, ...) are documented
+    on their individual methods below.
     """
 
     def __init__(self):
@@ -202,10 +213,12 @@ class FileSystemHandlerBase(ABC):
         """
         Ensure that the provided path is unique by appending a timestamp if it
         already exists.
+
         Args:
             path (str): The original file or directory path.
             is_directory (bool, optional): If True, indicates that the path is a
                 directory. Defaults to False.
+
         Returns:
             str: A unique file or directory path.
         """
@@ -261,6 +274,7 @@ class LocalFileSystem(FileSystemHandlerBase):
         """
         Create a directory at the specified path, including any necessary
         parent directories.
+
         Args:
             path (str): The directory path to create.
             exist_ok (bool, optional): If True, do not raise an error if the
@@ -271,6 +285,7 @@ class LocalFileSystem(FileSystemHandlerBase):
     def mkdir(self, path: os.PathLike) -> None:
         """
         Create a directory at the specified path.
+
         Args:
             path (str): The directory path to create.
         """
@@ -278,6 +293,7 @@ class LocalFileSystem(FileSystemHandlerBase):
 
     def rmtree(self, path: os.PathLike, ignore_errors=True) -> None:
         """Recursively delete a directory on the local filesystem.
+
         Args:
             path (str): The path of the directory to delete.
             ignore_errors (bool, optional): If True, ignore errors during
@@ -322,7 +338,7 @@ class LocalFileSystem(FileSystemHandlerBase):
         """
         filepath = str(filepath)
         with open(filepath, "w") as f:
-            json.dump(param_dict, f, indent=2)
+            json.dump(param_dict, f, indent=2, cls=NumpyEncoder)
 
     def read_ase(self, filepath: os.PathLike, **kwargs) -> list[Atoms]:
         """
@@ -366,6 +382,17 @@ class LocalFileSystem(FileSystemHandlerBase):
         """
         os.remove(path)
 
+    def run_command(self, command: str) -> CommandResult:
+        """Run a shell command on the local machine.
+
+        Counterpart to :meth:`RemoteFileSystem.run_command`, so executor code
+        can launch work the same way regardless of where the filesystem lives.
+        """
+        result = subprocess.run(
+            command, shell=True, capture_output=True, text=True
+        )
+        return CommandResult(result.returncode, result.stdout, result.stderr)
+
 
 def reconnect_on_failure(func):
     """
@@ -373,6 +400,12 @@ def reconnect_on_failure(func):
     This decorator wraps methods that perform SSH/SFTP operations. If an
     SSHException, EOFError, or OSError is raised during the execution of the
     decorated method, it attempts to reconnect and retries the operation once.
+
+    If that single reconnect+retry still fails with a connection/auth error
+    *and* the filesystem's ``connection_policy`` is enabled (opt-in, off by
+    default), the operation escalates to ``resilience.run_resilient``: it
+    pauses and keeps reconnecting on an interval until the credential is
+    refreshed, rather than crashing. Disabled is exactly the old behaviour.
     """
 
     @functools.wraps(func)
@@ -380,10 +413,32 @@ def reconnect_on_failure(func):
         # Attempt the operation
         try:
             return func(self, *args, **kwargs)
-        except (paramiko.SSHException, EOFError, OSError):
-            print("SFTP connection lost. Reconnecting...")
-            self._reconnect()
-            return func(self, *args, **kwargs)
+        except (paramiko.SSHException, EOFError, OSError) as exc:
+            logger.warning(
+                "SFTP op '%s' failed (%s); reconnecting once...",
+                func.__name__,
+                exc,
+            )
+            try:
+                self._reconnect()
+                return func(self, *args, **kwargs)
+            except (
+                paramiko.SSHException,
+                EOFError,
+                OSError,
+                RemoteConnectionError,
+            ) as exc2:
+                policy = getattr(
+                    self, "connection_policy", resilience.DISABLED
+                )
+                if policy.enabled and resilience.is_connection_error(exc2):
+                    return resilience.run_resilient(
+                        lambda: func(self, *args, **kwargs),
+                        policy,
+                        before_retry=self._reconnect,
+                        label=f"SFTP {func.__name__} -> {self.remote_alias}",
+                    )
+                raise
 
     return wrapper
 
@@ -412,6 +467,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
         remote_temp_path: Optional[str] = None,
         local_temp_path: Optional[str] = None,
         ssh_client_provider: Optional[SSHClientProvider] = None,
+        connection_policy: Optional[resilience.ConnectionPolicy] = None,
     ):
         super().__init__()
 
@@ -419,6 +475,8 @@ class RemoteFileSystem(FileSystemHandlerBase):
         self.identityfile = identityfile
         self.ssh_client = None
         self.sftp_client = None
+        # Opt-in pause-and-retry on connection/auth loss; off by default.
+        self.connection_policy = connection_policy or resilience.DISABLED
 
         # Store the client provider - use config-based by default
         if ssh_client_provider is None:
@@ -522,10 +580,12 @@ class RemoteFileSystem(FileSystemHandlerBase):
     @reconnect_on_failure
     def makedirs(self, path: os.PathLike, exist_ok=False) -> None:
         """SFTP makedirs with automatic reconnect on failure.
+
         Args:
             path (str): The directory path to create.
             exist_ok (bool, optional): If True, do not raise an error if the
-                directory already exists. Defaults to False."""
+                directory already exists. Defaults to False.
+        """
         path = str(path)
         try:
             self.sftp_client.mkdir(path)
@@ -649,7 +709,7 @@ class RemoteFileSystem(FileSystemHandlerBase):
         """
         filepath = str(filepath)
         with self.sftp_client.file(filepath, "w") as f:
-            f.write(json.dumps(param_dict, indent=2))
+            f.write(json.dumps(param_dict, indent=2, cls=NumpyEncoder))
 
     @reconnect_on_failure
     def read_ase(self, filepath: os.PathLike, **kwargs) -> list[Atoms]:
@@ -738,3 +798,19 @@ class RemoteFileSystem(FileSystemHandlerBase):
             raise FileSystemError(
                 f"Failed to remove remote file: {path}"
             ) from e
+
+    @reconnect_on_failure
+    def run_command(self, command: str) -> CommandResult:
+        """Run a command on the remote host over the SSH connection.
+
+        Uses the same authenticated paramiko client as the SFTP transport, so
+        it honours whatever ssh-config/credentials the filesystem connected
+        with (no separate ``ssh`` subprocess, no dependency on the default
+        ``~/.ssh/config``). Detached launches (``nohup ... &``) return at once
+        because the foreground statement exits immediately.
+        """
+        _, stdout, stderr = self.ssh_client.exec_command(command)
+        returncode = stdout.channel.recv_exit_status()
+        out = stdout.read().decode(errors="replace")
+        err = stderr.read().decode(errors="replace")
+        return CommandResult(returncode, out, err)

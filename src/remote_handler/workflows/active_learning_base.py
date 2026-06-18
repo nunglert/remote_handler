@@ -142,23 +142,26 @@ def process_progress(
     if combine_sampler_outputs:
         if len(keys) > 1:
             for key in keys[:-1]:
-                append_or_extend(
-                    progress[key].get("sampler_output"), evaluator_in
-                )
+                if "sampler_output" in progress[key].keys():
+                    append_or_extend(
+                        progress[key].get("sampler_output"), evaluator_in
+                    )
 
     if combine_evaluator_outputs:
         if len(keys) > 1:
             for key in keys[:-1]:
-                append_or_extend(
-                    progress[key].get("evaluator_output"), trainer_in
-                )
+                if "evaluator_output" in progress[key].keys():
+                    append_or_extend(
+                        progress[key].get("evaluator_output"), trainer_in
+                    )
 
     if combine_trainer_outputs:
         if len(keys) > 1:
             for key in keys[:-1]:
-                append_or_extend(
-                    progress[key].get("trainer_output"), sampler_in
-                )
+                if "trainer_output" in progress[key].keys():
+                    append_or_extend(
+                        progress[key].get("trainer_output"), sampler_in
+                    )
 
     last_iteration_key = keys[-1]
     last_iter_keys = progress[last_iteration_key].keys()
@@ -167,7 +170,7 @@ def process_progress(
         iteration_idx = last_iteration_key
 
         if steps in [[1, 1, 1], [1, 1, 0], [1, 0, 0]]:
-            if not combine_trainer_outputs and last_iteration_key is not 0:
+            if not combine_trainer_outputs and last_iteration_key != 0:
                 # not needed if combine is true since the previous generation
                 # trainer_output would have already been added above
                 append_or_extend(
@@ -698,8 +701,16 @@ class ActiveLearningHandler(ABC):
             Path to moved file
         """
         if not file.is_relative_to(self.calchome):
-            file_home = self.calchome / os.path.split(file)[1]
-            shutil.copy(file, file_home)
+            # calchome may not exist yet: initial_*_out files are moved in
+            # during __init__, before the per-iteration dir structure is built.
+            os.makedirs(self.calchome, exist_ok=True)
+            file_home = self.calchome / file.name
+            # initial_*_out may be a directory (e.g. a mace-jax model bundle),
+            # not just a single file -- copy the whole tree in that case.
+            if file.is_dir():
+                shutil.copytree(file, file_home, dirs_exist_ok=True)
+            else:
+                shutil.copy(file, file_home)
             file = file_home
         return file
 

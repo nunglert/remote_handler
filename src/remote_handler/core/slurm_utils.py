@@ -9,12 +9,35 @@ import numpy as np
 from jinja2 import Environment, FileSystemLoader
 
 from remote_handler.config import get_config
+from remote_handler.core import remote_env, resilience
 from remote_handler.exceptions import TaskError
 
 logger = logging.getLogger(__name__)
 
 
-def submit_job(script_path, output_path, ssh_command=None, cwd=None) -> str:
+def _run_ssh(cmd: str, policy: resilience.ConnectionPolicy):
+    """Run a (possibly ssh-wrapped) shell command under a connection policy.
+
+    With a disabled policy this is exactly ``subprocess.run(..., check=True)``;
+    with an enabled one it pauses-and-retries on ssh-level auth/connection
+    failures (but still raises on a real non-zero exit, e.g. a bad sbatch).
+    """
+    return resilience.run_resilient(
+        lambda: subprocess.run(
+            cmd, shell=True, capture_output=True, text=True, check=True
+        ),
+        policy,
+        label=f"ssh command ({cmd[:60]}...)",
+    )
+
+
+def submit_job(
+    script_path,
+    output_path,
+    ssh_command=None,
+    cwd=None,
+    connection_policy: resilience.ConnectionPolicy = resilience.DISABLED,
+) -> str:
     """
     Submit a slurm job.
 
@@ -44,11 +67,9 @@ def submit_job(script_path, output_path, ssh_command=None, cwd=None) -> str:
         submit_cmd = command
 
     # Execute the submission command and capture the output
-    result = subprocess.run(
-        submit_cmd, shell=True, capture_output=True, text=True, check=True
-    )
+    result = _run_ssh(submit_cmd, connection_policy)
     # In the stdout, we expect to find the job ID
-    match = re.search("(\d+)", result.stdout)
+    match = re.search(r"(\d+)", result.stdout)
     if match is not None:
         return match.groups()[0]
     else:
@@ -66,6 +87,7 @@ def submit_job_array(
     num_parallel: int = 10,
     ssh_command: Optional[str] = None,
     cwd: Optional[os.PathLike] = None,
+    connection_policy: resilience.ConnectionPolicy = resilience.DISABLED,
 ) -> str:
     """
     Submit a slurm job array.
@@ -97,16 +119,18 @@ def submit_job_array(
         submit_cmd = command
 
     # Execute the submission command and capture the output
-    result = subprocess.run(
-        submit_cmd, shell=True, capture_output=True, text=True, check=True
-    )
+    result = _run_ssh(submit_cmd, connection_policy)
 
     # Extract and return the job ID from the output
     pid = re.search(r"(\d+)", result.stdout).groups()[0]
     return pid
 
 
-def check_job_status_sacct(job_ids, ssh_command="ssh lugus"):
+def check_job_status_sacct(
+    job_ids,
+    ssh_command="ssh lugus",
+    connection_policy: resilience.ConnectionPolicy = resilience.DISABLED,
+):
     """
     Tries to retrieve information on the job using the slurm `sacct`
     functionality. I designed this for arrays. Somehow sacct does not work
@@ -134,9 +158,7 @@ def check_job_status_sacct(job_ids, ssh_command="ssh lugus"):
             status_cmd = (
                 f"{ssh_command} 'sacct -j {pid_str} --format=JobID,State'"
             )
-        result = subprocess.run(
-            status_cmd, shell=True, capture_output=True, text=True, check=True
-        )
+        result = _run_ssh(status_cmd, connection_policy)
         logger.debug(result["stderr"])
         status = [s.split()[-1] for s in result.stdout.split("\n")[2:-1]]
         return [
@@ -146,7 +168,11 @@ def check_job_status_sacct(job_ids, ssh_command="ssh lugus"):
         return []
 
 
-def check_job_status_squeue(job_id, ssh_command="ssh lugus"):
+def check_job_status_squeue(
+    job_id,
+    ssh_command="ssh lugus",
+    connection_policy: resilience.ConnectionPolicy = resilience.DISABLED,
+):
     """
     Tries to retrieve information on the job using the slurm `squeue`
     command. This is a quite naive method that just checks whether `squeue`
@@ -165,9 +191,7 @@ def check_job_status_squeue(job_id, ssh_command="ssh lugus"):
         status_cmd = f"squeue -j {pid_str}"
     else:
         status_cmd = f"{ssh_command} 'squeue -j {pid_str}'"
-    result = subprocess.run(
-        status_cmd, shell=True, capture_output=True, text=True, check=True
-    )
+    result = _run_ssh(status_cmd, connection_policy)
     res = result.stdout.split("\n")
     if len(res) > 2:
         return False
@@ -185,6 +209,39 @@ class LoggingFileSystemLoader(FileSystemLoader):
         return source, filename, uptodate
 
 
+def _load_header_template(header_template):
+    """Load a SLURM header template by name *or* by explicit path.
+
+    ``header_template`` (the cluster config's ``template`` field) may be:
+
+    * a bare filename (e.g. ``"musica.sh.j2"``) resolved against the template
+      search path -- ``REMOTE_HANDLER_SLURM_TEMPLATES`` then the built-ins; or
+    * a path to a template file (absolute, or containing a path separator),
+      which is loaded directly. Its directory is added to the search path so
+      the body ``{% include job_type_template %}`` still resolves against the
+      shipped ``body_*.sh.j2``.
+
+    Jinja's ``get_template`` only ever does a *name* lookup within the search
+    dirs, so an explicit path handed to it raises ``TemplateNotFound``; this
+    bridges that gap.
+    """
+    template_dirs = list(get_config().get_template_dirs())
+    name = header_template
+
+    path = Path(header_template)
+    if path.is_absolute() or os.sep in str(header_template):
+        if not path.is_file():
+            raise TaskError(
+                "SLURM header template not found at the given path: "
+                f"{header_template}"
+            )
+        template_dirs = [str(path.parent), *template_dirs]
+        name = path.name
+
+    env = Environment(loader=LoggingFileSystemLoader(template_dirs))
+    return env.get_template(name)
+
+
 def get_array_slurm_str(
     calcdir,
     python_script_path,
@@ -194,7 +251,7 @@ def get_array_slurm_str(
     partition="normal",
     n_processors=8,
     conda_env="jaxnest",
-    conda_source="~/miniconda3/etc/profile.d/conda.sh",
+    conda_source="~/miniconda3",
     map_indices=None,
     header_template="lugus.sh.j2",
     job_type_template="body_array.sh.j2",
@@ -205,6 +262,7 @@ def get_array_slurm_str(
     Get the SLURM script for an array job as a string.
     The directories contained in TEMPLATE_DIRS will be scanned in order
     until the first succesful hit of a `header_template` file.
+
     Args:
         calcdir (os.PathLike): Path to the calculation directory.
         python_script_path (os.PathLike): Path to the python script to be executed.
@@ -226,11 +284,8 @@ def get_array_slurm_str(
     if map_indices is None:
         map_indices = np.arange(num_array_tasks)
 
-    # Create a Jinja2 environment with the custom loader to have logging
-    config = get_config()
-    template_dirs = config.get_template_dirs()
-    env = Environment(loader=LoggingFileSystemLoader(template_dirs))
-    template = env.get_template(header_template)
+    # Load the header template (by name on the search path, or explicit path).
+    template = _load_header_template(header_template)
     # Render the template with the provided parameters
     slurm_str = template.render(
         calcdir=calcdir,
@@ -242,6 +297,9 @@ def get_array_slurm_str(
         n_cores=n_processors,
         conda_env=conda_env,
         conda_source=conda_source,
+        conda_activation=remote_env.conda_activation_script(
+            conda_source, conda_env
+        ),
         map_indices=map_indices,
         slurm_header_add=slurm_header_add,
         job_type_template=job_type_template,
@@ -284,13 +342,8 @@ def get_slurm_str(
         str: The rendered SLURM script as a string.
     """
 
-    # Create a Jinja2 environment with the custom loader to have logging
-    config = get_config()
-    template_dirs = config.get_template_dirs()
-    env = Environment(loader=LoggingFileSystemLoader(template_dirs))
-
-    # Load the specified header template
-    template = env.get_template(header_template)
+    # Load the header template (by name on the search path, or explicit path).
+    template = _load_header_template(header_template)
 
     # Render the template with the provided parameters
     slurm_str = template.render(
@@ -301,6 +354,9 @@ def get_slurm_str(
         n_cores=n_cores,
         conda_env=conda_env,
         conda_source=conda_source,
+        conda_activation=remote_env.conda_activation_script(
+            conda_source, conda_env
+        ),
         slurm_header_add=slurm_header_add,
         job_type_template=job_type_template,
         exclude_nodes=exclude_nodes,

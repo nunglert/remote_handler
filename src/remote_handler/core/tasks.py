@@ -7,14 +7,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Union
-from xml.etree.ElementPath import prepare_star
 
-from remote_handler.core import (
-    cluster_handler,
-    file_handler,
-    file_utils,
-    slurm_utils,
-)
+from remote_handler.core import executors, file_handler, file_utils, remote_env
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import (
     FileSystemHandlerBase,
@@ -26,6 +20,14 @@ from remote_handler.core.utils import SimpleLogger
 from remote_handler.exceptions import FileSystemError, TaskError
 
 logger = logging.getLogger(__name__)
+
+# Array tasks execute in "<rootpath>/calcdirs/<run_id>" (see
+# SlurmArrayHandler.calcdir and templates/body_array.sh.j2) -- two levels below
+# the rootpath where shared resources are allocated. Reference shared resources
+# from a task's input JSON with this prefix; it is derived from the run-subdir
+# nesting so it stays correct if that layout ever changes.
+_ARRAY_TASK_RUN_SUBDIR = os.path.join(remote_env.CALCDIRS_DIRNAME, "0")
+SHARED_RESOURCE_PREFIX = os.path.relpath(os.curdir, _ARRAY_TASK_RUN_SUBDIR)
 
 
 class RemoteTask(ABC):
@@ -41,18 +43,19 @@ class RemoteTask(ABC):
     - how can I properly check (on top of slurm) whether your job finished?
 
     Methods that need to be implemented are:
-    - `allocate_data`: Logic for the allocation of files on the remote file
-        system required for the task.
-    - `submit`: Logic for the submission of the job. This can be a simple
-        `subprocess.run(...)` call, but can also include more elaborate slurm
-        handling via `remote_handler.core.cluster_handler`.
-    - `collect_results`: Logic for the collection of results. This can be a
-        simple copy of files from the remote machine to the host, but can also
-        include parsing of files and returning only the relevant information.
-    - `finish_check` (optional): Logic for an additional check whether the job
-        finished properly. This is useful, as slurm does not know anything about
-        your job itself. Hence, this can be a good complementary way of checking
-        whether a job has really finished.
+
+    - ``allocate_data``: Logic for the allocation of files on the remote file
+      system required for the task.
+    - ``submit``: Logic for the submission of the job. This can be a simple
+      ``subprocess.run(...)`` call, but can also include more elaborate slurm
+      handling via ``remote_handler.core.cluster_handler``.
+    - ``collect_results``: Logic for the collection of results. This can be a
+      simple copy of files from the remote machine to the host, but can also
+      include parsing of files and returning only the relevant information.
+    - ``finish_check`` (optional): Logic for an additional check whether the
+      job finished properly. This is useful, as slurm does not know anything
+      about your job itself. Hence, this can be a good complementary way of
+      checking whether a job has really finished.
 
     Args:
         logfile: A log file on the host machine where output is printed
@@ -296,6 +299,11 @@ class SingleScriptTask(RemoteTask):
         # The directory where the computation will be performed
         self.calcdir = Path(self.savepath)
 
+        # Propagate this cluster's opt-in connection policy to the SFTP layer
+        # so file transfers pause-and-retry on auth loss too (no-op if off).
+        if hasattr(remote_fs, "connection_policy"):
+            remote_fs.connection_policy = cluster_config.connection_policy
+
         self.script_file = script_file
         self.input_file = input_file
         self.additional_files = additional_files
@@ -307,9 +315,9 @@ class SingleScriptTask(RemoteTask):
         self.loop_time = loop_time
         self.local_savepath = local_savepath
 
-        self.slurm_handler = cluster_handler.SlurmJobHandler(
+        self.executor = executors.make_single_executor(
+            cluster_config,
             jobname=jobname,
-            cluster_config=cluster_config,
             savepath=self.calcdir,
             n_processors=n_processors,
             slurm_header_add="",
@@ -318,6 +326,9 @@ class SingleScriptTask(RemoteTask):
             loop_time=loop_time,
             job_type_template=job_type_template,
         )
+        # Back-compat alias: external callers (e.g. RemoteAtomsHandler) still
+        # reference ``.slurm_handler``. Same object as ``.executor``.
+        self.slurm_handler = self.executor
 
         # Create composable components for file allocation and result collection
         self.file_allocator = FileAllocator(
@@ -340,6 +351,19 @@ class SingleScriptTask(RemoteTask):
         """
         return self.file_allocator.copy_file(local_path)
 
+    def copy_path(self, local_path):
+        """Copy a local file *or* directory tree to the remote calcdir.
+
+        Use this instead of :meth:`copy_file` when the artifact may be a
+        directory (e.g. a mace-jax model bundle); files behave identically.
+
+        Args:
+            local_path: Path to the local file or directory.
+        Returns:
+            The path to the file/directory on the remote machine.
+        """
+        return self.file_allocator.copy_path(local_path)
+
     def allocate_data(self):
         """Allocate the script and input file on the remote machine and
         prepare the slurm job script.
@@ -352,21 +376,28 @@ class SingleScriptTask(RemoteTask):
         self.input_file_remote = self.copy_file(self.input_file)
 
         if self.additional_files:
-            self.remote_fs.makedirs(self.calcdir / "additional_files", exist_ok=True)
+            self.remote_fs.makedirs(
+                self.calcdir / "additional_files", exist_ok=True
+            )
             for additional_file in self.additional_files:
-                self.remote_fs.put(additional_file, self.calcdir / "additional_files" / os.path.basename(additional_file))
-    
-        # After copying the files, write the slurm job script on the remote machine
-        self.slurm_handler.write_jobfile(
+                self.remote_fs.put(
+                    additional_file,
+                    self.calcdir
+                    / "additional_files"
+                    / os.path.basename(additional_file),
+                )
+
+        # After copying the files, write the job script on the remote machine
+        self.executor.write_jobfile(
             self.input_file_remote, self.script_file_remote
         )
 
     def submit(self, only_start=False):
-        """Submit the slurm job and wait until it is finished."""
-        self.slurm_handler.submit()
+        """Submit the job and wait until it is finished."""
+        self.executor.submit()
         if only_start:
             return
-        self.slurm_handler.wait_until_finished()
+        self.executor.wait_until_finished()
 
     def collect_results(self):
         """Copy the entire calculation directory from the remote machine to
@@ -399,6 +430,11 @@ class SingleScriptTask(RemoteTask):
             if only_start:
                 break
 
+            # Node-exclusion retry is a scheduler capability (re-place the job
+            # on another node). Backends without a notion of nodes run once.
+            if not self.executor.supports_node_retry:
+                break
+
             if not self.node_problem():
                 break
 
@@ -419,7 +455,7 @@ class SingleScriptTask(RemoteTask):
 
                 exclude_node_list.append(last_used_node)
 
-                self.slurm_handler.write_jobfile(
+                self.executor.write_jobfile(
                     self.input_file_remote,
                     self.script_file,
                     exclude_nodes=",".join(exclude_node_list),
@@ -443,9 +479,10 @@ class Writeable(ABC):
         prepare in the directory of the job.
 
         Methods that need to be implemented are:
-        - `write`: Logic for writing the content to disk. This can be a simple
-            write to a file, but can also include more elaborate logic like
-            writing an ASE trajectory file.
+
+        - ``write``: Logic for writing the content to disk. This can be a
+          simple write to a file, but can also include more elaborate logic
+          like writing an ASE trajectory file.
     """
 
     content: Any
@@ -509,6 +546,27 @@ class FileAllocator:
         moved_path = self.rootpath / os.path.split(local_path)[-1]
         self.remote_fs.put(local_path, moved_path)
         logger.debug(f"Copied {local_path} to {moved_path}")
+        return moved_path
+
+    def copy_path(self, local_path: os.PathLike) -> Path:
+        """Copy a local file *or* directory tree to remote rootpath.
+
+        Like :meth:`copy_file`, but if ``local_path`` is a directory (e.g. a
+        mace-jax model bundle of ``config.json`` + ``params.msgpack``) it is
+        uploaded recursively via ``put_dir`` rather than the single-file
+        ``put``. A plain file is handled exactly as ``copy_file`` would.
+
+        Args:
+            local_path: Path to the local file or directory to copy
+
+        Returns:
+            Path to the file/directory on the remote machine
+        """
+        if not Path(local_path).is_dir():
+            return self.copy_file(local_path)
+        moved_path = self.rootpath / Path(local_path).name
+        self.remote_fs.put_dir(local_path, moved_path)
+        logger.debug(f"Copied directory {local_path} to {moved_path}")
         return moved_path
 
     def allocate_shared_resources(
@@ -709,6 +767,11 @@ class ArrayScriptTask(RemoteTask):
         # The directory where the computation will be performed
         self.rootpath = Path(self.savepath)
 
+        # Propagate this cluster's opt-in connection policy to the SFTP layer
+        # so file transfers pause-and-retry on auth loss too (no-op if off).
+        if hasattr(remote_fs, "connection_policy"):
+            remote_fs.connection_policy = cluster_config.connection_policy
+
         # Store the provided arguments
         self.python_script_file = python_script_file
         self.individual_ressources = individual_ressources
@@ -716,10 +779,10 @@ class ArrayScriptTask(RemoteTask):
         self.loop_time = loop_time
         self.local_savepath = local_savepath
 
-        # Instantiate the slurm handler for array jobs
-        self.slurm_handler = cluster_handler.SlurmArrayHandler(
+        # Instantiate the execution backend for array jobs
+        self.executor = executors.make_array_executor(
+            cluster_config,
             jobname=jobname,
-            cluster_config=cluster_config,
             savepath=self.rootpath,
             n_processors=n_processors,
             remote_fs=remote_fs,
@@ -729,8 +792,10 @@ class ArrayScriptTask(RemoteTask):
             num_parallel=num_parallel,
             job_type_template="body_array.sh.j2",
         )
+        # Back-compat alias (see SingleScriptTask). Same object as ``.executor``.
+        self.slurm_handler = self.executor
 
-        self.calcdir = self.slurm_handler.calcdir
+        self.calcdir = self.executor.calcdir
 
         # Create composable components for file allocation and result collection
         self.file_allocator = FileAllocator(
@@ -861,6 +926,19 @@ class ArrayScriptTask(RemoteTask):
         """
         return self.file_allocator.copy_file(local_path)
 
+    def copy_path(self, local_path):
+        """Copy a local file *or* directory tree to the remote rootpath.
+
+        Use this instead of :meth:`copy_file` when the artifact may be a
+        directory (e.g. a mace-jax model bundle); files behave identically.
+
+        Args:
+            local_path: Path to the local file or directory.
+        Returns:
+            The path to the file/directory on the remote machine.
+        """
+        return self.file_allocator.copy_path(local_path)
+
     def allocate_data(self, slurm_only: bool = False):
         """Allocate the script and input files on the remote machine and
         prepare the slurm job script.
@@ -870,8 +948,8 @@ class ArrayScriptTask(RemoteTask):
         """
         # Copy the python script to the calculation directory on the remote machine
         self.script_file_remote = self.copy_file(self.python_script_file)
-        # Write the slurm job script on the remote machine
-        self.slurm_handler.write_jobfile(
+        # Write the job script on the remote machine
+        self.executor.write_jobfile(
             self.script_file_remote, self.num_array_tasks
         )
 
@@ -888,9 +966,9 @@ class ArrayScriptTask(RemoteTask):
             )
 
     def submit(self):
-        # Submit the slurm job and wait until it is finished.
-        self.slurm_handler.submit()
-        self.slurm_handler.wait_until_finished()
+        # Submit the job and wait until it is finished.
+        self.executor.submit()
+        self.executor.wait_until_finished()
 
     def collect_results(self):
         """Copy the entire rootpath directory from the remote machine to

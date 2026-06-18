@@ -18,9 +18,15 @@ from typing import Optional
 
 import paramiko
 
+from remote_handler.core import _paramiko_patch
 from remote_handler.exceptions import RemoteConnectionError
 
 logger = logging.getLogger(__name__)
+
+# Fix the paramiko 3.5.1 ssh-agent certificate bug at import time, before any
+# connection is attempted. No-op on paramiko versions that aren't affected.
+# See remote_handler.core._paramiko_patch / paramiko issue #2462.
+_paramiko_patch.apply()
 
 
 @dataclass
@@ -32,11 +38,13 @@ class ProxyJumpParams:
         hostname: The jump host hostname
         username: Username for jump host authentication
         identityfile: Optional SSH key file for jump host
+        port: SSH port of the jump host (default 22)
     """
 
     hostname: str
     username: str
     identityfile: Optional[str] = None
+    port: int = 22
 
 
 @dataclass
@@ -51,12 +59,14 @@ class SSHConnectionParams:
         hostname: Target host hostname
         username: Username for authentication
         identityfile: Optional SSH key file path
+        port: SSH port of the target host (default 22)
         proxyjump: Optional ProxyJump parameters for jump host connections
     """
 
     hostname: str
     username: str
     identityfile: Optional[str] = None
+    port: int = 22
     proxyjump: Optional[ProxyJumpParams] = None
 
 
@@ -159,6 +169,9 @@ class SSHConfigParser:
                 remote_alias,
             )
 
+        # SSH config ``Port`` (paramiko returns it as a string); default 22.
+        port = int(host_config.get("port", 22))
+
         # Handle ProxyJump recursively
         proxyjump_alias = host_config.get("proxyjump")
         proxyjump = None
@@ -168,12 +181,14 @@ class SSHConfigParser:
                 hostname=jump_config.get("hostname"),
                 username=jump_config.get("user"),
                 identityfile=jump_config.get("identityfile", [None])[0],
+                port=int(jump_config.get("port", 22)),
             )
 
         return SSHConnectionParams(
             hostname=hostname,
             username=username,
             identityfile=identityfile,
+            port=port,
             proxyjump=proxyjump,
         )
 
@@ -216,12 +231,27 @@ class DirectSSHConnection(SSHConnectionStrategy):
 
         Returns:
             Connected SSH client
+
+        Note:
+            ``paramiko.SSHClient.connect`` defaults to ``allow_agent=True``,
+            so the running ssh-agent is consulted before the key files in
+            ``params.identityfile``. paramiko 3.5.1 crashes with
+            ``AttributeError: public_blob`` when the agent offers an OpenSSH
+            *certificate* (e.g. one loaded by ``step ssh login``) rather than
+            a plain key -- an upstream bug unfixed as of the pinned version:
+            https://github.com/paramiko/paramiko/issues/2462
+            https://github.com/paramiko/paramiko/issues/2437
+            ``remote_handler.core._paramiko_patch`` (applied at import of this
+            module) fixes this at runtime, so agent certificates work directly
+            and no ``ssh-add -D`` workaround is needed. The patch self-disables
+            on paramiko versions that aren't affected.
         """
         ssh_client = paramiko.SSHClient()
         ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
         ssh_client.connect(
             params.hostname,
+            port=params.port,
             username=params.username,
             key_filename=params.identityfile,
         )
@@ -270,13 +300,14 @@ class ProxyJumpSSHConnection(SSHConnectionStrategy):
 
         self.jump_client.connect(
             jump_params.hostname,
+            port=jump_params.port,
             username=jump_params.username,
             key_filename=jump_params.identityfile,
         )
 
         # Step 2: Create tunnel from jump host to target
         jump_transport = self.jump_client.get_transport()
-        dest_addr = (params.hostname, 22)
+        dest_addr = (params.hostname, params.port)
         local_addr = ("localhost", 0)
 
         channel = jump_transport.open_channel(
@@ -289,6 +320,7 @@ class ProxyJumpSSHConnection(SSHConnectionStrategy):
 
         ssh_client.connect(
             params.hostname,
+            port=params.port,
             username=params.username,
             key_filename=params.identityfile,
             sock=channel,
@@ -393,7 +425,10 @@ class ConfigBasedSSHClientProvider(SSHClientProvider):
         params = self.config_parser.parse_host_config(
             self.remote_alias, self.identityfile
         )
-
+        logger.warning(
+            "params: %s",
+            params,
+        )
         # Create and execute connection strategy
         self.connection_strategy = SSHConnectionFactory.create_strategy(params)
         ssh_client = self.connection_strategy.connect(params)

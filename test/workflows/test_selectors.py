@@ -1,10 +1,14 @@
 """Tests for configuration selectors."""
 
+import importlib.util
 import json
 
 import numpy as np
 import pytest
 from ase import Atoms
+
+# QUESTS-based selectors need the optional 'quests' extra.
+_HAS_QUESTS = importlib.util.find_spec("quests") is not None
 
 from remote_handler.workflows.selectors import (
     ConfigSelector,
@@ -443,6 +447,9 @@ def _make_varied_configs(n, rng_seed=42):
     return configs
 
 
+@pytest.mark.skipif(
+    not _HAS_QUESTS, reason="needs the optional 'quests' extra"
+)
 class TestQUESTSSelector:
     def test_diversity_selects_correct_count(self):
         configs = _make_varied_configs(20)
@@ -602,6 +609,7 @@ class TestPipelineSelector:
 
     def test_uncertainty_then_quests(self):
         """Uncertainty filter → QUESTS diversity selection."""
+        pytest.importorskip("quests")
         # Create varied configs with uncertainty data
         configs = _make_varied_configs(20)
         for i, at in enumerate(configs):

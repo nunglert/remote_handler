@@ -14,8 +14,8 @@ import pytest
 from ase import Atoms
 from ase.calculators.calculator import compare_atoms
 
-from remote_handler import optimizer, run_optimizer
-from remote_handler.atoms_handler import front_tag
+from remote_handler.core.atoms_shard import front_tag
+from remote_handler.workflows import optimizer, run_optimizer
 
 
 def at_to_hash(at, length=8):
@@ -191,7 +191,6 @@ def test_allocate_data(instance):
         )
 
 
-@pytest.mark.heavy
 def test_submit(instance):
     handler, params = instance
 
@@ -242,7 +241,6 @@ def test_collect_and_redistribute(instance):
         assert handler.local_fs.exists(opt_tfile)
 
 
-@pytest.mark.heavy
 def test_full_run(instance):
     handler, params = instance
     handler.allocate_data()
@@ -253,7 +251,6 @@ def test_full_run(instance):
     handler.collect_results()
 
 
-@pytest.mark.heavy
 def test_failure_incomplete(instance):
     """Tests if an error is raised if one of the processed trajectories does
     not have the expected length. Can happen e.g. when the python kernel
@@ -274,7 +271,6 @@ def test_failure_incomplete(instance):
     handler.collect_results()
 
 
-@pytest.mark.heavy
 def test_failure_is_finished(instance):
     """Tests if an error is raised if the computations for one config crashed
     leading to an is_finished=False entry in the atoms info dict.
@@ -296,7 +292,6 @@ def test_failure_is_finished(instance):
     handler.collect_results()
 
 
-@pytest.mark.heavy
 def test_recompute_failed(instance):
     handler, params = instance
     handler.allocate_data()

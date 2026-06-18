@@ -1,0 +1,17 @@
+#!/bin/bash
+#SBATCH --job-name={{ jobname }}
+#SBATCH --partition={{ partition }}
+#SBATCH --gres=gpu:{{ n_cores }}
+#SBATCH --ntasks=1
+#SBATCH --qos={{ partition }}
+#SBATCH --time=3-00:00:00
+{{ slurm_header_add }}
+
+ulimit -u 40000
+ulimit -s unlimited
+
+pwd; hostname; date
+
+{{ conda_activation }}
+
+{% include job_type_template %}

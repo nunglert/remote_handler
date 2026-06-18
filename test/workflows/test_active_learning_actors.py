@@ -303,14 +303,17 @@ class TestLammpsSampler:
 class TestNSTrajectorySampler:
     """Test NSTrajectorySampler in stub mode."""
 
-    def test_init_ns_sampler(self, mock_remote_fs, tmp_path):
+    def test_init_ns_sampler(
+        self, mock_remote_fs, mock_cluster_config, tmp_path
+    ):
         """Test NSTrajectorySampler initialization."""
         ns_input = tmp_path / "ns.inp"
         ns_input.touch()
 
         sampler = NSTrajectorySampler(
-            ns_exe="/path/to/ns",
+            sampling_script="/path/to/ns",
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             initial_input_file=ns_input,
             n_gpu_parallel=4,
             sample_size=100,
@@ -323,15 +326,17 @@ class TestNSTrajectorySampler:
         assert sampler.resample_size == 50
 
     def test_ns_stub_outputs(
-        self, mock_remote_fs, temp_calcdir, mock_model_files
+        self, mock_remote_fs, mock_cluster_config, temp_calcdir,
+        mock_model_files
     ):
         """Test NSTrajectorySampler creates stub outputs."""
         ns_input = temp_calcdir / "ns.inp"
         ns_input.write_text("# Mock NS input")
 
         sampler = NSTrajectorySampler(
-            ns_exe="/path/to/ns",
+            sampling_script="/path/to/ns",
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             initial_input_file=ns_input,
             n_gpu_parallel=4,
             sample_size=80,
@@ -357,15 +362,17 @@ class TestNSTrajectorySampler:
             assert "forces_uncert" in atoms.info
 
     def test_ns_with_resampling(
-        self, mock_remote_fs, temp_calcdir, mock_model_files
+        self, mock_remote_fs, mock_cluster_config, temp_calcdir,
+        mock_model_files
     ):
         """Test NSTrajectorySampler with resampling based on uncertainty."""
         ns_input = temp_calcdir / "ns.inp"
         ns_input.write_text("# Mock NS input")
 
         sampler = NSTrajectorySampler(
-            ns_exe="/path/to/ns",
+            sampling_script="/path/to/ns",
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             initial_input_file=ns_input,
             n_gpu_parallel=4,
             sample_size=100,
@@ -387,14 +394,17 @@ class TestNSTrajectorySampler:
         resample_file = temp_calcdir / "ns_sampler/results/resampled_inds.csv"
         assert resample_file.exists()
 
-    def test_ns_create_stub_outputs(self, mock_remote_fs, tmp_path):
+    def test_ns_create_stub_outputs(
+        self, mock_remote_fs, mock_cluster_config, tmp_path
+    ):
         """Test _create_stub_outputs method directly."""
         ns_input = tmp_path / "ns.inp"
         ns_input.touch()
 
         sampler = NSTrajectorySampler(
-            ns_exe="/path/to/ns",
+            sampling_script="/path/to/ns",
             remote_fs=mock_remote_fs,
+            cluster_config=mock_cluster_config,
             initial_input_file=ns_input,
             n_gpu_parallel=4,
             sample_size=60,

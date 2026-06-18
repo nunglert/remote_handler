@@ -1,0 +1,28 @@
+# Keep the build context small and deterministic.
+.git/
+.gitlab-ci.yml
+Dockerfile
+.dockerignore
+.pre-commit-config.yaml
+
+# Python caches / build artifacts
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.cache/
+build/
+dist/
+
+# Docs build output + Sphinx autosummary
+public/
+docs/build/
+docs/source/_autosummary/
+
+# Examples carry large model files and are not needed to build/test
+examples/
+*.model
+
+# Local virtualenvs
+.venv/
+venv/

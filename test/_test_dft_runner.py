@@ -154,7 +154,6 @@ def instance(default_params):
     return handler, params
 
 
-@pytest.mark.heavy
 def test_init(instance):
     handler, params = instance
 
@@ -162,7 +161,6 @@ def test_init(instance):
     assert handler.remote_fs.exists(handler.savepath / "calcdirs")
 
 
-@pytest.mark.heavy
 def test_allocate_data(instance):
     handler, params = instance
 
@@ -177,7 +175,6 @@ def test_allocate_data(instance):
         )
 
 
-@pytest.mark.heavy
 def test_submit(instance):
     handler, params = instance
 
@@ -194,7 +191,6 @@ def test_submit(instance):
         )
 
 
-@pytest.mark.heavy
 def test_collect_and_redistribute(instance):
     handler, params = instance
 
@@ -229,7 +225,6 @@ def test_collect_and_redistribute(instance):
         assert handler.local_fs.exists(opt_tfile)
 
 
-@pytest.mark.heavy
 def test_full_run(instance):
     handler, params = instance
     handler.allocate_data()

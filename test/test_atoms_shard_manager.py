@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 
-from remote_handler.atoms_handler import (
+from remote_handler.core.atoms_shard import (
     AtomsShardManager,
     front_tag,
     split_list,

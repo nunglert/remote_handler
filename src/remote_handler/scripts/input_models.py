@@ -1,33 +1,46 @@
-"""Input models for remote_handler scripts.
+"""Input schemas for remote_handler scripts.
 
-This module defines dataclasses for validating script inputs, providing:
-- Type safety and IDE support
-- Clear documentation of required/optional parameters
-- Validation before script execution
-- Consistent error handling
+These dataclasses are the input contract for the scripts in ``scripts/``,
+which run **on the remote machine**. Each script loads its JSON input into the
+corresponding model and validates it at the top of execution:
 
-Each script has a corresponding Input dataclass that can be loaded from JSON:
     >>> from remote_handler.scripts.input_models import MaceTrainingInput
     >>> config = MaceTrainingInput.from_file(Path("input.json"))
     >>> config.validate()
 
-# TODO NU: Currently the validation here is a bit useless, because we were trying
-# to perform the validation already on the "driver" machine and not only at the 
-# beginning of scripts, which operate in the remote machine and where all paths
-# should already be final and reachable. 
-# Could at least do more careful type checks?
+Validation lives here (remote-side) on purpose: the checks that actually
+matter -- chiefly that the referenced paths exist -- can only be done where the
+paths are real and final, i.e. on the remote machine. The driver does not
+pre-validate against these models; it just assembles the input JSON. Keep the
+``validate`` methods as the single place that enforces a script's input
+contract, and extend them with the path-existence / domain checks each script
+needs.
 """
 
 import dataclasses
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Optional
 
 from remote_handler.exceptions import ScriptInputError
 
 logger = logging.getLogger(__name__)
+
+
+def _require_path(root: Path, value, label: str) -> None:
+    """Raise ``ScriptInputError`` if a referenced path does not exist.
+
+    Relative paths are resolved against ``root`` -- the script's calc dir,
+    where the transferred input bundle was unpacked; absolute paths are checked
+    as-is. This is the existence check that can only run remotely, where the
+    paths are final and reachable, which is why ``validate`` takes a ``root``.
+    """
+    p = Path(value)
+    full = p if p.is_absolute() else Path(root) / p
+    if not full.exists():
+        raise ScriptInputError(f"{label} does not exist: {full}")
 
 
 @dataclass
@@ -111,10 +124,13 @@ class ScriptInput:
 
         return cls.from_dict(data)
 
-    def validate(self) -> None:
+    def validate(self, root: Optional[Path] = None) -> None:
         """Validate configuration parameters.
 
-        Override in subclasses to add domain-specific checks.
+        Override in subclasses to add domain-specific checks. Data-shape checks
+        (types, ranges, required combinations) always run. Path-existence
+        checks run only when ``root`` is given -- pass the script's calc dir so
+        in-bundle paths can be resolved and verified on the remote.
 
         Raises:
             ScriptInputError: If any parameter is invalid
@@ -148,7 +164,7 @@ class MaceTrainingInput(ScriptInput):
     seed: int
     validation_fraction: float = 0.1
 
-    def validate(self) -> None:
+    def validate(self, root: Optional[Path] = None) -> None:
         """Validate configuration parameters.
 
         Raises:
@@ -164,6 +180,11 @@ class MaceTrainingInput(ScriptInput):
 
         if not self.model_name:
             raise ScriptInputError("model_name cannot be empty")
+
+        if root is not None:
+            for f in self.database_files:
+                _require_path(root, f, "database file")
+            _require_path(root, self.config_file, "config_file")
 
 
 @dataclass
@@ -181,6 +202,8 @@ class MaceFinetuningInput(ScriptInput):
         model_name: Name tag for the trained model
         seed: Random seed for database splitting and training
         validation_fraction: Fraction of data to use for validation (default: 0.1)
+        convert_to_jax: If True, convert the trained torch model to a mace-jax
+            ``.pkl`` bundle after training (needs mace-jax in the same env)
     """
 
     _path_fields: ClassVar[tuple[str, ...]] = (
@@ -196,8 +219,9 @@ class MaceFinetuningInput(ScriptInput):
     model_name: str
     seed: int
     validation_fraction: float = 0.1
+    convert_to_jax: bool = False
 
-    def validate(self) -> None:
+    def validate(self, root: Optional[Path] = None) -> None:
         """Validate configuration parameters.
 
         Raises:
@@ -213,6 +237,12 @@ class MaceFinetuningInput(ScriptInput):
 
         if not self.model_name:
             raise ScriptInputError("model_name cannot be empty")
+
+        if root is not None:
+            for f in self.database_files:
+                _require_path(root, f, "database file")
+            _require_path(root, self.config_file, "config_file")
+            _require_path(root, self.foundation_model, "foundation_model")
 
 
 @dataclass
@@ -247,7 +277,7 @@ class LammpsSamplingInput(ScriptInput):
     seed: int
     lammps_config_name: str = "lammps.in"
 
-    def validate(self) -> None:
+    def validate(self, root: Optional[Path] = None) -> None:
         """Validate configuration parameters.
 
         Raises:
@@ -271,6 +301,12 @@ class LammpsSamplingInput(ScriptInput):
                 f"bin_count must be positive, got {self.bin_count}"
             )
 
+        if root is not None:
+            _require_path(root, self.data_file, "data_file")
+            _require_path(root, self.template_file, "template_file")
+            for m in self.model_files:
+                _require_path(root, m, "model file")
+
 
 @dataclass
 class DftSinglepointInput(ScriptInput):
@@ -290,7 +326,7 @@ class DftSinglepointInput(ScriptInput):
     launch_command: str
     INCAR_kwargs: dict[str, Any]
 
-    def validate(self) -> None:
+    def validate(self, root: Optional[Path] = None) -> None:
         """Validate configuration parameters.
 
         Raises:
@@ -304,6 +340,9 @@ class DftSinglepointInput(ScriptInput):
 
         if not isinstance(self.INCAR_kwargs, dict):
             raise ScriptInputError("INCAR_kwargs must be a dictionary")
+
+        if root is not None:
+            _require_path(root, self.DATABASE, "DATABASE")
 
 
 @dataclass
@@ -326,7 +365,7 @@ class OrcaSinglepointInput(ScriptInput):
     orcasimpleinput: str
     orcablocks: str
 
-    def validate(self) -> None:
+    def validate(self, root: Optional[Path] = None) -> None:
         """Validate configuration parameters.
 
         Raises:
@@ -343,6 +382,51 @@ class OrcaSinglepointInput(ScriptInput):
 
         if not self.orcablocks:
             raise ScriptInputError("orcablocks cannot be empty")
+
+        if root is not None:
+            _require_path(root, self.DATABASE, "DATABASE")
+
+
+@dataclass
+class AseSinglepointInput(ScriptInput):
+    """Input configuration for the generic ``ase_singlepoint.py`` script.
+
+    Drives a single-point with any pure-ASE calculator (e.g. ``emt``,
+    ``eam``), needing no external binary -- so it runs anywhere ASE is
+    installed (locally, in CI, or on a cluster).
+
+    Attributes:
+        DATABASE: Path to the input structure file (ASE-readable).
+        calculator: Calculator name understood by ``ase_singlepoint.py``
+            (e.g. ``"emt"``).
+        calculator_kwargs: Keyword arguments forwarded to the calculator.
+
+    Example:
+        >>> config = AseSinglepointInput.from_file(Path("input_dft.json"))
+        >>> config.validate(Path("."))
+    """
+
+    DATABASE: str
+    calculator: str
+    calculator_kwargs: dict[str, Any] = field(default_factory=dict)
+
+    def validate(self, root: Optional[Path] = None) -> None:
+        """Validate configuration parameters.
+
+        Raises:
+            ScriptInputError: If any parameter is invalid
+        """
+        if not self.DATABASE:
+            raise ScriptInputError("DATABASE cannot be empty")
+
+        if not self.calculator:
+            raise ScriptInputError("calculator cannot be empty")
+
+        if not isinstance(self.calculator_kwargs, dict):
+            raise ScriptInputError("calculator_kwargs must be a dictionary")
+
+        if root is not None:
+            _require_path(root, self.DATABASE, "DATABASE")
 
 
 @dataclass
@@ -375,7 +459,7 @@ class OptimizeTrajInput(ScriptInput):
     optimization_args: Optional[dict[str, Any]] = None
     steinhardt_args: Optional[dict[str, Any]] = None
 
-    def validate(self) -> None:
+    def validate(self, root: Optional[Path] = None) -> None:
         """Validate configuration parameters.
 
         Raises:
@@ -401,6 +485,9 @@ class OptimizeTrajInput(ScriptInput):
             raise ScriptInputError(
                 "steinhardt_args required when do_steinhardt=True"
             )
+
+        if root is not None:
+            _require_path(root, self.DATABASE, "DATABASE")
 
 
 @dataclass
@@ -458,7 +545,7 @@ class CmaesSamplingInput(ScriptInput):
     bulk_terminate: bool = False
     optimizer: str = "FIRE"
 
-    def validate(self) -> None:
+    def validate(self, root: Optional[Path] = None) -> None:
         """Validate configuration parameters.
 
         Raises:
@@ -496,6 +583,12 @@ class CmaesSamplingInput(ScriptInput):
         if self.continue_evolution and self.models is None:
             raise ScriptInputError("models must be provided (cannot be None)")
 
+        if root is not None:
+            if self.founder and self.founder != "random":
+                _require_path(root, self.founder, "founder")
+            for m in self.models or []:
+                _require_path(root, m, "model file")
+
 
 @dataclass
 class CmaesOptimizeInput(ScriptInput):
@@ -527,7 +620,7 @@ class CmaesOptimizeInput(ScriptInput):
     optimizer: str = "FIRE"
     output_dir: str = "optimized"
 
-    def validate(self) -> None:
+    def validate(self, root: Optional[Path] = None) -> None:
         """Validate configuration parameters.
 
         Raises:
@@ -548,6 +641,10 @@ class CmaesOptimizeInput(ScriptInput):
                 raise ScriptInputError(
                     f"evolutions[{i}] missing required key 'path'"
                 )
+
+        if root is not None:
+            for m in self.models:
+                _require_path(root, m, "model file")
 
 
 @dataclass
@@ -594,7 +691,7 @@ class TorchSimSamplingInput(ScriptInput):
     device: str = "cuda"
     dtype: str = "float32"
 
-    def validate(self) -> None:
+    def validate(self, root: Optional[Path] = None) -> None:
         """Validate configuration parameters.
 
         Raises:
@@ -641,3 +738,9 @@ class TorchSimSamplingInput(ScriptInput):
             raise ScriptInputError(
                 f"dtype must be one of {valid_dtypes}, got '{self.dtype}'"
             )
+
+        if root is not None:
+            _require_path(root, self.founder, "founder")
+            for m in self.model_paths:
+                if m != "foundation":  # sentinel for the MACE-MP foundation
+                    _require_path(root, m, "model file")

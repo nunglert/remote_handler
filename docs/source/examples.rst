@@ -1,115 +1,57 @@
 Examples
 ========
 
-This section provides practical examples for common use cases.
+Practical, end-to-end examples for the most common workflows. Each example is a
+real, importable script under ``docs/source/examples/`` -- the very same files
+shown here are checked by the test suite (``test/test_examples.py``), so they
+cannot silently drift out of sync with the API.
 
+.. note::
 
-Example 1: Batch Optimization
-------------------------------
+   These scripts orchestrate work on remote clusters (SSH + SLURM, GPUs, VASP),
+   so they are **not executed** in CI -- only checked for API-currency. They
+   assume you have registered the referenced clusters with
+   ``remote_handler configure cluster`` (see :doc:`cli`); adapt the aliases,
+   paths and resources to your own setup before running. The conceptual roles
+   (sampler / evaluator / trainer) are explained in :doc:`concepts`.
 
-Optimize a trajectory of atomic structures on a remote cluster:
+Example 1: DFT single-point labelling
+-------------------------------------
 
-.. code-block:: python
+Run VASP single-point calculations on a set of structures as a SLURM array job,
+then collect the labelled configurations back to the host:
 
-   from remote_handler import RemoteOptimizationHandler
-   from remote_handler.core import ClusterConfig
-   from remote_handler.core.file_handler import RemoteFileSystem
+.. literalinclude:: examples/example_1_dft.py
+   :language: python
 
-   # Load cluster configuration
-   config = ClusterConfig.from_file("datalab.json")
-   remote_fs = RemoteFileSystem(remote_alias="datalab")
+Example 2: Training a MACE force field
+--------------------------------------
 
-   # Create handler
-   handler = RemoteOptimizationHandler(
-       traj_files=["md_trajectory.extxyz"],
-       cluster_config=config,
-       remote_fs=remote_fs,
-       n_processors=4,
-       shard_size=50,  # 50 structures per job
-       num_parallel=20,  # Run 20 jobs in parallel
-       every=5,  # Process every 5th frame
-       optimization_backend="NNFF",
-       pickle_file="model.pkl",
-       do_steinhardt=True,
-   )
+Configure a :class:`~remote_handler.workflows.trainers.MaceModelTrainer` and run
+a training step. The trainer is an active-learning *actor*: in a full run the
+loop (Example 4) drives it, but you can also call ``update`` /
+``get_trained_model`` directly:
 
-   # Run the workflow
-   handler.allocate_data()
-   handler.submit()
-   handler.collect_and_harvest()
+.. literalinclude:: examples/example_2_mace_training.py
+   :language: python
 
-Example 2: Active Learning
----------------------------
+Example 3: Sampling with torch-sim MD
+-------------------------------------
 
-Run an active learning loop for training a neural network potential:
+Configure a :class:`~remote_handler.workflows.samplers.TorchSimSampler` to run
+parallel-tempering MD from the current model and propose new candidate
+configurations:
 
-.. code-block:: python
+.. literalinclude:: examples/example_3_torch_sim.py
+   :language: python
 
-   from remote_handler.workflows import ActiveLearningWorkflow
-   from remote_handler.workflows.evaluators import ModelEvaluator
-   from remote_handler.workflows.samplers import UncertaintySampler
-   from remote_handler.workflows.trainers import NNFFTrainer
+Example 4: A full active-learning loop
+--------------------------------------
 
-   # Configure active learning components
-   evaluator = ModelEvaluator(model_path="initial_model.pkl")
-   sampler = UncertaintySampler(threshold=0.1, max_samples=100)
-   trainer = NNFFTrainer(epochs=1000, learning_rate=0.001)
+Wire a sampler, a ground-truth evaluator and a trainer into the
+:class:`~remote_handler.workflows.active_learning_base.ActiveLearningHandler`
+and run the Sampler → Evaluator → Trainer loop. Note how each actor can target a
+different cluster:
 
-   # Create workflow
-   workflow = ActiveLearningWorkflow(
-       initial_data="seed_data.extxyz",
-       cluster_config=config,
-       evaluator=evaluator,
-       sampler=sampler,
-       trainer=trainer,
-       num_iterations=10,
-   )
-
-   # Run active learning
-   workflow.run()
-
-Example 3: DFT Calculations
-----------------------------
-
-Run VASP single-point calculations on selected structures:
-
-.. code-block:: python
-
-   from remote_handler.dft_runner import VASPHandler
-
-   handler = VASPHandler(
-       traj_files=["selected_structures.extxyz"],
-       cluster_config=config,
-       remote_fs=remote_fs,
-       savepath="/scratch/username/vasp_calc",
-       num_parallel=10,
-       every=1,
-       incar_kwargs={
-           "xc": "PBE",
-           "encut": 400,
-           "prec": "Accurate",
-           "ismear": 0,
-           "sigma": 0.05,
-           "ediff": 1e-6,
-       },
-   )
-
-   handler.run()
-
-Example 4: Collecting Results from Previous Run
-------------------------------------------------
-
-Resume and collect results from a previous calculation:
-
-.. code-block:: python
-
-   handler = RemoteOptimizationHandler(
-       traj_files=["trajectory.extxyz"],
-       cluster_config=config,
-       remote_fs=remote_fs,
-       savepath="/scratch/username/previous_run",
-       collect_only=True,  # Don't submit new jobs
-   )
-
-   # Just collect and process results
-   handler.collect_and_harvest()
+.. literalinclude:: examples/example_4_active_learning.py
+   :language: python

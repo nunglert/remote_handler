@@ -34,7 +34,7 @@ calcpath = INPUTFILE.parent
 from remote_handler.scripts.input_models import TorchSimSamplingInput
 
 input_config = TorchSimSamplingInput.from_file(INPUTFILE)
-input_config.validate()
+input_config.validate(calcpath)
 
 import ase.io
 import torch

@@ -1,145 +1,25 @@
-"""Cluster and SLURM job management for remote HPC systems."""
+"""SLURM job submission/management for remote HPC systems.
 
-import importlib.resources as pkg_resources
-import json
+The backend-agnostic ``ClusterConfig`` now lives in
+:mod:`remote_handler.core.cluster_config`; it is re-exported here for backward
+compatibility (``from ...cluster_handler import ClusterConfig`` still works).
+"""
+
 import logging
 import os
-import re
 import subprocess
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, fields
-from importlib import resources
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
-from jinja2 import Environment, FileSystemLoader
-
-from remote_handler.config import get_config
-from remote_handler.core import file_handler, slurm_utils
+from remote_handler.core import file_handler, remote_env, slurm_utils
+from remote_handler.core.cluster_config import ClusterConfig
+from remote_handler.core.executors import ArrayExecutor, SingleExecutor
 from remote_handler.core.file_handler import FileSystemHandlerBase
-from remote_handler.exceptions import (
-    ConfigurationError,
-    DependencyError,
-    FileSystemError,
-)
+from remote_handler.exceptions import DependencyError, FileSystemError
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class ClusterConfig:
-    """
-    Configuration for a remote cluster with SLURM job scheduling.
-
-    This class encapsulates all cluster-specific settings needed for
-    submitting and managing SLURM jobs on a remote HPC system.
-
-    Args:
-        remote_machine: SSH alias or hostname of the remote cluster
-        partition: SLURM partition name to submit jobs to
-        conda_env: Name of the conda environment to activate on the cluster
-        savepath: Default path on the cluster where computations are saved
-        template: Name of the Jinja2 template file for SLURM job headers
-
-    Example:
-        >>> config = ClusterConfig.from_file("my_cluster.json")
-        >>> print(config.remote_machine)
-        'my-hpc-cluster'
-    """
-
-    remote_machine: str
-    partition: str
-    conda_env: str
-    conda_source: str
-    savepath: str
-    template: str
-
-    @classmethod
-    def from_file(cls, config_file: str) -> "ClusterConfig":
-        """
-        Load cluster configuration from a JSON file.
-
-        Args:
-            config_file: Path to the configuration file. Can be either:
-                - An absolute path to a JSON file
-                - A relative filename (will be searched in REMOTE_HANDLER_CONFIG_DIR)
-
-        Returns:
-            ClusterConfig instance with loaded configuration
-
-        Raises:
-            ConfigurationError: If the config file doesn't exist or config directory not set
-                               for relative paths
-
-        Example:
-            >>> # Using absolute path
-            >>> config = ClusterConfig.from_file("/home/user/configs/cluster.json")
-            >>> # Using relative path (requires REMOTE_HANDLER_CONFIG_DIR)
-            >>> config = ClusterConfig.from_file("cluster.json")
-        """
-        if os.path.isabs(config_file):
-            config_path = Path(config_file)
-            if not config_path.exists():
-                raise ConfigurationError(
-                    f"Configuration file does not exist: {config_file}"
-                )
-        else:
-            # Use centralized configuration
-            config = get_config()
-            config_path = config.get_config_file(config_file)
-
-        logger.info(f"Reading ClusterConfig from {config_path}")
-        with open(config_path, "r") as f:
-            config_dict = json.load(f)
-
-        known = cls.get_known(config_dict)
-
-        return cls(**known)
-
-    @classmethod
-    def from_dict(cls, config_dict: dict) -> "ClusterConfig":
-        """
-        Create a ClusterConfig from a dictionary.
-
-        Args:
-            config_dict: Dictionary containing cluster configuration
-
-        Returns:
-            ClusterConfig instance
-
-        Example:
-            >>> config = ClusterConfig.from_dict({
-            ...     "remote_machine": "my-cluster",
-            ...     "partition": "normal",
-            ...     "conda_env": "myenv",
-            ...     "savepath": "/scratch/user/jobs",
-            ...     "template": "slurm_template.sh.j2"
-            ... })
-        """
-        known = cls.get_known(config_dict)
-        return cls(**known)
-
-    @classmethod
-    def get_known(cls, args_dict):
-        field_names = {f.name for f in fields(cls)}
-
-        # Split known / unknown keys
-        known = {}
-        unknown = {}
-        for k, v in args_dict.items():
-            if k in field_names:
-                known[k] = v
-            else:
-                unknown[k] = v
-
-        if unknown:
-            logger.warning(
-                f"Ignoring unknown ClusterConfig keys: {list(unknown.keys())}"
-            )
-
-        return known
 
 
 class SlurmHandlerBase(ABC):
@@ -228,38 +108,22 @@ class SlurmHandlerBase(ABC):
             )
 
     def _validate_savepath(self):
-        if not self.remote_fs.exists(self.savepath):
-            raise FileSystemError(
-                f"Save path does not exist on remote filesystem: {self.savepath}\n"
-                f"Remote machine: {self.cluster_config.remote_machine}"
-            )
+        remote_env.validate_savepath(
+            self.savepath,
+            self.remote_fs,
+            remote_machine=self.cluster_config.remote_machine,
+        )
 
     def _validate_conda(self):
-        if self.conda_source.strip().endswith("miniconda3"):
-            miniconda_home = Path(self.conda_source)
-            self.conda_source = Path(self.conda_source) / "bin/activate"
-        elif "bin/activate" in self.conda_source:
-            miniconda_home = Path(self.conda_source).parents[1]
-            self.conda_source = Path(self.conda_source)
-        else:
-            raise ConfigurationError(
-                f"Invalid conda_source format: {self.conda_source}\n"
-                "Expected format: /home/user/miniconda3/ or /path/to/bin/activate\n"
-                "Note: Only miniconda3 is currently supported"
-            )
-
-        if not self.remote_fs.exists(self.conda_source):
-            raise FileSystemError(
-                f"Conda activation script not found at: {self.conda_source}. "
-                "We currently do not support '~', write the full path!\n"
-                f"Remote machine: {self.cluster_config.remote_machine}"
-            )
-        if not self.remote_fs.exists(miniconda_home / "envs" / self.conda_env) and not self.remote_fs.exists(os.path.join(os.path.expanduser('~'), ".conda/envs", self.conda_env)):
-            raise ConfigurationError(
-                f"Conda environment '{self.conda_env}' not found on "
-                f"{self.cluster_config.remote_machine}\n"
-                f"Expected path: {miniconda_home / 'envs' / self.conda_env} or {os.path.join(os.path.expanduser('~'), '.conda/envs', self.conda_env)}"
-            )
+        # Resolve + existence-check via the shared helper; store the resolved
+        # activation source (templates hard-code activation, so this value is
+        # only used by the validation itself, but keep the historical behaviour).
+        self.conda_source = remote_env.validate_conda_on_fs(
+            self.conda_source,
+            self.conda_env,
+            self.remote_fs,
+            remote_machine=self.cluster_config.remote_machine,
+        )
 
     @abstractmethod
     def submit(self):
@@ -294,7 +158,11 @@ class SlurmHandlerBase(ABC):
                 break
 
 
-class SlurmJobHandler(SlurmHandlerBase):
+class SlurmJobHandler(SlurmHandlerBase, SingleExecutor):
+    # SLURM can re-place a single job on another node; SingleScriptTask runs
+    # its node-exclusion retry loop only when this is True.
+    supports_node_retry = True
+
     def __init__(
         self,
         jobname: str,
@@ -340,6 +208,7 @@ class SlurmJobHandler(SlurmHandlerBase):
     ):
         """
         Write the slurm jobfile for a single job.
+
         Args:
             input_file: Path to the input file that is used in the job.
             python_script_path: Path to the python script that is executed in
@@ -379,6 +248,7 @@ class SlurmJobHandler(SlurmHandlerBase):
             output_path=self.calcdir,
             ssh_command=self.ssh_command,
             cwd=self.calcdir,
+            connection_policy=self.cluster_config.connection_policy,
         )
 
         logger.info(f"Submitted slurm job with pid {self.pid}")
@@ -391,11 +261,13 @@ class SlurmJobHandler(SlurmHandlerBase):
         assert self.is_submitted, "Can not check status of unsubmitted job!"
         logger.debug("Checking slurm job status...")
         return slurm_utils.check_job_status_squeue(
-            self.pid, ssh_command=self.ssh_command
+            self.pid,
+            ssh_command=self.ssh_command,
+            connection_policy=self.cluster_config.connection_policy,
         )
 
 
-class SlurmArrayHandler(SlurmHandlerBase):
+class SlurmArrayHandler(SlurmHandlerBase, ArrayExecutor):
     """
     Class to handle job arrays via slurm on a remote HPC cluster.
 
@@ -451,7 +323,7 @@ class SlurmArrayHandler(SlurmHandlerBase):
         self.slurm_script_path = self.rootpath / self.jobfile_name
         # Create output and calcdir directories
         self.output_path = self.rootpath / "slurm_output"
-        self.calcdir = self.rootpath / "calcdirs"
+        self.calcdir = self.rootpath / remote_env.CALCDIRS_DIRNAME
         remote_fs.makedirs(self.output_path, exist_ok=True)
         remote_fs.makedirs(self.calcdir, exist_ok=True)
 
@@ -468,6 +340,7 @@ class SlurmArrayHandler(SlurmHandlerBase):
     def write_jobfile(self, python_script_path, num_array_tasks):
         """
         Write the slurm jobfile for the array job.
+
         Args:
             python_script_path: Path to the python script that is executed in
                 each array job.
@@ -508,6 +381,7 @@ class SlurmArrayHandler(SlurmHandlerBase):
             cwd=self.calcdir,
             num_array_tasks=self.num_array_tasks,
             num_parallel=self.num_parallel,
+            connection_policy=self.cluster_config.connection_policy,
         )
         logger.info(f"Submitted slurm job with pid {self.pid}")
         self.is_submitted = True
@@ -516,5 +390,7 @@ class SlurmArrayHandler(SlurmHandlerBase):
         assert self.is_submitted, "Can not check status of unsubmitted job!"
         logger.debug("Checking slurm job status...")
         return slurm_utils.check_job_status_squeue(
-            self.pid, ssh_command=self.ssh_command
+            self.pid,
+            ssh_command=self.ssh_command,
+            connection_policy=self.cluster_config.connection_policy,
         )

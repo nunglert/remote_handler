@@ -11,6 +11,13 @@ from pathlib import Path
 import ase.io
 import numpy as np
 import pytest
+from _capabilities import (
+    foundation_model_path,
+    mace_available,
+    mace_freeze_available,
+    mace_run_train_script,
+)
+from _markers import requires_local_slurm
 from ase import Atoms
 
 from remote_handler.core.cluster_handler import ClusterConfig
@@ -106,8 +113,8 @@ default_dtype: float32
 
 @pytest.mark.integration
 @pytest.mark.skipif(
-    not os.getenv("MACE_TRAIN_RUNNER"),
-    reason="MACE_TRAIN_RUNNER environment variable not set",
+    not mace_available(),
+    reason="MACE (mace-torch) not installed",
 )
 class TestMaceTrainingIntegration:
     """Integration tests for full mace_training.py script execution."""
@@ -121,7 +128,7 @@ class TestMaceTrainingIntegration:
             shutil.rmtree(root_dir)
         root_dir.mkdir()
 
-        train_runner = os.getenv("MACE_TRAIN_RUNNER")
+        train_runner = mace_run_train_script()
         assert os.path.exists(train_runner)
 
         # Create two database files
@@ -160,7 +167,7 @@ class TestMaceTrainingIntegration:
             [
                 sys.executable,
                 "-m",
-                "remote_handler.scripts.mace_training",
+                "remote_handler.scripts.mace.mace_training",
                 str(calc_dir),
             ],
             capture_output=True,
@@ -176,8 +183,9 @@ class TestMaceTrainingIntegration:
         assert len(combined) == 20
 
     @pytest.mark.skipif(
-        not os.getenv("FOUNDATION_MODEL"),
-        reason="FOUNDATION_MODEL environment variable not set",
+        not mace_freeze_available(),
+        reason="mace-freeze fork not installed "
+        "(needs mace.tools.freeze; pip install .[mace_freeze])",
     )
     def test_frozen_script_with_multiple_databases(
         self, integration_temp_dir, test_atoms_database
@@ -188,9 +196,9 @@ class TestMaceTrainingIntegration:
             shutil.rmtree(root_dir)
         root_dir.mkdir()
 
-        foundation_model = os.getenv("FOUNDATION_MODEL")
+        foundation_model = foundation_model_path()
         assert os.path.exists(foundation_model)
-        train_runner = os.getenv("MACE_TRAIN_RUNNER")
+        train_runner = mace_run_train_script()
         assert os.path.exists(train_runner)
 
         # Create two database files
@@ -229,7 +237,7 @@ class TestMaceTrainingIntegration:
             [
                 sys.executable,
                 "-m",
-                "remote_handler.scripts.mace_training",
+                "remote_handler.scripts.mace.mace_training",
                 str(calc_dir),
             ],
             capture_output=True,
@@ -245,8 +253,8 @@ class TestMaceTrainingIntegration:
         assert len(combined) == 20
 
     @pytest.mark.skipif(
-        not os.getenv("FOUNDATION_MODEL"),
-        reason="FOUNDATION_MODEL environment variable not set",
+        not mace_available(),
+        reason="MACE (mace-torch) not installed",
     )
     def test_finetuning_script(
         self, integration_temp_dir, test_atoms_database
@@ -257,9 +265,9 @@ class TestMaceTrainingIntegration:
             shutil.rmtree(root_dir)
         root_dir.mkdir()
 
-        foundation_model = os.getenv("FOUNDATION_MODEL")
+        foundation_model = foundation_model_path()
         assert os.path.exists(foundation_model)
-        train_runner = os.getenv("MACE_TRAIN_RUNNER")
+        train_runner = mace_run_train_script()
         assert os.path.exists(train_runner)
 
         # Write database
@@ -315,16 +323,18 @@ class TestMaceTrainingIntegration:
 class TestMaceModelTrainerIntegration:
     """Integration tests for MaceModelTrainer workflow class."""
 
+    @requires_local_slurm
     @pytest.mark.skipif(
-        not os.getenv("MACE_TRAIN_RUNNER"),
-        reason="MACE_TRAIN_RUNNER environment variable not set",
+        not mace_available(),
+        reason="MACE (mace-torch) not installed",
     )
     def test_full_local_training(
         self, integration_temp_dir, test_atoms_database, local_fs
     ):
         """Test MaceModelTrainer with actual local MACE training.
 
-        Requires MACE_TRAIN_RUNNER env var pointing to MACE run_train.py.
+        Needs MACE installed (run_train.py is located from the install) and a
+        local SLURM (sbatch) for job submission.
         """
         from remote_handler.scripts import input_models
 
@@ -333,7 +343,7 @@ class TestMaceModelTrainerIntegration:
             shutil.rmtree(root_dir)
         root_dir.mkdir()
 
-        train_runner = os.getenv("MACE_TRAIN_RUNNER")
+        train_runner = mace_run_train_script()
 
         # Write database
         db_file = root_dir / "training_data.xyz"
@@ -389,19 +399,20 @@ class TestMaceModelTrainerIntegration:
 class TestMaceFinetuningTrainerIntegration:
     """Integration tests for MaceFinetuningTrainer workflow class."""
 
+    @requires_local_slurm
     @pytest.mark.skipif(
-        not os.getenv("MACE_FREEZE_TRAIN_RUNNER")
-        or not os.getenv("FOUNDATION_MODEL"),
-        reason="MACE_FREEZE_TRAIN_RUNNER and FOUNDATION_MODEL env vars required",
+        not mace_freeze_available(),
+        reason="mace-freeze fork not installed "
+        "(needs mace.tools.freeze; pip install .[mace_freeze])",
     )
     def test_full_local_finetuning(
         self, integration_temp_dir, test_atoms_database, local_fs
     ):
         """Test MaceFinetuningTrainer with actual local MACE finetuning.
 
-        Requires:
-            - MACE_FREEZE_TRAIN_RUNNER env var pointing to MACE run_train.py
-            - FOUNDATION_MODEL env var pointing to a pretrained model file
+        Needs the mace-freeze fork (``mace.tools.freeze``) and a local SLURM
+        (sbatch); the finetuning runner is located from the install and the
+        MACE model comes from the shipped test asset.
         """
         from remote_handler.scripts import input_models
 
@@ -410,8 +421,8 @@ class TestMaceFinetuningTrainerIntegration:
             shutil.rmtree(root_dir)
         root_dir.mkdir()
 
-        train_runner = os.getenv("MACE_FREEZE_TRAIN_RUNNER")
-        foundation_model = os.getenv("FOUNDATION_MODEL")
+        train_runner = mace_run_train_script()
+        foundation_model = foundation_model_path()
         assert os.path.exists(foundation_model)
 
         # Write database

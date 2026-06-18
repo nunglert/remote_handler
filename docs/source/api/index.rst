@@ -48,6 +48,7 @@ SLURM Utilities
    :members:
    :undoc-members:
    :show-inheritance:
+   :exclude-members: Environment
 
 Handlers
 --------
@@ -55,7 +56,12 @@ Handlers
 Atoms Handler
 ~~~~~~~~~~~~~
 
-.. automodule:: remote_handler.atoms_handler
+.. automodule:: remote_handler.core.atoms_handler
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: remote_handler.core.atoms_shard
    :members:
    :undoc-members:
    :show-inheritance:
@@ -63,7 +69,7 @@ Atoms Handler
 Optimization Handler
 ~~~~~~~~~~~~~~~~~~~~
 
-.. automodule:: remote_handler.optimizer
+.. automodule:: remote_handler.workflows.optimizer
    :members:
    :undoc-members:
    :show-inheritance:
@@ -71,7 +77,7 @@ Optimization Handler
 DFT Runner
 ~~~~~~~~~~
 
-.. automodule:: remote_handler.dft_runner
+.. automodule:: remote_handler.workflows.dft_runner
    :members:
    :undoc-members:
    :show-inheritance:
