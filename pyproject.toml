@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -29,7 +29,8 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 readme = "README.md"
-version = "0.1.0"
+# Version is derived from git tags by setuptools-scm (see [tool.setuptools_scm]).
+dynamic = ["version"]
 
 [project.optional-dependencies]
 dev = [
@@ -98,6 +99,14 @@ remote_handler = "remote_handler.cli:main"
 
 [project.urls]
 "Homepage" = "https://gitlab.tuwien.ac.at/e165-03-1_theoretische_materialchemie/madsen-s-research-group/remote_handler"
+
+# Version comes from git tags (e.g. ``v0.2.0`` -> ``0.2.0``); commits past a
+# tag get a dev version like ``0.2.1.dev3+g<sha>``. ``fallback_version`` keeps
+# installs working where git history/tags are unavailable (e.g. a shallow CI
+# clone or a tarball) instead of erroring. NOTE: for CI to compute the *real*
+# version it needs the tags -- a full clone (GIT_DEPTH: 0), set in .gitlab-ci.
+[tool.setuptools_scm]
+fallback_version = "0.0.0"
 
 [tool.setuptools.packages.find]
 where = ["src"]

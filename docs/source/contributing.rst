@@ -155,3 +155,33 @@ Submitting changes
   live-cluster ``remote`` tier self-skips.
 - The ``pages`` job publishes the docs to GitLab Pages from ``main`` only, so
   doc changes go live once merged.
+
+Versioning and releases
+-----------------------
+
+The package version is **derived from git tags** by ``setuptools-scm`` -- there
+is no version string to edit. A clean checkout on tag ``v0.2.0`` reports
+``0.2.0``; commits past a tag report a dev version like ``0.2.1.dev3+g<sha>``.
+
+Semantic versioning applies, but **while in 0.x**:
+
+- **minor** (``0.2 → 0.3``) -- new features *or* breaking changes;
+- **patch** (``0.2.0 → 0.2.1``) -- bug fixes only.
+
+(After the public API and cluster-config schema settle, cut ``1.0.0`` and
+switch to full SemVer, where breaking changes require a major bump.)
+
+To cut a release:
+
+#. Add a dated section to ``CHANGELOG.md`` (note anything under **Breaking** so
+   downstream consumers know what to fix).
+#. Merge to ``main``.
+#. Tag the release commit and push the tag::
+
+      git checkout main && git pull
+      git tag -a v0.3.0 -m "remote_handler 0.3.0"
+      git push origin v0.3.0
+
+Downstream projects should pin remote_handler to a tag
+(``remote_handler @ git+<repo>@v0.3.0``) rather than a branch, so upgrades are
+deliberate.

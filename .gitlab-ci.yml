@@ -18,6 +18,9 @@ stages:
 
 variables:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  # Full clone incl. tags so setuptools-scm derives the real version (a shallow
+  # clone misses tags -> it would fall back instead of computing X.Y.Z).
+  GIT_DEPTH: 0
 
 # Run CI on every branch push, on merge requests, and on scheduled pipelines
 # (e.g. a weekly run configured under CI/CD > Schedules in GitLab -- catches
