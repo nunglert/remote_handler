@@ -9,7 +9,6 @@ ulimit -s unlimited
 
 pwd; hostname; date
 
-source ~/miniconda3/etc/profile.d/conda.sh 
-conda activate {{ conda_env }}
+{{ conda_activation }}
 
 {% include job_type_template %}

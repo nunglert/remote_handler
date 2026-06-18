@@ -30,6 +30,9 @@ def test_single_jobfile_render_is_stable():
 
     assert "#SBATCH --job-name=charjob" in script
     assert "#SBATCH --partition=charpart" in script
+    # The activation is rendered from the configured conda_source (not a
+    # hard-coded ~/miniconda3): the resolved activate path must appear.
+    assert "source /home/u/miniconda3/bin/activate" in script
     assert "conda activate charenv" in script
     # The defining behaviour of a single job: run the script on the input file.
     assert "python /remote/script.py /remote/input.json" in script
@@ -46,11 +49,13 @@ def test_array_jobfile_render_is_stable():
         partition="charpart",
         n_processors=4,
         conda_env="charenv",
+        conda_source="/home/u/miniconda3",
         header_template=HEADER,
         job_type_template="body_array.sh.j2",
     )
 
     assert "#SBATCH --job-name=charjob" in script
+    assert "source /home/u/miniconda3/bin/activate" in script
     assert "conda activate charenv" in script
     # map_indices defaults to arange(num_array_tasks).
     assert "MAP=(0 1 2)" in script

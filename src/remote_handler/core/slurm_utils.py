@@ -9,7 +9,7 @@ import numpy as np
 from jinja2 import Environment, FileSystemLoader
 
 from remote_handler.config import get_config
-from remote_handler.core import resilience
+from remote_handler.core import remote_env, resilience
 from remote_handler.exceptions import TaskError
 
 logger = logging.getLogger(__name__)
@@ -218,7 +218,7 @@ def get_array_slurm_str(
     partition="normal",
     n_processors=8,
     conda_env="jaxnest",
-    conda_source="~/miniconda3/etc/profile.d/conda.sh",
+    conda_source="~/miniconda3",
     map_indices=None,
     header_template="lugus.sh.j2",
     job_type_template="body_array.sh.j2",
@@ -267,6 +267,9 @@ def get_array_slurm_str(
         n_cores=n_processors,
         conda_env=conda_env,
         conda_source=conda_source,
+        conda_activation=remote_env.conda_activation_script(
+            conda_source, conda_env
+        ),
         map_indices=map_indices,
         slurm_header_add=slurm_header_add,
         job_type_template=job_type_template,
@@ -326,6 +329,9 @@ def get_slurm_str(
         n_cores=n_cores,
         conda_env=conda_env,
         conda_source=conda_source,
+        conda_activation=remote_env.conda_activation_script(
+            conda_source, conda_env
+        ),
         slurm_header_add=slurm_header_add,
         job_type_template=job_type_template,
         exclude_nodes=exclude_nodes,
