@@ -20,7 +20,7 @@ needs.
 import dataclasses
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Optional
 
@@ -382,6 +382,48 @@ class OrcaSinglepointInput(ScriptInput):
 
         if not self.orcablocks:
             raise ScriptInputError("orcablocks cannot be empty")
+
+        if root is not None:
+            _require_path(root, self.DATABASE, "DATABASE")
+
+
+@dataclass
+class AseSinglepointInput(ScriptInput):
+    """Input configuration for the generic ``ase_singlepoint.py`` script.
+
+    Drives a single-point with any pure-ASE calculator (e.g. ``emt``,
+    ``eam``), needing no external binary -- so it runs anywhere ASE is
+    installed (locally, in CI, or on a cluster).
+
+    Attributes:
+        DATABASE: Path to the input structure file (ASE-readable).
+        calculator: Calculator name understood by ``ase_singlepoint.py``
+            (e.g. ``"emt"``).
+        calculator_kwargs: Keyword arguments forwarded to the calculator.
+
+    Example:
+        >>> config = AseSinglepointInput.from_file(Path("input_dft.json"))
+        >>> config.validate(Path("."))
+    """
+
+    DATABASE: str
+    calculator: str
+    calculator_kwargs: dict[str, Any] = field(default_factory=dict)
+
+    def validate(self, root: Optional[Path] = None) -> None:
+        """Validate configuration parameters.
+
+        Raises:
+            ScriptInputError: If any parameter is invalid
+        """
+        if not self.DATABASE:
+            raise ScriptInputError("DATABASE cannot be empty")
+
+        if not self.calculator:
+            raise ScriptInputError("calculator cannot be empty")
+
+        if not isinstance(self.calculator_kwargs, dict):
+            raise ScriptInputError("calculator_kwargs must be a dictionary")
 
         if root is not None:
             _require_path(root, self.DATABASE, "DATABASE")

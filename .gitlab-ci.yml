@@ -19,11 +19,14 @@ stages:
 variables:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
-# Run CI on every branch push AND on merge requests, while avoiding the classic
+# Run CI on every branch push, on merge requests, and on scheduled pipelines
+# (e.g. a weekly run configured under CI/CD > Schedules in GitLab -- catches
+# breakage from dependency drift even when nobody commits). Avoid the classic
 # duplicate pipeline (a branch pipeline + an MR pipeline for the same commit):
 # when an MR is open for the branch, only the MR pipeline runs.
 workflow:
   rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
       when: never
@@ -78,6 +81,9 @@ test:
         coverage_format: cobertura
         path: coverage.xml
   rules:
+    # Weekly scheduled run: re-installs every (git/PyPI) extra and runs the
+    # full suite, so upstream breakage is caught without a commit.
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH'
 
@@ -101,5 +107,9 @@ pages:
       - public
     expire_in: 1 week
   rules:
+    # Docs don't change between commits, so skip the redundant redeploy on the
+    # weekly scheduled run (which exists to re-test, not to publish).
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
     - if: '$CI_COMMIT_BRANCH == "main"'
   dependencies: []

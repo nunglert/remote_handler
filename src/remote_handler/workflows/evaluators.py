@@ -1,7 +1,12 @@
-"""
-Evaluators for Active Learning Workflows.
+"""Ground-truth evaluators for active-learning workflows.
 
-Evaluators perform ground truth calculations (e.g., DFT) on sampled configurations.
+An evaluator labels sampled configurations with ground truth (energy + forces)
+by running a single-point calculation per configuration on a remote machine.
+Every calculator follows the same shape, so the shared machinery lives in
+:class:`AseCalculatorEvaluator`; :class:`VASPEvaluator` and
+:class:`ORCAEvaluator` are thin presets that only assemble their calculator
+config. Most evaluators support ``stub=True`` to dry-run the loop without real
+compute.
 """
 
 import logging
@@ -22,27 +27,214 @@ from .active_learning_base import GroundTruthEvaluator
 
 logger = logging.getLogger(__name__)
 
+# Remote payloads shipped with the package live in ``scripts/`` next to this
+# module's package root.
+_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 
-class VASPEvaluator(GroundTruthEvaluator):
-    """
-    Ground truth evaluator using VASP DFT calculations.
+# The shipped single-point payloads write the labelled structure to
+# ``dft_<DATABASE>``; SinglePointHandler always sets DATABASE = "dft.extxyz".
+_LABELLED_FILENAME = "dft_dft.extxyz"
 
-    Runs VASP single-point calculations on configurations in parallel using SLURM.
-    Supports stub mode for testing without actual VASP execution.
+# Historical default SLURM header for the VASP evaluator (kept verbatim for
+# backward compatibility -- note it differs from the VASPHandler default path).
+_VASP_EVAL_HEADER = (
+    "#SBATCH --time=0-02:00:00\n"
+    "module purge\n"
+    "module load vasp/6.4.2_intel\n"
+    "source /opt/intel/oneapi/setvars.sh --force\n"
+    "export VASP_PP_PATH=/home/nunglert/cellar/vasp/paw"
+)
+
+_ORCA_EVAL_HEADER = "#SBATCH --time=0-02:00:00\nmodule"
+
+
+class AseCalculatorEvaluator(GroundTruthEvaluator):
+    """Single-point ground-truth evaluation with any ASE calculator.
+
+    Calculator-agnostic: it ships ``calc_config`` (the per-job input JSON) and
+    runs ``singlepoint_script`` on the remote, which builds the calculator,
+    computes energy + forces, and writes a labelled ``dft_<DB>.extxyz``.
+    Concrete calculators are presets that assemble ``calc_config`` (see
+    :class:`VASPEvaluator`, :class:`ORCAEvaluator`).
 
     Args:
-        singlepoint_script: Path to dft_singlepoint.py or compatible evaluation script
-        remote_fs: FileSystemHandlerBase for the machine where evaluation runs
-        cluster_config: ClusterConfig with partition, conda env, template settings
-        num_parallel: Number of parallel SLURM jobs to queue
-        incar_kwargs: VASP INCAR tags as dictionary
-        remote_savepath: Path on remote machine for calculation files
-        launcher: Launch command for VASP (e.g., "mpirun -n")
-        stub: If True, creates mock outputs without running VASP
-        loop_time: Interval (seconds) to poll for job completion
-        required_fraction: Fraction of samples that must succeed
-        n_processors: Number of CPU cores to run each VASP job on
-        slurm_header_add: Additional text to add to SLURM header
+        singlepoint_script: Remote payload that builds the calculator.
+        remote_fs: Filesystem handler for the evaluation machine.
+        cluster_config: Target cluster configuration.
+        num_parallel: Number of parallel jobs to queue.
+        calc_config: Calculator settings written into each job's input JSON.
+        remote_savepath: Remote path for the calculation files.
+        loop_time: Seconds between polls for completion.
+        required_fraction: Fraction of jobs that must succeed to proceed.
+        n_processors: CPU cores per job.
+        stub: If True, produce mock outputs without running anything.
+        slurm_header_add: Extra SLURM header lines.
+    """
+
+    def __init__(
+        self,
+        singlepoint_script: os.PathLike,
+        remote_fs: FileSystemHandlerBase,
+        cluster_config: ClusterConfig,
+        num_parallel: int,
+        calc_config: dict,
+        remote_savepath: Optional[os.PathLike] = None,
+        loop_time: float = 30,
+        required_fraction: float = 0.5,
+        n_processors: int = 8,
+        stub: bool = False,
+        slurm_header_add: str = "",
+    ):
+        super().__init__()
+        self.singlepoint_script = singlepoint_script
+        self.calc_config = dict(calc_config)
+        self.remote_fs = remote_fs
+        self.cluster_config = cluster_config
+        self.num_parallel = num_parallel
+        self.remote_savepath = (
+            Path(remote_savepath) if remote_savepath else None
+        )
+        self.loop_time = loop_time
+        self.required_fraction = required_fraction
+        self.n_processors = n_processors
+        self.stub = stub
+        self.slurm_header_add = slurm_header_add
+        self.handler = None
+
+    def update(
+        self, calcdir: Path, evaluator_input: Path | list[Path], **kwargs
+    ) -> None:
+        self.dft_dir = Path(calcdir) / "dft"
+        self.results_dir = self.dft_dir / "results"
+        os.makedirs(self.dft_dir, exist_ok=True)
+
+        self.traj_files = (
+            [str(evaluator_input)]
+            if isinstance(evaluator_input, Path)
+            else [str(p) for p in evaluator_input]
+        )
+
+        if self.stub:
+            # No remote handler is needed; outputs are mocked in get_*.
+            self.handler = None
+            return
+
+        # Local import keeps the evaluator import light and avoids any cycle.
+        from remote_handler.workflows.dft_runner import SinglePointHandler
+
+        self.handler = SinglePointHandler(
+            traj_files=self.traj_files,
+            cluster_config=self.cluster_config,
+            remote_fs=self.remote_fs,
+            savepath=str(self.remote_savepath)
+            if self.remote_savepath
+            else "/tmp",
+            num_parallel=self.num_parallel,
+            python_script_path=self.singlepoint_script,
+            calc_config=self.calc_config,
+            loop_time=self.loop_time,
+            jobname="dft",
+            every=1,
+            local_savepath=self.results_dir,
+            logfile="dft.log",
+            collect_only=False,
+            tag="dft",
+            n_processors=self.n_processors,
+            slurm_header_add=self.slurm_header_add,
+        )
+
+    def get_evaluated_configs(self) -> Path:
+        """Run the evaluation and collect the labelled configurations.
+
+        Returns:
+            Path to the ``.extxyz`` of evaluated configurations.
+
+        Raises:
+            WorkflowError: If fewer than ``required_fraction`` jobs succeed.
+        """
+        if self.stub:
+            logger.info("Running in stub mode - creating mock outputs")
+            all_ats = self._create_stub_outputs(num_configs=5)
+        else:
+            self.handler.run()
+            if not self.handler.finish_check(self.required_fraction):
+                raise WorkflowError(
+                    f"Less than {self.required_fraction * 100}% ran "
+                    "successfully. Something probably went wrong. Otherwise, "
+                    "lower the required_fraction parameter."
+                )
+            all_ats = self._collect_results()
+
+        os.makedirs(self.results_dir, exist_ok=True)
+        output_path = self.results_dir / "evaluated_configs.extxyz"
+        ase.io.write(output_path, all_ats)
+        logger.info(
+            f"Wrote {len(all_ats)} evaluated configurations to {output_path}"
+        )
+        return output_path
+
+    def _collect_results(self) -> list[Atoms]:
+        """Read each job's labelled extxyz and copy E/F into REF_* fields."""
+        all_ats = []
+        for calcpath in grep(str(self.results_dir / "calcdirs"), ""):
+            labelled = Path(calcpath) / _LABELLED_FILENAME
+            try:
+                at = ase.io.read(labelled)
+            except Exception as e:  # noqa: BLE001 - report & skip a failed job
+                logger.info(f"evaluation failed for {calcpath=}: {e}")
+                continue
+            at.info["REF_energy"] = at.get_potential_energy()
+            at.arrays["REF_forces"] = at.get_forces()
+            at.calc = None
+            all_ats.append(at)
+            logger.info(f"evaluation successful for {calcpath=}")
+        return all_ats
+
+    def _create_stub_outputs(self, num_configs: int = 5) -> list[Atoms]:
+        """Create mock labelled outputs (water molecules) for testing."""
+        logger.info("Creating stub outputs for testing")
+
+        mock_atoms = []
+        for _ in range(num_configs):
+            positions = np.array(
+                [
+                    [0.0, 0.0, 0.0],  # O
+                    [0.96, 0.0, 0.0],  # H
+                    [-0.24, 0.93, 0.0],  # H
+                ]
+            )
+            positions += np.random.normal(0, 0.1, positions.shape)
+
+            atoms = Atoms(
+                symbols="OH2",
+                positions=positions,
+                cell=[10, 10, 10],
+                pbc=True,
+            )
+            atoms.info["REF_energy"] = -14.5 + np.random.normal(0, 0.1)
+            atoms.arrays["REF_forces"] = np.random.normal(0, 0.5, (3, 3))
+            atoms.calc = None
+            mock_atoms.append(atoms)
+
+        return mock_atoms
+
+
+class VASPEvaluator(AseCalculatorEvaluator):
+    """VASP DFT preset of :class:`AseCalculatorEvaluator`.
+
+    Args:
+        singlepoint_script: Path to ``dft_singlepoint.py`` (or compatible).
+        remote_fs: Filesystem handler for the evaluation machine.
+        cluster_config: Target cluster configuration.
+        num_parallel: Number of parallel SLURM jobs to queue.
+        incar_kwargs: VASP INCAR tags.
+        remote_savepath: Remote path for the calculation files.
+        launcher: VASP launch prefix (e.g. ``"mpirun -n"``).
+        stub: If True, produce mock outputs without running VASP.
+        loop_time: Seconds between polls for completion.
+        required_fraction: Fraction of jobs that must succeed.
+        n_processors: CPU cores per VASP job.
+        slurm_header_add: Extra SLURM header lines.
     """
 
     def __init__(
@@ -58,173 +250,54 @@ class VASPEvaluator(GroundTruthEvaluator):
         loop_time: float = 30,
         required_fraction: float = 0.5,
         n_processors: int = 8,
-        slurm_header_add: str = "#SBATCH --time=0-02:00:00\nmodule purge\nmodule load vasp/6.4.2_intel\nsource /opt/intel/oneapi/setvars.sh --force\nexport VASP_PP_PATH=/home/nunglert/cellar/vasp/paw",
+        slurm_header_add: str = _VASP_EVAL_HEADER,
     ):
-        super().__init__()
-        self.singlepoint_script = singlepoint_script
         self.incar_kwargs = incar_kwargs
-        self.remote_fs = remote_fs
-        self.cluster_config = cluster_config
-        self.num_parallel = num_parallel
-        self.stub = stub
         self.launcher = launcher
-        self.loop_time = loop_time
-        self.n_processors = n_processors
-        self.required_fraction = required_fraction
-        self.remote_savepath = (
-            Path(remote_savepath) if remote_savepath else None
-        )
-        self.slurm_header_add = slurm_header_add
-
-    def update(
-        self, calcdir: Path, evaluator_input: Path | list[Path], **kwargs
-    ) -> None:
-        """
-        Prepare evaluator for a new iteration.
-
-        Args:
-            calcdir: Directory for this AL iteration
-            evaluator_input: Path to trajectory file(s) with configurations to evaluate
-            **kwargs: Additional parameters
-        """
-        self.dft_dir = Path(calcdir) / "dft"
-        self.results_dir = self.dft_dir / "results"
-        os.makedirs(self.dft_dir, exist_ok=True)
-
-        traj_files = (
-            [str(evaluator_input)]
-            if isinstance(evaluator_input, Path)
-            else [str(p) for p in evaluator_input]
+        calc_config = {
+            "INCAR_kwargs": incar_kwargs,
+            "launch_command": f"{launcher} {n_processors} vasp_std",
+        }
+        super().__init__(
+            singlepoint_script=singlepoint_script,
+            remote_fs=remote_fs,
+            cluster_config=cluster_config,
+            num_parallel=num_parallel,
+            calc_config=calc_config,
+            remote_savepath=remote_savepath,
+            loop_time=loop_time,
+            required_fraction=required_fraction,
+            n_processors=n_processors,
+            stub=stub,
+            slurm_header_add=slurm_header_add,
         )
 
-        # Store for later use
-        self.traj_files = traj_files
-
-        # In stub mode, we don't need VASPHandler
-        if not self.stub:
-            from remote_handler.workflows.dft_runner import VASPHandler
-
-            self.vasp_handler = VASPHandler(
-                traj_files=traj_files,
-                cluster_config=self.cluster_config,
-                remote_fs=self.remote_fs,
-                savepath=str(self.remote_savepath)
-                if self.remote_savepath
-                else "/tmp",
-                num_parallel=self.num_parallel,
-                loop_time=self.loop_time,
-                jobname="dft",
-                every=1,
-                start=None,
-                end=None,
-                local_savepath=self.results_dir,
-                logfile="dft.log",
-                collect_only=False,
-                tag="dft",
-                python_script_path=self.singlepoint_script,
-                stub=self.stub,
-                launcher=self.launcher,
-                n_processors=self.n_processors,
-                incar_kwargs=self.incar_kwargs,
-                slurm_header_add=self.slurm_header_add,
-            )
-
-    def _create_stub_outputs(self, num_configs: int = 5) -> list[Atoms]:
-        """
-        Create mock VASP outputs for testing.
-
-        Generates fake DFT results with realistic energies and forces.
-
-        Args:
-            num_configs: Number of configurations to generate
-
-        Returns:
-            List of Atoms objects with mock DFT results
-        """
-        logger.info("Creating stub VASP outputs for testing")
-
-        mock_atoms = []
-        for i in range(num_configs):
-            # Create a simple water molecule as mock structure
-            positions = np.array(
-                [
-                    [0.0, 0.0, 0.0],  # O
-                    [0.96, 0.0, 0.0],  # H
-                    [-0.24, 0.93, 0.0],  # H
-                ]
-            )
-            # Add small random perturbations
-            positions += np.random.normal(0, 0.1, positions.shape)
-
-            atoms = Atoms(
-                symbols="OH2",
-                positions=positions,
-                cell=[10, 10, 10],
-                pbc=True,
-            )
-
-            # Mock DFT results
-            energy = -14.5 + np.random.normal(0, 0.1)  # Mock energy in eV
-            forces = np.random.normal(0, 0.5, (3, 3))  # Mock forces
-
-            atoms.info["REF_energy"] = energy
-            atoms.arrays["REF_forces"] = forces
-            atoms.calc = None  # No calculator attached
-
-            mock_atoms.append(atoms)
-
-        return mock_atoms
-
-    def get_evaluated_configs(self) -> Path:
-        """
-        Run VASP evaluations and collect results.
-
-        Returns:
-            Path to XYZ file containing evaluated configurations
-
-        Raises:
-            Exception: If less than required_fraction of calculations succeed
-        """
-        if self.stub:
-            # In stub mode, create mock outputs directly
-            logger.info("Running in stub mode - creating mock VASP outputs")
-            all_ats = self._create_stub_outputs(num_configs=5)
-        else:
-            # Run actual VASP calculations
-            self.vasp_handler.run()
-
-            if not self.vasp_handler.finish_check(self.required_fraction):
-                raise WorkflowError(
-                    f"Less than {self.required_fraction * 100}% ran successfully. "
-                    "Something probably went wrong. Otherwise, lower the "
-                    "required_fraction parameter."
-                )
-
-            # Collect results from VASP runs
-            all_ats = []
-            for calcpath in grep(str(self.results_dir / "calcdirs"), ""):
-                try:
-                    at = ase.io.read(Path(calcpath) / "vasprun.xml")
-                    # Add REF labels to results
-                    at.info["REF_energy"] = at.get_potential_energy()
-                    at.arrays["REF_forces"] = at.get_forces()
-                    at.calc = None
-                    all_ats.append(at)
-                except Exception as e:
-                    logger.info(f"VASP run failed for {calcpath=}: {e}")
-
-        # Write results to file
-        os.makedirs(self.results_dir, exist_ok=True)
-        output_path = self.results_dir / "evaluated_configs.extxyz"
-        ase.io.write(output_path, all_ats)
-        logger.info(
-            f"Wrote {len(all_ats)} evaluated configurations to {output_path}"
-        )
-
-        return output_path
+    @property
+    def vasp_handler(self):
+        """Backward-compatible alias for the underlying handler."""
+        return self.handler
 
 
-class ORCAEvaluator(GroundTruthEvaluator):
+class ORCAEvaluator(AseCalculatorEvaluator):
+    """ORCA DFT preset of :class:`AseCalculatorEvaluator`.
+
+    Keeps its historical ``(singlepoint_script, cluster_config, remote_fs, ...)``
+    argument order for backward compatibility. Now also supports ``stub``.
+
+    Args:
+        singlepoint_script: Path to ``orca_singlepoint.py`` (or compatible).
+        cluster_config: Target cluster configuration.
+        remote_fs: Filesystem handler for the evaluation machine.
+        num_parallel: Number of parallel SLURM jobs to queue.
+        orcasimpleinput: ORCA simple-input line (functional, basis, method).
+        remote_savepath: Remote path for the calculation files.
+        loop_time: Seconds between polls for completion.
+        required_fraction: Fraction of jobs that must succeed.
+        n_processors: CPU cores per ORCA job.
+        orca_binary: Full path to the ORCA executable.
+        stub: If True, produce mock outputs without running ORCA.
+    """
+
     def __init__(
         self,
         singlepoint_script: os.PathLike,
@@ -236,101 +309,88 @@ class ORCAEvaluator(GroundTruthEvaluator):
         loop_time: float = 30,
         required_fraction: float = 0.8,
         n_processors: int = 2,
+        orca_binary: str = "/opt/ohpc/pub/dft/orca_6_1_0/orca",
+        stub: bool = False,
     ):
-        """
-        Args:
-            singlepoint_script: Path to dft_singlepoint.py or another compatible
-                evaluation script
-            remote_fs: `FileSystemHandlerBase` for the machine on which the evaluation
-                should be run
-            num_parallel: number of parallel slurm jobs to queue
-            orcasimpleinput: simple input for the ASE ORCA calculator
-            remote_savepath: Path in which file for remote calculations are stored
-            loop_time: interval (in seconds) at which to poll if the evaluation slurm
-                jobs have finished
-            required_fraction: fraction of samples for which DFT must succeed to
-                progress to the next step
-            n_processors: number of CPU cores to run each ORCA job on
-        """
-        super().__init__()
-        self.singlepoint_script = singlepoint_script
         self.orcasimpleinput = orcasimpleinput
-        self.remote_fs = remote_fs
-        self.cluster_config = cluster_config
-        self.num_parallel = num_parallel
-        self.loop_time = loop_time
-        self.required_fraction = required_fraction
-        self.remote_savepath = Path(remote_savepath)
-        self.n_processors = n_processors
-
-    def update(
-        self, calcdir: Path, evaluator_input: Path | list[Path], **kwargs
-    ) -> None:
-        self.dft_dir = Path(calcdir) / "dft"
-        self.results_dir = self.dft_dir / "results"
-        os.makedirs(self.dft_dir, exist_ok=True)
-        it = str(calcdir).split("/")[-1]
-
-        from remote_handler.workflows.dft_runner import ORCAHandler
-
-        traj_files = (
-            [str(evaluator_input)]
-            if isinstance(evaluator_input, Path)
-            else [str(p) for p in evaluator_input]
+        calc_config = {
+            "orcasimpleinput": orcasimpleinput,
+            "orcablocks": f"%pal nprocs {n_processors} end",
+            "orca_binary": orca_binary,
+        }
+        super().__init__(
+            singlepoint_script=singlepoint_script,
+            remote_fs=remote_fs,
+            cluster_config=cluster_config,
+            num_parallel=num_parallel,
+            calc_config=calc_config,
+            remote_savepath=remote_savepath,
+            loop_time=loop_time,
+            required_fraction=required_fraction,
+            n_processors=n_processors,
+            stub=stub,
+            slurm_header_add=_ORCA_EVAL_HEADER,
         )
 
-        self.orca_handler = ORCAHandler(
-            loop_time=self.loop_time,
-            cluster_config=self.cluster_config,
-            jobname="dft",
-            every=1,
-            start=None,
-            end=None,
-            logfile="dft.log",
-            tag="dft",
-            collect_only=False,
-            remote_fs=self.remote_fs,
-            savepath=str(self.remote_savepath)
-            if self.remote_savepath
-            else "/tmp",
-            local_savepath=self.results_dir,
-            traj_files=traj_files,
-            python_script_path=self.singlepoint_script,
-            num_parallel=self.num_parallel,
-            n_processors=self.n_processors,
-            orcasimpleinput=self.orcasimpleinput,
+    @property
+    def orca_handler(self):
+        """Backward-compatible alias for the underlying handler."""
+        return self.handler
+
+
+class EMTEvaluator(AseCalculatorEvaluator):
+    """Cheap EMT ground-truth preset (pure ASE, no external binary).
+
+    Uses the generic ``ase_singlepoint.py`` payload with ASE's EMT calculator.
+    EMT supports only a handful of elements (Ni, Cu, Pd, Ag, Pt, Au, Al, H, C,
+    N, O), but needs no licensed software -- ideal for examples and CI runs
+    over the ``direct`` executor, where VASP/ORCA cannot run.
+
+    Args:
+        remote_fs: Filesystem handler for the evaluation machine.
+        cluster_config: Target cluster configuration.
+        num_parallel: Number of parallel jobs to queue.
+        singlepoint_script: Remote payload; defaults to the shipped
+            ``ase_singlepoint.py``.
+        calculator_kwargs: Keyword arguments forwarded to ``EMT(...)``.
+        remote_savepath: Remote path for the calculation files.
+        loop_time: Seconds between polls for completion.
+        required_fraction: Fraction of jobs that must succeed.
+        n_processors: CPU cores per job.
+        stub: If True, produce mock outputs without running anything.
+        slurm_header_add: Extra SLURM header lines.
+    """
+
+    def __init__(
+        self,
+        remote_fs: FileSystemHandlerBase,
+        cluster_config: ClusterConfig,
+        num_parallel: int,
+        singlepoint_script: Optional[os.PathLike] = None,
+        calculator_kwargs: Optional[dict] = None,
+        remote_savepath: Optional[os.PathLike] = None,
+        loop_time: float = 30,
+        required_fraction: float = 0.5,
+        n_processors: int = 1,
+        stub: bool = False,
+        slurm_header_add: str = "",
+    ):
+        if singlepoint_script is None:
+            singlepoint_script = str(_SCRIPTS_DIR / "ase_singlepoint.py")
+        calc_config = {
+            "calculator": "emt",
+            "calculator_kwargs": calculator_kwargs or {},
+        }
+        super().__init__(
+            singlepoint_script=singlepoint_script,
+            remote_fs=remote_fs,
+            cluster_config=cluster_config,
+            num_parallel=num_parallel,
+            calc_config=calc_config,
+            remote_savepath=remote_savepath,
+            loop_time=loop_time,
+            required_fraction=required_fraction,
+            n_processors=n_processors,
+            stub=stub,
+            slurm_header_add=slurm_header_add,
         )
-
-    def get_evaluated_configs(self) -> Path:
-        self.orca_handler.run()
-
-        if not self.orca_handler.finish_check(self.required_fraction):
-            raise Exception(
-                f"Less than {self.required_fraction * 100}% ran successfully. "
-                "Something probably went wrong. Otherwise, lower the "
-                "required_fraction parameter."
-            )
-
-        all_ats = []
-        for calcpath in grep(str(self.results_dir / "calcdirs"), ""):
-            try:
-                at = ase.io.read(Path(calcpath) / "dft_dft.extxyz")
-                logger.info(f"ORCA run succesfull for {calcpath=}")
-                all_ats.append(at)
-            except:
-                logger.info(f"ORCA run failed for {calcpath=}")
-
-        for s in all_ats:
-            s.info["REF_energy"] = s.get_potential_energy()
-            s.arrays["REF_forces"] = s.get_forces()
-            s.calc = None
-
-        # Write results to file
-        os.makedirs(self.results_dir, exist_ok=True)
-        output_path = self.results_dir / "evaluated_configs.extxyz"
-        ase.io.write(output_path, all_ats)
-        logger.info(
-            f"Wrote {len(all_ats)} evaluated configurations to {output_path}"
-        )
-
-        return output_path

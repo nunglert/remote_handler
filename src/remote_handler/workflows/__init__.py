@@ -20,7 +20,12 @@ Optional Dependencies:
 Each component can run in stub mode for testing without actual execution.
 """
 
-from remote_handler.workflows.evaluators import VASPEvaluator
+from remote_handler.workflows.evaluators import (
+    AseCalculatorEvaluator,
+    EMTEvaluator,
+    ORCAEvaluator,
+    VASPEvaluator,
+)
 from remote_handler.workflows.samplers import (
     LammpsSampler,
     NSTrajectorySampler,
@@ -33,7 +38,10 @@ from remote_handler.workflows.trainers import (
 )
 
 __all__ = [
+    "AseCalculatorEvaluator",
     "VASPEvaluator",
+    "ORCAEvaluator",
+    "EMTEvaluator",
     "LammpsSampler",
     "NSTrajectorySampler",
     "TorchSimSampler",
