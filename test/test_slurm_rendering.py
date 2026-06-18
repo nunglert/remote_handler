@@ -9,7 +9,10 @@ Pure Jinja rendering, no ``sbatch`` needed, so they run in the default tier
 (unlike the ``slurm``-gated end-to-end task tests, which skip without sbatch).
 """
 
+import pytest
+
 from remote_handler.core.slurm_utils import get_array_slurm_str, get_slurm_str
+from remote_handler.exceptions import TaskError
 
 HEADER = "musica.sh.j2"  # a shipped header template (no external deps)
 
@@ -64,3 +67,50 @@ def test_array_jobfile_render_is_stable():
     # Array sizing (--array=1-N%P) is a submit-time sbatch CLI arg, NOT baked
     # into the jobfile body. Guards against that boundary shifting.
     assert "--array" not in script
+
+
+def test_header_template_accepts_explicit_path(tmp_path):
+    """``template`` may be a path to a custom header, not just a name.
+
+    The custom header's directory is added to the search path so its body
+    ``{% include %}`` still resolves against the shipped ``body_*`` templates.
+    """
+    custom = tmp_path / "custom.sh.j2"
+    custom.write_text(
+        "#!/bin/bash\n#SBATCH --job-name={{ jobname }}\n"
+        "{{ conda_activation }}\nCUSTOM_HEADER_MARKER\n"
+        "{% include job_type_template %}\n"
+    )
+
+    script = get_slurm_str(
+        input_file="/remote/input.json",
+        python_script_path="/remote/script.py",
+        jobname="charjob",
+        partition="charpart",
+        n_cores=4,
+        conda_env="charenv",
+        conda_source="/home/u/miniconda3",
+        header_template=str(custom),
+        job_type_template="body_single.sh.j2",
+    )
+
+    assert "CUSTOM_HEADER_MARKER" in script
+    assert "conda activate charenv" in script
+    # The shipped body include still resolves from the package search path.
+    assert "python /remote/script.py /remote/input.json" in script
+
+
+def test_header_template_missing_path_errors():
+    """An explicit template path that does not exist fails clearly."""
+    with pytest.raises(TaskError, match="not found at the given path"):
+        get_slurm_str(
+            input_file="i.json",
+            python_script_path="s.py",
+            jobname="j",
+            partition="p",
+            n_cores=2,
+            conda_env="env",
+            conda_source="/home/u/miniconda3",
+            header_template="/no/such/dir/custom.sh.j2",
+            job_type_template="body_single.sh.j2",
+        )

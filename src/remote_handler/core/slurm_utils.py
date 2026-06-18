@@ -209,6 +209,39 @@ class LoggingFileSystemLoader(FileSystemLoader):
         return source, filename, uptodate
 
 
+def _load_header_template(header_template):
+    """Load a SLURM header template by name *or* by explicit path.
+
+    ``header_template`` (the cluster config's ``template`` field) may be:
+
+    * a bare filename (e.g. ``"musica.sh.j2"``) resolved against the template
+      search path -- ``REMOTE_HANDLER_SLURM_TEMPLATES`` then the built-ins; or
+    * a path to a template file (absolute, or containing a path separator),
+      which is loaded directly. Its directory is added to the search path so
+      the body ``{% include job_type_template %}`` still resolves against the
+      shipped ``body_*.sh.j2``.
+
+    Jinja's ``get_template`` only ever does a *name* lookup within the search
+    dirs, so an explicit path handed to it raises ``TemplateNotFound``; this
+    bridges that gap.
+    """
+    template_dirs = list(get_config().get_template_dirs())
+    name = header_template
+
+    path = Path(header_template)
+    if path.is_absolute() or os.sep in str(header_template):
+        if not path.is_file():
+            raise TaskError(
+                "SLURM header template not found at the given path: "
+                f"{header_template}"
+            )
+        template_dirs = [str(path.parent), *template_dirs]
+        name = path.name
+
+    env = Environment(loader=LoggingFileSystemLoader(template_dirs))
+    return env.get_template(name)
+
+
 def get_array_slurm_str(
     calcdir,
     python_script_path,
@@ -251,11 +284,8 @@ def get_array_slurm_str(
     if map_indices is None:
         map_indices = np.arange(num_array_tasks)
 
-    # Create a Jinja2 environment with the custom loader to have logging
-    config = get_config()
-    template_dirs = config.get_template_dirs()
-    env = Environment(loader=LoggingFileSystemLoader(template_dirs))
-    template = env.get_template(header_template)
+    # Load the header template (by name on the search path, or explicit path).
+    template = _load_header_template(header_template)
     # Render the template with the provided parameters
     slurm_str = template.render(
         calcdir=calcdir,
@@ -312,13 +342,8 @@ def get_slurm_str(
         str: The rendered SLURM script as a string.
     """
 
-    # Create a Jinja2 environment with the custom loader to have logging
-    config = get_config()
-    template_dirs = config.get_template_dirs()
-    env = Environment(loader=LoggingFileSystemLoader(template_dirs))
-
-    # Load the specified header template
-    template = env.get_template(header_template)
+    # Load the header template (by name on the search path, or explicit path).
+    template = _load_header_template(header_template)
 
     # Render the template with the provided parameters
     slurm_str = template.render(
