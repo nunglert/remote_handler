@@ -9,7 +9,7 @@ The version is derived from git tags by `setuptools-scm` (tag `v0.2.0` →
 version `0.2.0`). To cut a release: add a dated section below, merge to `main`,
 then `git tag -a vX.Y.Z`.
 
-## [0.2.0] — unreleased
+## [0.2.0] — 2026-06-18
 
 First deliberately versioned release. Prior `0.1.0` was never tracked; this
 draws the line.
