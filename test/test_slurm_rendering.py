@@ -60,13 +60,39 @@ def test_array_jobfile_render_is_stable():
     assert "#SBATCH --job-name=charjob" in script
     assert "source /home/u/miniconda3/bin/activate" in script
     assert "conda activate charenv" in script
-    # map_indices defaults to arange(num_array_tasks).
+    # The shard index comes from the MAP array; default map_indices = 0..N-1.
     assert "MAP=(0 1 2)" in script
+    assert "run_id=${MAP[$((run - 1))]}" in script
     # The defining behaviour of an array shard: run the script on calcdir/$id.
     assert "python /remote/script.py /remote/calc/$run_id" in script
     # Array sizing (--array=1-N%P) is a submit-time sbatch CLI arg, NOT baked
     # into the jobfile body. Guards against that boundary shifting.
     assert "--array" not in script
+
+
+def test_array_jobfile_honours_map_indices():
+    """A non-contiguous map_indices maps array tasks to specific calcdirs.
+
+    This is what a subset rerun (e.g. recompute only failed shards 0, 2, 5)
+    relies on; the MAP array is what makes SLURM honour it like the direct
+    executor does.
+    """
+    script = get_array_slurm_str(
+        calcdir="/remote/calc",
+        python_script_path="/remote/script.py",
+        num_array_tasks=3,
+        map_indices=[0, 2, 5],
+        jobname="charjob",
+        partition="charpart",
+        n_processors=1,
+        conda_env="charenv",
+        conda_source="/home/u/miniconda3",
+        header_template=HEADER,
+        job_type_template="body_array.sh.j2",
+    )
+    # SLURM tasks 1,2,3 -> MAP[0,1,2] = calcdirs 0, 2, 5.
+    assert "MAP=(0 2 5)" in script
+    assert "run_id=${MAP[$((run - 1))]}" in script
 
 
 def test_header_template_accepts_explicit_path(tmp_path):

@@ -1,10 +1,10 @@
 # Print the task and run range
 echo This is task $SLURM_ARRAY_TASK_ID
 
-{# MAP=({{ map_indices | join(' ') }})
-
-# Get the mapped index for this SLURM array task
-MAPPED_INDEX=${MAP[$((SLURM_ARRAY_TASK_ID - 1))]} #}
+# Map each global run index to its calcdir index. Default map_indices is
+# 0..N-1 (so run i -> calcdir/i), but a subset rerun (e.g. map_indices=[0,2,5])
+# targets exactly those calcdirs -- mirroring the direct executor.
+MAP=({{ map_indices | join(' ') }})
 
 PER_TASK={{per_task}}
 
@@ -18,6 +18,6 @@ echo This is task $SLURM_ARRAY_TASK_ID, which will do runs $START_NUM to $END_NU
 # Run the loop of runs for this task
 for (( run=$START_NUM; run<=END_NUM; run++ )); do
   echo This is SLURM task $SLURM_ARRAY_TASK_ID, run number $run
-  run_id=$((run - 1))
+  run_id=${MAP[$((run - 1))]}
   python {{ python_script_path }} {{ calcdir }}/$run_id
 done

@@ -65,6 +65,7 @@ class MaceModelTrainer(ModelTrainer):
         remote_savepath: Optional[os.PathLike] = None,
         loop_time: float = 30,
         stub: bool = False,
+        n_processors: int = 1,
     ):
         super().__init__()
         self.training_script = training_script
@@ -77,6 +78,9 @@ class MaceModelTrainer(ModelTrainer):
         self.remote_savepath = remote_savepath
         self.loop_time = loop_time
         self.stub = stub
+        # Resources per training job; for GPU templates this is the GPU count
+        # (``--gres=gpu:n``). One model per job -> one GPU by default.
+        self.n_processors = n_processors
         self.model_name = "Model"  # Default model name
 
     def update(
@@ -144,6 +148,7 @@ class MaceModelTrainer(ModelTrainer):
                 num_parallel=min(self.num_models, 5),
                 loop_time=self.loop_time,
                 jobname="train",
+                n_processors=self.n_processors,
             )
 
             self.training_task.allocate_data()
@@ -272,6 +277,7 @@ class MaceFinetuningTrainer(ModelTrainer):
         loop_time: float = 30,
         stub: bool = False,
         convert_to_jax: bool = False,
+        n_processors: int = 1,
     ):
         super().__init__()
         self.training_script = training_script
@@ -286,6 +292,9 @@ class MaceFinetuningTrainer(ModelTrainer):
         self.loop_time = loop_time
         self.stub = stub
         self.convert_to_jax = convert_to_jax
+        # Resources per training job; for GPU templates this is the GPU count
+        # (``--gres=gpu:n``). One model per job -> one GPU by default.
+        self.n_processors = n_processors
         self.model_name = "Model"  # Default model name
 
     def update(
@@ -359,6 +368,7 @@ class MaceFinetuningTrainer(ModelTrainer):
                 num_parallel=min(self.num_models, 5),
                 loop_time=self.loop_time,
                 jobname="finetune",
+                n_processors=self.n_processors,
             )
 
             self.training_task.allocate_data()
