@@ -9,6 +9,45 @@ The version is derived from git tags by `setuptools-scm` (tag `v0.2.0` →
 version `0.2.0`). To cut a release: add a dated section below, merge to `main`,
 then `git tag -a vX.Y.Z`.
 
+## [0.3.0] — 2026-06-22
+
+A feature release on top of `0.2.0`: optional-dependency ergonomics, YAML
+config inputs for the DFT and NeuralIL paths, a choice of mace-jax artifact
+format, and a batch of SLURM/template fixes.
+
+### Added
+- `MaceFinetuningTrainer(jax_output_format=...)` — choose the converted
+  mace-jax artifact: the opaque `.pkl` bundle (`"pkl"`, default — unchanged
+  behaviour) or a directory bundle (`"bundle"`: a human-readable `config.json`
+  plus `params.msgpack`) that mace-jax's own `load_model_bundle` consumes.
+- mace-jax conversion utilities: `convert_torch_model_to_jax_bundle()` (torch
+  `.model` → directory bundle) and `generate_jax_foundation_model()` (download
+  a MACE foundation model and emit a mace-jax bundle).
+- `remote_handler show extras` — probes (by actually importing) which optional
+  dependency groups are installed.
+- INCAR via YAML: `incar_config_file` on `VASPHandler` / `VASPEvaluator`,
+  layered under any explicit `incar_kwargs`.
+- `NeuralilILTrainer(config_file=...)` — training hyperparameters from a YAML
+  file, layered defaults < `config_file` < `training_kwargs`.
+
+### Changed
+- `remote_mace_train_runner` is now optional on the MACE trainers: when unset
+  it is auto-discovered from the remote conda env (`mace.cli.run_train`).
+- The `torch_sim` extra no longer depends on mace — torch_sim runs without it.
+  The redundant `torch_sim_freeze` extra was removed (a runtime guard reports
+  the missing piece instead).
+- `~` is accepted again in `conda_source` and remote paths, expanding to the
+  remote `$HOME` (good defaults without hardcoding a home directory).
+
+### Fixed
+- `map_indices` is now honoured on the SLURM array path (the rendered
+  `body_array.sh.j2` `MAP=(...)` lookup was dropped).
+- `MaceFinetuningTrainer` no longer requests 2 GPUs by default —
+  `n_processors` is threaded through to the SLURM request.
+- `NeuralilILTrainer` no longer mutates its class-level default training kwargs
+  across instances (defaults are deep-copied).
+- Corrected the `musica` SLURM template.
+
 ## [0.2.0] — 2026-06-18
 
 First deliberately versioned release. Prior `0.1.0` was never tracked; this
