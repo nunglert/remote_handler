@@ -14,6 +14,7 @@ from typing import Optional
 
 import numpy as np
 
+from remote_handler.core import remote_env
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.core.tasks import (
@@ -34,6 +35,30 @@ from .active_learning_base import ModelTrainer
 logger = logging.getLogger(__name__)
 
 
+def _resolve_mace_train_runner(remote_fs, cluster_config):
+    """Locate MACE's ``run_train.py`` in the *remote* conda env, or raise.
+
+    Used when a trainer is given no explicit ``remote_mace_train_runner``: the
+    path lives on the remote (the host is dependency-light), so it is probed
+    there rather than imported locally.
+    """
+    path = remote_env.resolve_remote_module_file(
+        remote_fs,
+        getattr(cluster_config, "conda_source", ""),
+        getattr(cluster_config, "conda_env", ""),
+        "mace.cli.run_train",
+    )
+    if not path:
+        env = getattr(cluster_config, "conda_env", "") or "(ambient)"
+        raise ConfigurationError(
+            "Could not locate MACE's run_train.py in the remote conda env "
+            f"'{env}'. Install mace there, or pass remote_mace_train_runner "
+            "explicitly."
+        )
+    logger.info("Resolved remote MACE run_train.py: %s", path)
+    return path
+
+
 class MaceModelTrainer(ModelTrainer):
     """
     Trainer for MACE models using array script tasks.
@@ -45,7 +70,9 @@ class MaceModelTrainer(ModelTrainer):
         remote_fs: FileSystemHandlerBase for the machine where training runs
         training_script: Path to mace_training.py or compatible script
         config_file: Path to MACE YAML config file
-        remote_mace_train_runner: Path to MACE run_train.py on remote machine
+        remote_mace_train_runner: Path to MACE run_train.py on the remote
+            machine. Optional -- if omitted, it is resolved automatically by
+            probing the remote conda env (requires mace installed there).
         num_models: Number of models to train per generation
         validation_fraction: Fraction for train/validation split
         remote_savepath: Path on remote machine for calculation files
@@ -59,7 +86,7 @@ class MaceModelTrainer(ModelTrainer):
         cluster_config: ClusterConfig,
         training_script: os.PathLike,
         config_file: os.PathLike,
-        remote_mace_train_runner: os.PathLike,
+        remote_mace_train_runner: Optional[os.PathLike] = None,
         num_models: int = 5,
         validation_fraction: float = 0.1,
         remote_savepath: Optional[os.PathLike] = None,
@@ -106,6 +133,11 @@ class MaceModelTrainer(ModelTrainer):
 
         # In stub mode, we don't need to create the task
         if not self.stub:
+            # Auto-resolve the remote run_train.py path if not given.
+            if self.remote_mace_train_runner is None:
+                self.remote_mace_train_runner = _resolve_mace_train_runner(
+                    self.remote_fs, self.cluster_config
+                )
             # Shared resources live in rootpath/, but scripts run in a
             # subdir of it; reference them via SHARED_RESOURCE_PREFIX so each
             # script resolves them relative to its own calcpath.
@@ -251,16 +283,22 @@ class MaceFinetuningTrainer(ModelTrainer):
         training_script: Path to mace_finetuning.py or compatible script
         config_file: Path to MACE YAML config file
         foundation_model: Path to the pretrained foundation model file
-        remote_mace_train_runner: Path to MACE run_train.py on remote machine
+        remote_mace_train_runner: Path to MACE run_train.py on the remote
+            machine. Optional -- if omitted, it is resolved automatically by
+            probing the remote conda env (requires mace installed there).
         num_models: Number of models to train per generation
         validation_fraction: Fraction for train/validation split
         remote_savepath: Path on remote machine for calculation files
         loop_time: Interval (seconds) to poll for job completion
         stub: If True, creates mock model outputs without training
         convert_to_jax: If True, convert each trained torch model to a
-            mace-jax ``.pkl`` bundle in the same job and return those paths
-            from ``get_trained_model``. The training (cluster) environment
-            must then have both the torch MACE stack and ``mace-jax``.
+            mace-jax bundle in the same job and return those paths from
+            ``get_trained_model``. The training (cluster) environment must then
+            have both the torch MACE stack and ``mace-jax``.
+        jax_output_format: Bundle format when ``convert_to_jax`` -- ``"pkl"``
+            (default; an opaque single-file pickle) or ``"bundle"`` (a
+            directory with ``config.json`` + ``params.msgpack``, the canonical
+            inspectable format mace-jax's loader / jaxrens consume).
     """
 
     def __init__(
@@ -270,7 +308,7 @@ class MaceFinetuningTrainer(ModelTrainer):
         training_script: os.PathLike,
         config_file: os.PathLike,
         foundation_model: os.PathLike,
-        remote_mace_train_runner: os.PathLike,
+        remote_mace_train_runner: Optional[os.PathLike] = None,
         num_models: int = 5,
         validation_fraction: float = 0.1,
         remote_savepath: Optional[os.PathLike] = None,
@@ -278,6 +316,7 @@ class MaceFinetuningTrainer(ModelTrainer):
         stub: bool = False,
         convert_to_jax: bool = False,
         n_processors: int = 1,
+        jax_output_format: str = "pkl",
     ):
         super().__init__()
         self.training_script = training_script
@@ -292,6 +331,14 @@ class MaceFinetuningTrainer(ModelTrainer):
         self.loop_time = loop_time
         self.stub = stub
         self.convert_to_jax = convert_to_jax
+        # When convert_to_jax: "pkl" (default, opaque) or "bundle" (a directory
+        # with config.json + params.msgpack -- mace-jax's canonical format).
+        if jax_output_format not in ("pkl", "bundle"):
+            raise ConfigurationError(
+                "jax_output_format must be 'pkl' or 'bundle', got "
+                f"'{jax_output_format}'"
+            )
+        self.jax_output_format = jax_output_format
         # Resources per training job; for GPU templates this is the GPU count
         # (``--gres=gpu:n``). One model per job -> one GPU by default.
         self.n_processors = n_processors
@@ -320,6 +367,11 @@ class MaceFinetuningTrainer(ModelTrainer):
 
         # In stub mode, we don't need to create the task
         if not self.stub:
+            # Auto-resolve the remote run_train.py path if not given.
+            if self.remote_mace_train_runner is None:
+                self.remote_mace_train_runner = _resolve_mace_train_runner(
+                    self.remote_fs, self.cluster_config
+                )
             # Shared resources live in rootpath/, but scripts run in a
             # subdir of it; reference them via SHARED_RESOURCE_PREFIX so each
             # script resolves them relative to its own calcpath.
@@ -339,6 +391,7 @@ class MaceFinetuningTrainer(ModelTrainer):
                 "validation_fraction": self.validation_fraction,
                 "train_runner": Path(self.remote_mace_train_runner).as_posix(),
                 "convert_to_jax": self.convert_to_jax,
+                "jax_output_format": self.jax_output_format,
             }
 
             # Create individual input files with different seeds
@@ -406,11 +459,21 @@ class MaceFinetuningTrainer(ModelTrainer):
                 pickle.dump(mock_model, f)
 
             if self.convert_to_jax:
-                jax_path = model_dir / f"{self.model_name}-jax.pkl"
-                with open(jax_path, "wb") as f:
-                    pickle.dump(
-                        {"config": mock_model, "params": b"", "head": None}, f
-                    )
+                jax_path = model_dir / self._jax_artifact_name()
+                if self.jax_output_format == "bundle":
+                    jax_path.mkdir(parents=True, exist_ok=True)
+                    (jax_path / "config.json").write_text("{}")
+                    (jax_path / "params.msgpack").write_bytes(b"")
+                else:
+                    with open(jax_path, "wb") as f:
+                        pickle.dump(
+                            {
+                                "config": mock_model,
+                                "params": b"",
+                                "head": None,
+                            },
+                            f,
+                        )
                 model_paths.append(jax_path)
                 logger.info(f"Created stub mace-jax bundle: {jax_path}")
             else:
@@ -418,6 +481,18 @@ class MaceFinetuningTrainer(ModelTrainer):
                 logger.info(f"Created stub finetuned model: {model_path}")
 
         return model_paths
+
+    def _jax_artifact_name(self) -> str:
+        """Filename of the per-job artifact handed to the next sampler.
+
+        A ``.model`` (no conversion), a ``-jax.pkl`` file, or a ``-jax``
+        directory bundle, depending on ``convert_to_jax`` / ``jax_output_format``.
+        """
+        if not self.convert_to_jax:
+            return f"{self.model_name}.model"
+        if self.jax_output_format == "bundle":
+            return f"{self.model_name}-jax"
+        return f"{self.model_name}-jax.pkl"
 
     def get_trained_model(self) -> list[Path]:
         """
@@ -439,12 +514,9 @@ class MaceFinetuningTrainer(ModelTrainer):
             self.training_task.collect_results()
 
             # When converting, the artifact handed to the next sampler is the
-            # mace-jax .pkl bundle produced alongside the torch .model.
-            model_filename = (
-                f"{self.model_name}-jax.pkl"
-                if self.convert_to_jax
-                else f"{self.model_name}.model"
-            )
+            # mace-jax bundle produced alongside the torch .model: a ``.pkl``
+            # file, or a ``-jax/`` directory bundle.
+            model_filename = self._jax_artifact_name()
             model_paths = []
             for calcpath in grep(str(self.results_dir / "calcdirs"), ""):
                 model_path = Path(calcpath) / "models" / model_filename
@@ -470,13 +542,21 @@ class NeuralilILTrainer(ModelTrainer):
     Trains NeuralIL models with custom configuration.
     Supports stub mode for testing without actual training.
 
+    Hyperparameters resolve in three layers (later overrides earlier):
+    built-in defaults < ``config_file`` (a YAML file you author) <
+    ``training_kwargs`` (an explicit dict). All optional -- with none given the
+    built-in defaults are used.
+
     Args:
         training_script: Path to NeuralIL training script
         remote_fs: FileSystemHandlerBase for the machine where training runs
         remote_savepath: Path on remote machine for calculation files
-        training_kwargs: Additional training parameters including pickle_file_name
+        training_kwargs: Explicit hyperparameter overrides (highest precedence).
         stub: If True, creates mock model outputs without training
         loop_time: Interval (seconds) to poll for job completion
+        config_file: Optional path to a YAML file of hyperparameters, layered
+            on the built-in defaults (mirrors ``MaceModelTrainer``'s
+            ``config_file``). Overridden by anything in ``training_kwargs``.
     """
 
     default_training_kwargs: dict = {
@@ -515,14 +595,25 @@ class NeuralilILTrainer(ModelTrainer):
         training_kwargs: dict = None,
         stub: bool = False,
         loop_time: float = 30,
+        config_file: Optional[os.PathLike] = None,
     ):
         super().__init__()
         self.training_script = training_script
         self.cluster_config = cluster_config
-        self.training_kwargs = training_kwargs or {}
-        for key, value in self.training_kwargs.items():
-            self.default_training_kwargs[key] = value
-        self.training_kwargs = deepcopy(self.default_training_kwargs)
+        self.config_file = config_file
+
+        # Layer the hyperparameters: defaults < config_file (YAML) <
+        # training_kwargs. deepcopy so the class-level defaults are never
+        # mutated (otherwise overrides would leak across instances).
+        merged = deepcopy(self.default_training_kwargs)
+        if config_file is not None:
+            import yaml
+
+            with open(config_file) as f:
+                merged.update(yaml.safe_load(f) or {})
+        if training_kwargs:
+            merged.update(training_kwargs)
+        self.training_kwargs = merged
 
         self.remote_fs = remote_fs
         self.loop_time = loop_time

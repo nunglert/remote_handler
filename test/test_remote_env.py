@@ -6,6 +6,7 @@ cluster: a ``~/...`` conda_source must validate by resolving against the home.
 """
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,15 @@ import pytest
 from remote_handler.core import remote_env
 from remote_handler.core.file_handler import LocalFileSystem
 from remote_handler.exceptions import ConfigurationError, FileSystemError
+
+
+@pytest.fixture
+def python_on_path(monkeypatch):
+    """Ensure the bare ``python`` the probe calls is this interpreter."""
+    bindir = str(Path(sys.executable).parent)
+    monkeypatch.setenv(
+        "PATH", os.pathsep.join([bindir, os.environ.get("PATH", "")])
+    )
 
 
 def _make_conda_tree(root: Path, env: str = "myenv") -> None:
@@ -73,3 +83,20 @@ def test_expand_user_helper():
     assert remote_env._expand_user("~", "/home/u") == "/home/u"
     assert remote_env._expand_user("~/x/y", "/home/u") == "/home/u/x/y"
     assert remote_env._expand_user("/abs/path", "/home/u") == "/abs/path"
+
+
+def test_resolve_remote_module_file_found(python_on_path):
+    """Probing resolves an importable module's file (here, over LocalFS)."""
+    path = remote_env.resolve_remote_module_file(
+        LocalFileSystem(), "", "", "json"
+    )
+    assert path is not None
+    assert path.replace(os.sep, "/").endswith("json/__init__.py")
+
+
+def test_resolve_remote_module_file_missing(python_on_path):
+    """A module that is not importable resolves to None (no raise)."""
+    path = remote_env.resolve_remote_module_file(
+        LocalFileSystem(), "", "", "no_such_module_xyz123"
+    )
+    assert path is None

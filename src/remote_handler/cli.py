@@ -8,8 +8,10 @@ Subcommands:
   show [--json]          print the resolved configuration
   show templates         list registered SLURM templates + paths
   show clusters          list registered cluster configs + paths
+  show extras            probe which optional extras are installed
 
-Stdlib only; interactive prompts live in ``cli_prompts``.
+Light imports only at module load; ``show extras`` imports the ML stacks
+lazily, inside the command. Interactive prompts live in ``cli_prompts``.
 """
 
 import argparse
@@ -469,6 +471,65 @@ def cmd_show_templates(args: argparse.Namespace) -> int:
     return 0
 
 
+# Each optional extra mapped to the import(s) that prove it is usable. Keep in
+# sync with ``[project.optional-dependencies]`` in pyproject.toml. ``mace`` and
+# ``mace_freeze`` install the *same* distribution, so they are told apart by
+# capability: the fork ships ``mace.tools.freeze``, which stock mace lacks.
+_EXTRA_IMPORTS: dict[str, list[str]] = {
+    "dev": ["pytest"],
+    "docs": ["sphinx"],
+    "mace": ["mace"],
+    "torch_sim": ["torch_sim", "mace"],
+    "mace_freeze": ["mace.tools.freeze"],
+    "clinamen": ["clinamen2"],
+    "quests": ["quests"],
+    "neuralil": ["neuralil"],
+    "mace_jax": ["mace_jax"],
+}
+
+
+def cmd_show_extras(args: argparse.Namespace) -> int:
+    """Probe which optional extras are usable in this environment.
+
+    Unlike the other ``show`` commands, this *actually imports* each extra's
+    key modules -- so it reports what genuinely works (and distinguishes the
+    mace-freeze fork from stock mace, which share a distribution). That loads
+    torch / jax / ..., so it is deliberately slower than the other commands.
+    """
+    import importlib
+    import importlib.metadata as md
+    import warnings
+
+    declared = {
+        e.replace("-", "_")
+        for e in (
+            md.metadata("remote_handler").get_all("Provides-Extra") or []
+        )
+    }
+
+    print(
+        "Probing optional extras (imports torch / jax / ...; may be slow):\n"
+    )
+    for extra in sorted(declared):
+        modules = _EXTRA_IMPORTS.get(extra)
+        if modules is None:
+            print(f"  [??] {extra}  (no probe defined)")
+            continue
+        missing = []
+        for module in modules:
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    importlib.import_module(module)
+            except Exception:  # noqa: BLE001 - any import failure -> missing
+                missing.append(module)
+        if missing:
+            print(f"  [ ] {extra}  (missing: {', '.join(missing)})")
+        else:
+            print(f"  [x] {extra}")
+    return 0
+
+
 def cmd_show_clusters(args: argparse.Namespace) -> int:
     """List the registered per-cluster configs and their file paths."""
     cfg = get_config()
@@ -503,6 +564,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "  show [--json]             print the resolved config\n"
             "  show templates            list registered templates + paths\n"
             "  show clusters             list registered clusters + paths\n"
+            "  show extras               probe which optional extras are "
+            "installed\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -551,6 +614,9 @@ def _build_parser() -> argparse.ArgumentParser:
     show_sub.add_parser(
         "clusters", help="list registered cluster configs + their paths"
     )
+    show_sub.add_parser(
+        "extras", help="probe which optional extras are installed"
+    )
     return parser
 
 
@@ -579,6 +645,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 return cmd_show_templates(args)
             if show_target == "clusters":
                 return cmd_show_clusters(args)
+            if show_target == "extras":
+                return cmd_show_extras(args)
             return cmd_show(args)
 
         parser.print_help()

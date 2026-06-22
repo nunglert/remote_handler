@@ -11,6 +11,7 @@ bundle via ``convert_torch_model_to_jax``. ``get_trained_model`` then hands the
   MACE stack and ``mace-jax`` are importable.
 """
 
+import json
 import pickle
 from pathlib import Path
 
@@ -162,3 +163,69 @@ def test_converted_model_matches_torch():
 
     # float64 conversion agreement is ~1e-6 eV; 1e-3 is a safe ceiling.
     assert max_diff < 1e-3, f"torch vs jax energy mismatch: {max_diff} eV"
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not mace_jax_available(),
+    reason="needs torch MACE + mace-jax (.[mace_freeze,mace_jax])",
+)
+def test_generate_jax_foundation_model(tmp_path, monkeypatch):
+    """generate_jax_foundation_model glues download -> convert.
+
+    The real network download is patched out (it points the downloader at the
+    shipped foundation asset), so this tests our glue + the conversion without
+    pulling ~100s of MB. The result must be a loadable mace-jax bundle.
+    """
+    import mace.calculators.foundations_models as fm
+
+    import remote_handler.scripts.mace.mace_utils as mu
+
+    monkeypatch.setattr(
+        fm,
+        "download_mace_mp_checkpoint",
+        lambda model: foundation_model_path(),
+    )
+
+    out = tmp_path / "foundation-jax.pkl"
+    result = mu.generate_jax_foundation_model(model="medium", output_path=out)
+
+    assert result == out
+    assert out.is_file()
+    bundle = pickle.loads(out.read_bytes())
+    assert "config" in bundle
+    assert isinstance(bundle["params"], (bytes, bytearray))
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not mace_jax_available(),
+    reason="needs torch MACE + mace-jax (.[mace_freeze,mace_jax])",
+)
+def test_convert_to_directory_bundle_roundtrips(tmp_path):
+    """The directory bundle is readable by mace-jax's canonical loader.
+
+    Proves the torch->bundle path (with the _macejax_patch shim) writes a
+    config.json + params.msgpack that ``load_model_bundle`` consumes.
+    """
+    from mace_jax.tools.bundle import (
+        DEFAULT_CONFIG_NAME,
+        DEFAULT_PARAMS_NAME,
+        load_model_bundle,
+    )
+
+    from remote_handler.scripts.mace.mace_utils import (
+        convert_torch_model_to_jax_bundle,
+    )
+
+    out = convert_torch_model_to_jax_bundle(
+        Path(foundation_model_path()), output_dir=tmp_path / "model-jax"
+    )
+    assert (out / DEFAULT_CONFIG_NAME).is_file()
+    assert (out / DEFAULT_PARAMS_NAME).is_file()
+    # config.json is human-readable JSON with class names resolved to strings.
+    config = json.loads((out / DEFAULT_CONFIG_NAME).read_text())
+    assert isinstance(config.get("interaction_cls"), str)
+    # mace-jax's own loader reads it back.
+    bundle = load_model_bundle(str(out), dtype="float64")
+    assert bundle is not None

@@ -39,10 +39,26 @@ input_config.validate(calcpath)
 import ase.io
 import torch
 
-from remote_handler.scripts.torch_sim.simulation_pipelines import (
-    interface_pt_simulation,
-    pt_simulation_npt,
-)
+# torch_sim sampling is built on MACE models, so the simulation pipelines
+# import ``mace``. The ``torch_sim`` extra deliberately does not pin a mace
+# source (you compose it with ``mace`` or ``mace_freeze``); turn the resulting
+# bare ImportError into an actionable message when no mace source is installed.
+try:
+    from remote_handler.scripts.torch_sim.simulation_pipelines import (
+        interface_pt_simulation,
+        pt_simulation_npt,
+    )
+except ModuleNotFoundError as exc:
+    if (exc.name or "").split(".")[0] == "mace":
+        from remote_handler.exceptions import DependencyError
+
+        raise DependencyError(
+            "torch_sim sampling requires a MACE install, but 'mace' is not "
+            "available in this environment. Install a mace source alongside "
+            "torch_sim, e.g. '.[mace,torch_sim]' or "
+            "'.[mace_freeze,torch_sim]'."
+        ) from exc
+    raise
 
 # Load founder structure
 at = ase.io.read(calcpath / input_config.founder)

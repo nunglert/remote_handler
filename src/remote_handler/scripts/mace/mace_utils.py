@@ -311,3 +311,112 @@ def convert_torch_model_to_jax(
         pickle.dump(artifact, f)
 
     return output_path
+
+
+def convert_torch_model_to_jax_bundle(
+    model_path: pathlib.Path,
+    output_dir: Optional[pathlib.Path] = None,
+) -> pathlib.Path:
+    """Convert a torch MACE model to a mace-jax *directory* bundle.
+
+    Writes ``config.json`` (human-readable -- architecture, atomic energies,
+    r_max) and ``params.msgpack`` into ``output_dir``. This is the format
+    mace-jax's canonical loader (``mace_jax.tools.bundle.load_model_bundle``,
+    which jaxrens delegates to) consumes -- unlike the opaque ``.pkl`` written
+    by :func:`convert_torch_model_to_jax`.
+
+    Reuses mace-jax's own conversion (``convert_model``) and config serializer,
+    so it needs both the torch MACE stack and ``mace-jax``. Applies a small
+    runtime shim for a mace-jax bug (see
+    :func:`remote_handler.scripts.mace._macejax_patch.ensure_serialize_patched`).
+
+    Args:
+        model_path: Path to the trained torch ``.model`` file.
+        output_dir: Destination directory. Defaults to ``<model stem>-jax``
+            next to the input.
+
+    Returns:
+        Path to the written bundle directory.
+    """
+    import json
+
+    import torch
+    from flax import serialization
+    from mace.tools.scripts_utils import extract_config_mace_model
+    from mace_jax.cli.mace_jax_from_torch import (
+        _serialize_for_json,
+        convert_model,
+    )
+    from mace_jax.nnx_utils import state_to_serializable_dict
+    from mace_jax.tools.bundle import DEFAULT_CONFIG_NAME, DEFAULT_PARAMS_NAME
+
+    from remote_handler.scripts.mace._macejax_patch import (
+        ensure_serialize_patched,
+    )
+
+    ensure_serialize_patched()
+
+    model_path = pathlib.Path(model_path)
+    bundle = torch.load(model_path, map_location="cpu", weights_only=False)
+    torch_model = (
+        bundle["model"]
+        if isinstance(bundle, dict) and "model" in bundle
+        else bundle
+    )
+    torch_model.eval()
+
+    config = extract_config_mace_model(torch_model)
+    if "error" in config:
+        raise RuntimeError(config["error"])
+    config["torch_model_class"] = torch_model.__class__.__name__
+
+    _, state, _ = convert_model(torch_model, config)
+    params_bytes = serialization.to_bytes(state_to_serializable_dict(state))
+
+    if output_dir is None:
+        output_dir = model_path.with_name(model_path.stem + "-jax")
+    output_dir = pathlib.Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / DEFAULT_PARAMS_NAME).write_bytes(params_bytes)
+    (output_dir / DEFAULT_CONFIG_NAME).write_text(
+        json.dumps(_serialize_for_json(config), indent=2)
+    )
+    return output_dir
+
+
+def generate_jax_foundation_model(
+    model: str = "medium",
+    output_path: Optional[pathlib.Path] = None,
+    head: Optional[str] = None,
+) -> pathlib.Path:
+    """Download a MACE-MP foundation model and convert it to a mace-jax bundle.
+
+    Bootstraps a mace-jax ``.pkl`` foundation model without having to obtain a
+    torch ``.model`` and convert it by hand: it pulls the MACE-MP foundation
+    checkpoint via MACE's own download helper (cached under MACE's cache dir)
+    and feeds it to :func:`convert_torch_model_to_jax`.
+
+    Runs wherever both stacks are importable (the torch MACE stack and
+    ``mace-jax``) and where the download has network access -- typically a
+    cluster login node. Needs the ``mace_jax`` extra.
+
+    Only the MACE-MP (inorganic) foundations are supported, since MACE exposes
+    a standalone checkpoint downloader only for those; MACE-OFF would need a
+    separate path.
+
+    Args:
+        model: MACE-MP foundation size (``"small"`` / ``"medium"`` /
+            ``"large"``), or a path/URL to a checkpoint.
+        output_path: Destination ``.pkl``. Defaults to ``<checkpoint stem>``
+            ``-jax.pkl`` next to the downloaded checkpoint.
+        head: Optional head name to record in the bundle.
+
+    Returns:
+        Path to the written mace-jax ``.pkl`` bundle.
+    """
+    from mace.calculators.foundations_models import download_mace_mp_checkpoint
+
+    torch_path = download_mace_mp_checkpoint(model)
+    return convert_torch_model_to_jax(
+        pathlib.Path(torch_path), output_path, head
+    )

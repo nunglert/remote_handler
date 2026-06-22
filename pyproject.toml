@@ -46,9 +46,7 @@ docs = [
     "sphinxcontrib-mermaid",
 ]
 torch_sim = [
-    "mace-torch==0.3.14",
     "torch-sim-atomistic==0.5.1",
-    "cuequivariance-torch==0.8.1",
 ]
 mace = [
     "mace-torch==0.3.14",
@@ -60,16 +58,12 @@ mace = [
 # with [mace] or [torch_sim] (same package, conflicting sources).
 mace_freeze = [
     "mace-torch @ git+https://github.com/7radians/mace-freeze.git@mace-freeze",
+    "cuequivariance-torch==0.8.1",
 ]
 # torch_sim with the freeze fork instead of stock mace-torch. Self-contained:
 # its only mace-torch source is the git fork, so there is no conflicting
 # requirement (unlike combining [torch_sim] + [mace_freeze]). Mutually
 # exclusive with [mace]/[torch_sim]/[mace_freeze] -- pick one mace-torch source.
-torch_sim_freeze = [
-    "torch-sim-atomistic==0.5.1",
-    "cuequivariance-torch==0.8.1",
-    "mace-torch @ git+https://github.com/7radians/mace-freeze.git@mace-freeze",
-]
 clinamen = [
     "Clinamen2"
 ]

@@ -55,6 +55,28 @@ _DEFAULT_VASP_HEADER = (
 )
 
 
+def resolve_incar_kwargs(incar_kwargs=None, incar_config_file=None) -> dict:
+    """Resolve the VASP INCAR settings from an explicit dict and/or a YAML file.
+
+    The INCAR tags can be supplied as a dict (``incar_kwargs``) or read from a
+    YAML file (``incar_config_file``):
+
+    - ``incar_config_file`` only -> the YAML contents.
+    - ``incar_kwargs`` only -> that dict, as-is (historical behaviour).
+    - both -> the YAML as a base, with ``incar_kwargs`` overriding on top.
+    - neither -> the built-in single-point r2SCAN defaults.
+    """
+    if incar_config_file is not None:
+        import yaml
+
+        with open(incar_config_file) as handle:
+            base = yaml.safe_load(handle) or {}
+        return {**base, **incar_kwargs} if incar_kwargs else base
+    if incar_kwargs is not None:
+        return incar_kwargs
+    return dict(_DEFAULT_INCAR_KWARGS)
+
+
 class SinglePointHandler(RemoteAtomsHandler):
     """Run one ASE-calculator single-point per configuration as a job array.
 
@@ -215,6 +237,9 @@ class VASPHandler(SinglePointHandler):
         vasp_binary: Name of the VASP executable.
         n_processors: Processors requested per job.
         incar_kwargs: VASP INCAR tags; defaults to a single-point r2SCAN set.
+        incar_config_file: Optional path to a YAML file of INCAR tags, used instead of
+            (or as a base for) ``incar_kwargs`` -- see
+            :func:`resolve_incar_kwargs`.
     """
 
     def __init__(
@@ -240,9 +265,9 @@ class VASPHandler(SinglePointHandler):
         vasp_binary: str = "vasp_std",
         n_processors: int = 8,
         incar_kwargs: Optional[dict] = None,
+        incar_config_file: Optional[os.PathLike] = None,
     ):
-        if incar_kwargs is None:
-            incar_kwargs = dict(_DEFAULT_INCAR_KWARGS)
+        incar_kwargs = resolve_incar_kwargs(incar_kwargs, incar_config_file)
         if python_script_path is None:
             python_script_path = str(_SCRIPTS_DIR / "dft_singlepoint.py")
 

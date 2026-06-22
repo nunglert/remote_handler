@@ -7,6 +7,7 @@ from remote_handler.scripts.input_models import MaceFinetuningInput
 from remote_handler.scripts.mace.mace_utils import (
     combine_databases,
     convert_torch_model_to_jax,
+    convert_torch_model_to_jax_bundle,
     run_training_from_config,
     split_db,
 )
@@ -47,17 +48,26 @@ run_training_from_config(
     foundation_model=str((calcpath / input_config.foundation_model).resolve()),
 )
 
-# Optionally convert the trained torch model to a mace-jax .pkl bundle, in the
-# same job/env (so torch-mace + mace-jax must both be installed there).
+# Optionally convert the trained torch model to a mace-jax bundle, in the same
+# job/env (so torch-mace + mace-jax must both be installed there). Two formats:
+# an opaque ``.pkl`` (default), or a ``-jax/`` directory bundle (config.json +
+# params.msgpack) that mace-jax's canonical loader / jaxrens consume.
 if input_config.convert_to_jax:
-    torch_model_path = calcpath / "models" / f"{input_config.model_name}.model"
+    models_dir = calcpath / "models"
+    torch_model_path = models_dir / f"{input_config.model_name}.model"
     assert os.path.exists(
         torch_model_path
     ), f"Trained model not found for conversion: {torch_model_path}"
-    jax_model_path = convert_torch_model_to_jax(
-        torch_model_path,
-        output_path=calcpath / "models" / f"{input_config.model_name}-jax.pkl",
-    )
+    if input_config.jax_output_format == "bundle":
+        jax_model_path = convert_torch_model_to_jax_bundle(
+            torch_model_path,
+            output_dir=models_dir / f"{input_config.model_name}-jax",
+        )
+    else:
+        jax_model_path = convert_torch_model_to_jax(
+            torch_model_path,
+            output_path=models_dir / f"{input_config.model_name}-jax.pkl",
+        )
     logging.getLogger().info(
         f"Converted torch model to mace-jax bundle: {jax_model_path}"
     )
