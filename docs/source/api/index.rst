@@ -20,6 +20,11 @@ Configuration Management
 Cluster Configuration
 ~~~~~~~~~~~~~~~~~~~~~
 
+.. automodule:: remote_handler.core.cluster_config
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 .. automodule:: remote_handler.core.cluster_handler
    :members:
    :undoc-members:

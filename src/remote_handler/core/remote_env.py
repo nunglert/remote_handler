@@ -79,6 +79,34 @@ def resolve_conda(conda_source: str) -> CondaEnv:
     )
 
 
+def remote_home(remote_fs) -> str:
+    """The home directory on the machine ``remote_fs`` points at.
+
+    Used to expand a leading ``~`` for existence checks: the *shell* expands
+    ``~`` when it later ``source``s the path, but SFTP existence checks are
+    literal, so we resolve it here against the real remote home. Falls back to
+    the local home if the remote cannot be queried.
+    """
+    try:
+        result = remote_fs.run_command('printf %s "$HOME"')
+        home = (result.stdout or "").strip()
+        if home:
+            return home
+    except Exception:  # noqa: BLE001 - any failure -> local fallback below
+        logger.debug("Could not query remote $HOME; using local home.")
+    return os.path.expanduser("~")
+
+
+def _expand_user(path, home: str) -> str:
+    """Expand a leading ``~`` / ``~/`` in ``path`` against ``home``."""
+    text = str(path)
+    if text == "~":
+        return home
+    if text.startswith("~/"):
+        return home + text[1:]
+    return text
+
+
 def validate_conda_on_fs(
     conda_source, conda_env, remote_fs, *, remote_machine
 ):
@@ -88,22 +116,27 @@ def validate_conda_on_fs(
     Mirrors the historical SLURM-side validation: micromamba is taken on trust
     (the hook needs no on-disk path), everything else must point at a real
     activation script and a real environment.
+
+    A leading ``~`` is supported: it is expanded against the remote home for
+    the existence checks (the shell expands it at runtime when the rendered
+    job script ``source``s the path), so ``~/miniconda3`` is a valid
+    ``conda_source``.
     """
     spec = resolve_conda(conda_source)
     if spec.kind == "micromamba":
         return spec.activate_source
 
-    if not remote_fs.exists(spec.activate_source):
+    home = remote_home(remote_fs)
+    activate_source = _expand_user(spec.activate_source, home)
+    env_home = _expand_user(spec.env_home, home)
+
+    if not remote_fs.exists(activate_source):
         raise FileSystemError(
-            "Conda activation script not found at: "
-            f"{spec.activate_source}. We currently do not "
-            "support '~', write the full path!\n"
+            f"Conda activation script not found at: {activate_source}\n"
             f"Remote machine: {remote_machine}"
         )
-    conda_env_path = spec.env_home / "envs" / conda_env
-    dot_conda_env_path = (
-        Path(os.path.expanduser("~")) / ".conda/envs" / conda_env
-    )
+    conda_env_path = Path(env_home) / "envs" / conda_env
+    dot_conda_env_path = Path(home) / ".conda/envs" / conda_env
     if not remote_fs.exists(conda_env_path) and not remote_fs.exists(
         dot_conda_env_path
     ):

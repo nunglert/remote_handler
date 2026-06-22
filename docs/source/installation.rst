@@ -52,43 +52,31 @@ actor or remote-side payload:
 
 .. list-table::
    :header-rows: 1
-   :widths: 22 28 50
+   :widths: 30 70
 
    * - Extra
      - Enables
-     - Notes
    * - ``dev``
      - ``pytest`` + ``pre-commit`` for running the test suite and hooks
-     - See the project ``CLAUDE.md`` for the test tiers.
    * - ``docs``
      - Building these Sphinx docs (``cd docs && make html``)
-     - ``sphinx`` + RTD theme + autodoc-typehints.
    * - ``mace``
      - ``MaceModelTrainer`` (train a MACE force field)
-     - Installs ``mace-torch==0.3.14`` from PyPI.
    * - ``torch_sim``
      - ``TorchSimSampler`` (MD/relaxation sampling via torch-sim)
-     - Stock ``mace-torch==0.3.14`` + ``torch-sim-atomistic``.
    * - ``mace_freeze``
      - ``MaceFinetuningTrainer`` (layer-freezing finetune)
-     - ``mace-torch`` built from the group's git fork.
    * - ``torch_sim_freeze``
      - ``TorchSimSampler`` against the freeze fork
-     - torch-sim + the ``mace-freeze`` source instead of stock mace-torch.
    * - ``mace_jax``
      - ``MaceFinetuningTrainer(convert_to_jax=True)`` (torch ``.model`` →
        mace-jax ``.pkl``)
-     - From git. Install *alongside* a mace extra -- the conversion reads the
-       ``.model`` through torch MACE, e.g. ``.[mace_freeze,mace_jax]``.
    * - ``neuralil``
      - ``NeuralilILTrainer`` (NeuralIL force-field training)
-     - From the group's git fork; brings in jax/flax transitively.
    * - ``clinamen``
      - CMA-ES structure sampling (``scripts/clinamen2``)
-     - Installs ``Clinamen2``.
    * - ``quests``
      - QUESTS-based config selection (``workflows/selectors.py``)
-     - Installs ``quests``.
 
 .. warning::
 
@@ -202,6 +190,12 @@ to ``~/.ssh/config`` for convenient access:
        HostName datalab.example.edu
        User username
 
-**Note:** The ``IdentityFile`` directive is optional and will use your default
+**Note:** Having the cluster configured in your SSH config is mandatory. The ``IdentityFile`` directive is optional and will use your default
 SSH key (~/.ssh/id_rsa) if not specified. Only add it if you need to use a
 specific key file for this host.
+
+For clusters with multi-factor authentication (MFA), you need a tool like
+`smallstep <https://smallstep.com/docs/step-cli/>`_ to obtain short-lived SSH
+credentials. Pair this with the opt-in ``resilient_connection`` setting on
+:class:`~remote_handler.core.cluster_config.ClusterConfig`, which pauses and
+retries instead of crashing when such a credential expires mid-run.
