@@ -11,6 +11,21 @@ from remote_handler.scripts.mace.mace_utils import (
     split_db,
 )
 
+# Finetuning relies on layer freezing, which only the mace-freeze fork provides
+# (stock mace-torch and the fork report the same version, so this capability
+# check is the only reliable way to tell them apart). Fail fast with a clear
+# message rather than deep inside the training subprocess.
+try:
+    from mace.tools.freeze import freeze_layers  # noqa: F401
+except ImportError as exc:
+    from remote_handler.exceptions import DependencyError
+
+    raise DependencyError(
+        "MACE finetuning requires the mace-freeze fork (layer freezing), but "
+        "'mace.tools.freeze' is not available -- this looks like stock "
+        "mace-torch. Install the fork in this environment: '.[mace_freeze]'."
+    ) from exc
+
 # Load and validate input configuration
 calcpath = Path(sys.argv[1])
 INPUTFILE = calcpath / "input_train.json"

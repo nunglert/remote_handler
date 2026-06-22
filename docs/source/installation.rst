@@ -63,11 +63,10 @@ actor or remote-side payload:
    * - ``mace``
      - ``MaceModelTrainer`` (train a MACE force field)
    * - ``torch_sim``
-     - ``TorchSimSampler`` (MD/relaxation sampling via torch-sim)
+     - ``TorchSimSampler`` (MD/relaxation sampling via torch-sim). Provides
+       only torch-sim; **pair it with a mace source** (see below).
    * - ``mace_freeze``
      - ``MaceFinetuningTrainer`` (layer-freezing finetune)
-   * - ``torch_sim_freeze``
-     - ``TorchSimSampler`` against the freeze fork
    * - ``mace_jax``
      - ``MaceFinetuningTrainer(convert_to_jax=True)`` (torch ``.model`` →
        mace-jax ``.pkl``)
@@ -80,18 +79,22 @@ actor or remote-side payload:
 
 .. warning::
 
-   **Pick one mace-torch source per environment.** ``mace`` and ``torch_sim``
-   install ``mace-torch`` from PyPI; ``mace_freeze`` and ``torch_sim_freeze``
-   install it from the git freeze fork. They are the *same* package from
-   *conflicting* sources, so do **not** combine a PyPI extra with a fork extra
-   (e.g. ``.[mace,mace_freeze]``) in one environment -- give each a separate
-   conda env instead.
+   **``torch_sim`` needs a mace source -- pick one.** The ``torch_sim`` extra
+   installs only torch-sim; the sampler imports MACE, so install it *together
+   with* a mace source: ``.[mace,torch_sim]`` (stock mace-torch from PyPI) or
+   ``.[mace_freeze,torch_sim]`` (the git freeze fork). ``.[torch_sim]`` alone
+   will fail at runtime with a clear error.
+
+   **Do not mix mace sources in one environment.** ``mace`` pulls
+   ``mace-torch`` from PyPI and ``mace_freeze`` from the git fork -- the *same*
+   package from *conflicting* sources. Combining them (``.[mace,mace_freeze]``)
+   does not error cleanly (both report the same version), so it can silently
+   install the fork; keep each mace source in a separate environment.
 
 .. note::
 
-   ``mace_freeze``, ``torch_sim_freeze``, ``neuralil`` and ``mace_jax`` are
-   installed straight from git, so those installs need network access to the
-   respective repositories.
+   ``mace_freeze``, ``neuralil`` and ``mace_jax`` are installed straight from
+   git, so those installs need network access to the respective repositories.
 
 Common combinations
 ~~~~~~~~~~~~~~~~~~~~
@@ -107,8 +110,9 @@ Common combinations
    # Finetune (freeze fork) and convert the result to mace-jax
    pip install -e ".[mace_freeze,mace_jax]"
 
-   # torch-sim sampling
-   pip install -e ".[torch_sim]"
+   # torch-sim sampling (with a mace source -- stock, or the freeze fork)
+   pip install -e ".[mace,torch_sim]"
+   pip install -e ".[mace_freeze,torch_sim]"
 
    # NeuralIL training
    pip install -e ".[neuralil]"

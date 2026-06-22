@@ -509,13 +509,21 @@ class NeuralilILTrainer(ModelTrainer):
     Trains NeuralIL models with custom configuration.
     Supports stub mode for testing without actual training.
 
+    Hyperparameters resolve in three layers (later overrides earlier):
+    built-in defaults < ``config_file`` (a YAML file you author) <
+    ``training_kwargs`` (an explicit dict). All optional -- with none given the
+    built-in defaults are used.
+
     Args:
         training_script: Path to NeuralIL training script
         remote_fs: FileSystemHandlerBase for the machine where training runs
         remote_savepath: Path on remote machine for calculation files
-        training_kwargs: Additional training parameters including pickle_file_name
+        training_kwargs: Explicit hyperparameter overrides (highest precedence).
         stub: If True, creates mock model outputs without training
         loop_time: Interval (seconds) to poll for job completion
+        config_file: Optional path to a YAML file of hyperparameters, layered
+            on the built-in defaults (mirrors ``MaceModelTrainer``'s
+            ``config_file``). Overridden by anything in ``training_kwargs``.
     """
 
     default_training_kwargs: dict = {
@@ -554,14 +562,25 @@ class NeuralilILTrainer(ModelTrainer):
         training_kwargs: dict = None,
         stub: bool = False,
         loop_time: float = 30,
+        config_file: Optional[os.PathLike] = None,
     ):
         super().__init__()
         self.training_script = training_script
         self.cluster_config = cluster_config
-        self.training_kwargs = training_kwargs or {}
-        for key, value in self.training_kwargs.items():
-            self.default_training_kwargs[key] = value
-        self.training_kwargs = deepcopy(self.default_training_kwargs)
+        self.config_file = config_file
+
+        # Layer the hyperparameters: defaults < config_file (YAML) <
+        # training_kwargs. deepcopy so the class-level defaults are never
+        # mutated (otherwise overrides would leak across instances).
+        merged = deepcopy(self.default_training_kwargs)
+        if config_file is not None:
+            import yaml
+
+            with open(config_file) as f:
+                merged.update(yaml.safe_load(f) or {})
+        if training_kwargs:
+            merged.update(training_kwargs)
+        self.training_kwargs = merged
 
         self.remote_fs = remote_fs
         self.loop_time = loop_time

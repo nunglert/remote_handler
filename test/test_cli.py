@@ -365,3 +365,30 @@ def test_prompt_yes_no():
     assert prompt_yes_no("L", default=True, ask=lambda _: "") is True
     assert prompt_yes_no("L", ask=lambda _: "y") is True
     assert prompt_yes_no("L", ask=lambda _: "no") is False
+
+
+def test_show_extras_probes_imports(capsys, monkeypatch):
+    """`show extras` reports per-extra status by actually importing modules.
+
+    The imports are mocked so the test is fast and deterministic: everything
+    resolves except ``mace.tools.freeze`` (i.e. stock mace, not the fork), so
+    ``mace`` is present but ``mace_freeze`` / ``torch_sim_freeze`` are not.
+    """
+    import importlib
+
+    def fake_import(name, *args, **kwargs):
+        if name == "mace.tools.freeze":
+            raise ModuleNotFoundError(name)
+        return None  # pretend success; the command ignores the return value
+
+    monkeypatch.setattr(importlib, "import_module", fake_import)
+
+    rc = cli.main(["show", "extras"])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    assert "[x] mace" in out
+    assert "[ ] mace_freeze  (missing: mace.tools.freeze)" in out
+    assert "[ ] torch_sim_freeze" in out
+    # A plain (non-fork) extra resolves.
+    assert "[x] dev" in out
