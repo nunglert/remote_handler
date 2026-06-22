@@ -104,11 +104,12 @@ runs with or without one:
 
    flowchart TB
        Task["SingleScriptTask / ArrayScriptTask"]
-       Task --> Factory["make_single_executor()<br/>make_array_executor()"]
-       Factory -->|"executor = 'slurm' (default)"| Slurm["Slurm*Handler"]
-       Factory -->|"executor = 'direct'"| Direct["Direct*Executor"]
-       Slurm --> SchedA["sbatch + squeue polling"]
-       Direct --> SchedB["detached process + sentinel file"]
+       Task --> SF["make_single_executor()"]
+       Task --> AF["make_array_executor()"]
+       SF -->|"'slurm'"| SJH["SlurmJobHandler"]
+       SF -->|"'direct'"| DSE["DirectSingleExecutor"]
+       AF -->|"'slurm'"| SAH["SlurmArrayHandler"]
+       AF -->|"'direct'"| DAE["DirectArrayExecutor"]
 
 Both backends satisfy the same small contract
 (:class:`~remote_handler.core.executors.Executor`: ``submit`` /
@@ -126,7 +127,7 @@ roles, each an abstract actor, hand artifacts to the next:
 
 .. mermaid::
 
-   flowchart LR
+   flowchart TB
        Sampler["Sampler"] -->|"candidate configs (.extxyz)"| Eval["GroundTruthEvaluator"]
        Eval -->|"labelled configs (DFT)"| Trainer["ModelTrainer"]
        Trainer -->|"retrained MLFF model"| Sampler
@@ -168,6 +169,52 @@ Two configuration objects, at two scopes, keep the above wired together:
 Both are normally managed for you by the ``remote_handler`` command-line tool
 (see :doc:`cli`), so day-to-day you refer to clusters by name and never touch
 the underlying files by hand.
+
+One repository per project
+--------------------------
+
+``remote_handler`` is a **library, not an application**. It is not where an
+active-learning campaign lives; it is the reusable machinery a campaign builds
+on. The intended layout splits across **separate repositories, each a
+dependency of the next** -- so the parts that churn fast never sit in the same
+repo as the parts that must stay stable:
+
+.. mermaid::
+
+   flowchart TB
+       subgraph P["AL project (repo)"]
+           RUN["Sampler adapter + run script<br/>+ cluster configs"]
+       end
+       RUN -->|depends on| SAMP["sampling code<br/>(library — separate repo)<br/>the sampling method, standalone"]
+       RUN -->|depends on| RH["remote_handler<br/>(library — separate repo)<br/>transport · DFT/ORCA evaluation · MACE training · AL loop"]
+
+The two libraries are independent -- only the project ties them together.
+Three roles, ordered by how fast the code changes:
+
+- **``remote_handler`` -- stable core.** Transport, the executor backends, the
+  DFT/ORCA evaluators, MACE/NeuralIL training, and the active-learning loop
+  itself change slowly. It also *defines* the actor interfaces (the
+  :class:`~remote_handler.workflows.active_learning_base.Sampler` /
+  ``GroundTruthEvaluator`` / ``ModelTrainer`` ABCs). Tested, released, and
+  versioned here, and reused by every project.
+- **Sampling code -- its own library, its own repo.** The actual sampling
+  method, where most development happens and the code churns the most. It is a
+  *standalone* package: it knows nothing about ``remote_handler`` or active
+  learning, so it can evolve on its own schedule and be reused outside this
+  context entirely.
+- **The AL project -- thin glue.** A per-campaign repo that pins both libraries
+  as dependencies and provides the bridge between them: a small
+  :class:`~remote_handler.workflows.active_learning_base.Sampler` adapter that
+  drives the sampling library, a run script wiring it to the shipped
+  evaluators/trainers, and the cluster configs and inputs for *this* run.
+
+This keeps fast-moving, half-finished sampling experiments out of the core
+entirely -- they are not even in the same repository -- so ``remote_handler``
+(and the reusable training / DFT evaluation it provides) stays clean, broadly
+tested, and shared. The sampling library, owing nothing to ``remote_handler``,
+stays independently useful too. Pinning to tags
+(``... @ git+<repo>@v0.2.0``) means a project only picks up changes from either
+library when it deliberately bumps the pin.
 
 Where to go next
 ----------------

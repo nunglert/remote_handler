@@ -1,10 +1,10 @@
 # Print the task and run range
 echo This is task $SLURM_ARRAY_TASK_ID
 
-MAP=({{ map_indices | join(' ') }})
+{# MAP=({{ map_indices | join(' ') }})
 
 # Get the mapped index for this SLURM array task
-MAPPED_INDEX=${MAP[$SLURM_ARRAY_TASK_ID]}
+MAPPED_INDEX=${MAP[$((SLURM_ARRAY_TASK_ID - 1))]} #}
 
 PER_TASK={{per_task}}
 
