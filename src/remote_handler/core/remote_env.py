@@ -107,6 +107,33 @@ def _expand_user(path, home: str) -> str:
     return text
 
 
+def resolve_remote_module_file(remote_fs, conda_source, conda_env, module):
+    """Locate a Python module's file in the *remote* conda env, or ``None``.
+
+    Runs ``python -c "import <module>; print(<module>.__file__)"`` on the
+    machine ``remote_fs`` points at, inside the env named by
+    ``conda_source``/``conda_env`` -- so it returns the path as it exists on
+    the remote, not on the (dependency-light) host. Works uniformly for a real
+    cluster (SSH) and a local ``direct`` run (subprocess). Returns ``None`` if
+    the module is absent or the probe fails.
+    """
+    activation = conda_activation_script(conda_source, conda_env)
+    cmd = (
+        f"{activation}\n"
+        f'python -c "import {module} as _m; print(_m.__file__)"'
+    )
+    try:
+        result = remote_fs.run_command(cmd)
+    except Exception:  # noqa: BLE001 - any transport failure -> not resolved
+        logger.debug("Remote module probe failed for %s.", module)
+        return None
+    if result.returncode == 0:
+        path = (result.stdout or "").strip().splitlines()
+        if path and path[-1]:
+            return path[-1]
+    return None
+
+
 def validate_conda_on_fs(
     conda_source, conda_env, remote_fs, *, remote_machine
 ):

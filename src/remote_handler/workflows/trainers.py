@@ -14,6 +14,7 @@ from typing import Optional
 
 import numpy as np
 
+from remote_handler.core import remote_env
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.core.tasks import (
@@ -34,6 +35,30 @@ from .active_learning_base import ModelTrainer
 logger = logging.getLogger(__name__)
 
 
+def _resolve_mace_train_runner(remote_fs, cluster_config):
+    """Locate MACE's ``run_train.py`` in the *remote* conda env, or raise.
+
+    Used when a trainer is given no explicit ``remote_mace_train_runner``: the
+    path lives on the remote (the host is dependency-light), so it is probed
+    there rather than imported locally.
+    """
+    path = remote_env.resolve_remote_module_file(
+        remote_fs,
+        getattr(cluster_config, "conda_source", ""),
+        getattr(cluster_config, "conda_env", ""),
+        "mace.cli.run_train",
+    )
+    if not path:
+        env = getattr(cluster_config, "conda_env", "") or "(ambient)"
+        raise ConfigurationError(
+            "Could not locate MACE's run_train.py in the remote conda env "
+            f"'{env}'. Install mace there, or pass remote_mace_train_runner "
+            "explicitly."
+        )
+    logger.info("Resolved remote MACE run_train.py: %s", path)
+    return path
+
+
 class MaceModelTrainer(ModelTrainer):
     """
     Trainer for MACE models using array script tasks.
@@ -45,7 +70,9 @@ class MaceModelTrainer(ModelTrainer):
         remote_fs: FileSystemHandlerBase for the machine where training runs
         training_script: Path to mace_training.py or compatible script
         config_file: Path to MACE YAML config file
-        remote_mace_train_runner: Path to MACE run_train.py on remote machine
+        remote_mace_train_runner: Path to MACE run_train.py on the remote
+            machine. Optional -- if omitted, it is resolved automatically by
+            probing the remote conda env (requires mace installed there).
         num_models: Number of models to train per generation
         validation_fraction: Fraction for train/validation split
         remote_savepath: Path on remote machine for calculation files
@@ -59,7 +86,7 @@ class MaceModelTrainer(ModelTrainer):
         cluster_config: ClusterConfig,
         training_script: os.PathLike,
         config_file: os.PathLike,
-        remote_mace_train_runner: os.PathLike,
+        remote_mace_train_runner: Optional[os.PathLike] = None,
         num_models: int = 5,
         validation_fraction: float = 0.1,
         remote_savepath: Optional[os.PathLike] = None,
@@ -106,6 +133,11 @@ class MaceModelTrainer(ModelTrainer):
 
         # In stub mode, we don't need to create the task
         if not self.stub:
+            # Auto-resolve the remote run_train.py path if not given.
+            if self.remote_mace_train_runner is None:
+                self.remote_mace_train_runner = _resolve_mace_train_runner(
+                    self.remote_fs, self.cluster_config
+                )
             # Shared resources live in rootpath/, but scripts run in a
             # subdir of it; reference them via SHARED_RESOURCE_PREFIX so each
             # script resolves them relative to its own calcpath.
@@ -251,7 +283,9 @@ class MaceFinetuningTrainer(ModelTrainer):
         training_script: Path to mace_finetuning.py or compatible script
         config_file: Path to MACE YAML config file
         foundation_model: Path to the pretrained foundation model file
-        remote_mace_train_runner: Path to MACE run_train.py on remote machine
+        remote_mace_train_runner: Path to MACE run_train.py on the remote
+            machine. Optional -- if omitted, it is resolved automatically by
+            probing the remote conda env (requires mace installed there).
         num_models: Number of models to train per generation
         validation_fraction: Fraction for train/validation split
         remote_savepath: Path on remote machine for calculation files
@@ -270,7 +304,7 @@ class MaceFinetuningTrainer(ModelTrainer):
         training_script: os.PathLike,
         config_file: os.PathLike,
         foundation_model: os.PathLike,
-        remote_mace_train_runner: os.PathLike,
+        remote_mace_train_runner: Optional[os.PathLike] = None,
         num_models: int = 5,
         validation_fraction: float = 0.1,
         remote_savepath: Optional[os.PathLike] = None,
@@ -320,6 +354,11 @@ class MaceFinetuningTrainer(ModelTrainer):
 
         # In stub mode, we don't need to create the task
         if not self.stub:
+            # Auto-resolve the remote run_train.py path if not given.
+            if self.remote_mace_train_runner is None:
+                self.remote_mace_train_runner = _resolve_mace_train_runner(
+                    self.remote_fs, self.cluster_config
+                )
             # Shared resources live in rootpath/, but scripts run in a
             # subdir of it; reference them via SHARED_RESOURCE_PREFIX so each
             # script resolves them relative to its own calcpath.
