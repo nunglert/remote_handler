@@ -11,6 +11,7 @@ bundle via ``convert_torch_model_to_jax``. ``get_trained_model`` then hands the
   MACE stack and ``mace-jax`` are importable.
 """
 
+import json
 import pickle
 from pathlib import Path
 
@@ -194,3 +195,37 @@ def test_generate_jax_foundation_model(tmp_path, monkeypatch):
     bundle = pickle.loads(out.read_bytes())
     assert "config" in bundle
     assert isinstance(bundle["params"], (bytes, bytearray))
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not mace_jax_available(),
+    reason="needs torch MACE + mace-jax (.[mace_freeze,mace_jax])",
+)
+def test_convert_to_directory_bundle_roundtrips(tmp_path):
+    """The directory bundle is readable by mace-jax's canonical loader.
+
+    Proves the torch->bundle path (with the _macejax_patch shim) writes a
+    config.json + params.msgpack that ``load_model_bundle`` consumes.
+    """
+    from mace_jax.tools.bundle import (
+        DEFAULT_CONFIG_NAME,
+        DEFAULT_PARAMS_NAME,
+        load_model_bundle,
+    )
+
+    from remote_handler.scripts.mace.mace_utils import (
+        convert_torch_model_to_jax_bundle,
+    )
+
+    out = convert_torch_model_to_jax_bundle(
+        Path(foundation_model_path()), output_dir=tmp_path / "model-jax"
+    )
+    assert (out / DEFAULT_CONFIG_NAME).is_file()
+    assert (out / DEFAULT_PARAMS_NAME).is_file()
+    # config.json is human-readable JSON with class names resolved to strings.
+    config = json.loads((out / DEFAULT_CONFIG_NAME).read_text())
+    assert isinstance(config.get("interaction_cls"), str)
+    # mace-jax's own loader reads it back.
+    bundle = load_model_bundle(str(out), dtype="float64")
+    assert bundle is not None

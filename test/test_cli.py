@@ -372,7 +372,7 @@ def test_show_extras_probes_imports(capsys, monkeypatch):
 
     The imports are mocked so the test is fast and deterministic: everything
     resolves except ``mace.tools.freeze`` (i.e. stock mace, not the fork), so
-    ``mace`` is present but ``mace_freeze`` / ``torch_sim_freeze`` are not.
+    ``mace`` is present but ``mace_freeze`` is not.
     """
     import importlib
 
@@ -389,6 +389,5 @@ def test_show_extras_probes_imports(capsys, monkeypatch):
     assert rc == 0
     assert "[x] mace" in out
     assert "[ ] mace_freeze  (missing: mace.tools.freeze)" in out
-    assert "[ ] torch_sim_freeze" in out
     # A plain (non-fork) extra resolves.
     assert "[x] dev" in out

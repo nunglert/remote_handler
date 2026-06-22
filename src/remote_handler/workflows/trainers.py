@@ -292,9 +292,13 @@ class MaceFinetuningTrainer(ModelTrainer):
         loop_time: Interval (seconds) to poll for job completion
         stub: If True, creates mock model outputs without training
         convert_to_jax: If True, convert each trained torch model to a
-            mace-jax ``.pkl`` bundle in the same job and return those paths
-            from ``get_trained_model``. The training (cluster) environment
-            must then have both the torch MACE stack and ``mace-jax``.
+            mace-jax bundle in the same job and return those paths from
+            ``get_trained_model``. The training (cluster) environment must then
+            have both the torch MACE stack and ``mace-jax``.
+        jax_output_format: Bundle format when ``convert_to_jax`` -- ``"pkl"``
+            (default; an opaque single-file pickle) or ``"bundle"`` (a
+            directory with ``config.json`` + ``params.msgpack``, the canonical
+            inspectable format mace-jax's loader / jaxrens consume).
     """
 
     def __init__(
@@ -312,6 +316,7 @@ class MaceFinetuningTrainer(ModelTrainer):
         stub: bool = False,
         convert_to_jax: bool = False,
         n_processors: int = 1,
+        jax_output_format: str = "pkl",
     ):
         super().__init__()
         self.training_script = training_script
@@ -326,6 +331,14 @@ class MaceFinetuningTrainer(ModelTrainer):
         self.loop_time = loop_time
         self.stub = stub
         self.convert_to_jax = convert_to_jax
+        # When convert_to_jax: "pkl" (default, opaque) or "bundle" (a directory
+        # with config.json + params.msgpack -- mace-jax's canonical format).
+        if jax_output_format not in ("pkl", "bundle"):
+            raise ConfigurationError(
+                "jax_output_format must be 'pkl' or 'bundle', got "
+                f"'{jax_output_format}'"
+            )
+        self.jax_output_format = jax_output_format
         # Resources per training job; for GPU templates this is the GPU count
         # (``--gres=gpu:n``). One model per job -> one GPU by default.
         self.n_processors = n_processors
@@ -378,6 +391,7 @@ class MaceFinetuningTrainer(ModelTrainer):
                 "validation_fraction": self.validation_fraction,
                 "train_runner": Path(self.remote_mace_train_runner).as_posix(),
                 "convert_to_jax": self.convert_to_jax,
+                "jax_output_format": self.jax_output_format,
             }
 
             # Create individual input files with different seeds
@@ -445,11 +459,21 @@ class MaceFinetuningTrainer(ModelTrainer):
                 pickle.dump(mock_model, f)
 
             if self.convert_to_jax:
-                jax_path = model_dir / f"{self.model_name}-jax.pkl"
-                with open(jax_path, "wb") as f:
-                    pickle.dump(
-                        {"config": mock_model, "params": b"", "head": None}, f
-                    )
+                jax_path = model_dir / self._jax_artifact_name()
+                if self.jax_output_format == "bundle":
+                    jax_path.mkdir(parents=True, exist_ok=True)
+                    (jax_path / "config.json").write_text("{}")
+                    (jax_path / "params.msgpack").write_bytes(b"")
+                else:
+                    with open(jax_path, "wb") as f:
+                        pickle.dump(
+                            {
+                                "config": mock_model,
+                                "params": b"",
+                                "head": None,
+                            },
+                            f,
+                        )
                 model_paths.append(jax_path)
                 logger.info(f"Created stub mace-jax bundle: {jax_path}")
             else:
@@ -457,6 +481,18 @@ class MaceFinetuningTrainer(ModelTrainer):
                 logger.info(f"Created stub finetuned model: {model_path}")
 
         return model_paths
+
+    def _jax_artifact_name(self) -> str:
+        """Filename of the per-job artifact handed to the next sampler.
+
+        A ``.model`` (no conversion), a ``-jax.pkl`` file, or a ``-jax``
+        directory bundle, depending on ``convert_to_jax`` / ``jax_output_format``.
+        """
+        if not self.convert_to_jax:
+            return f"{self.model_name}.model"
+        if self.jax_output_format == "bundle":
+            return f"{self.model_name}-jax"
+        return f"{self.model_name}-jax.pkl"
 
     def get_trained_model(self) -> list[Path]:
         """
@@ -478,12 +514,9 @@ class MaceFinetuningTrainer(ModelTrainer):
             self.training_task.collect_results()
 
             # When converting, the artifact handed to the next sampler is the
-            # mace-jax .pkl bundle produced alongside the torch .model.
-            model_filename = (
-                f"{self.model_name}-jax.pkl"
-                if self.convert_to_jax
-                else f"{self.model_name}.model"
-            )
+            # mace-jax bundle produced alongside the torch .model: a ``.pkl``
+            # file, or a ``-jax/`` directory bundle.
+            model_filename = self._jax_artifact_name()
             model_paths = []
             for calcpath in grep(str(self.results_dir / "calcdirs"), ""):
                 model_path = Path(calcpath) / "models" / model_filename

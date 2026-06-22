@@ -227,7 +227,7 @@ class VASPEvaluator(AseCalculatorEvaluator):
         remote_fs: Filesystem handler for the evaluation machine.
         cluster_config: Target cluster configuration.
         num_parallel: Number of parallel SLURM jobs to queue.
-        incar_kwargs: VASP INCAR tags.
+        incar_kwargs: VASP INCAR tags (optional if ``incar_config_file`` is given).
         remote_savepath: Remote path for the calculation files.
         launcher: VASP launch prefix (e.g. ``"mpirun -n"``).
         stub: If True, produce mock outputs without running VASP.
@@ -235,6 +235,8 @@ class VASPEvaluator(AseCalculatorEvaluator):
         required_fraction: Fraction of jobs that must succeed.
         n_processors: CPU cores per VASP job.
         slurm_header_add: Extra SLURM header lines.
+        incar_config_file: Optional path to a YAML file of INCAR tags, used instead of
+            (or as a base for) ``incar_kwargs``.
     """
 
     def __init__(
@@ -243,7 +245,7 @@ class VASPEvaluator(AseCalculatorEvaluator):
         remote_fs: FileSystemHandlerBase,
         cluster_config: ClusterConfig,
         num_parallel: int,
-        incar_kwargs: dict,
+        incar_kwargs: Optional[dict] = None,
         remote_savepath: Optional[os.PathLike] = None,
         launcher: str = "mpirun -n",
         stub: bool = False,
@@ -251,11 +253,16 @@ class VASPEvaluator(AseCalculatorEvaluator):
         required_fraction: float = 0.5,
         n_processors: int = 8,
         slurm_header_add: str = _VASP_EVAL_HEADER,
+        incar_config_file: Optional[os.PathLike] = None,
     ):
-        self.incar_kwargs = incar_kwargs
+        from remote_handler.workflows.dft_runner import resolve_incar_kwargs
+
+        self.incar_kwargs = resolve_incar_kwargs(
+            incar_kwargs, incar_config_file
+        )
         self.launcher = launcher
         calc_config = {
-            "INCAR_kwargs": incar_kwargs,
+            "INCAR_kwargs": self.incar_kwargs,
             "launch_command": f"{launcher} {n_processors} vasp_std",
         }
         super().__init__(

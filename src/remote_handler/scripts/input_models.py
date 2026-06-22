@@ -220,6 +220,9 @@ class MaceFinetuningInput(ScriptInput):
     seed: int
     validation_fraction: float = 0.1
     convert_to_jax: bool = False
+    # "pkl" (default) -> opaque pickle bundle; "bundle" -> a directory with
+    # config.json + params.msgpack (mace-jax's canonical, inspectable format).
+    jax_output_format: str = "pkl"
 
     def validate(self, root: Optional[Path] = None) -> None:
         """Validate configuration parameters.
@@ -237,6 +240,12 @@ class MaceFinetuningInput(ScriptInput):
 
         if not self.model_name:
             raise ScriptInputError("model_name cannot be empty")
+
+        if self.jax_output_format not in ("pkl", "bundle"):
+            raise ScriptInputError(
+                "jax_output_format must be 'pkl' or 'bundle', got "
+                f"'{self.jax_output_format}'"
+            )
 
         if root is not None:
             for f in self.database_files:
