@@ -162,3 +162,35 @@ def test_converted_model_matches_torch():
 
     # float64 conversion agreement is ~1e-6 eV; 1e-3 is a safe ceiling.
     assert max_diff < 1e-3, f"torch vs jax energy mismatch: {max_diff} eV"
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not mace_jax_available(),
+    reason="needs torch MACE + mace-jax (.[mace_freeze,mace_jax])",
+)
+def test_generate_jax_foundation_model(tmp_path, monkeypatch):
+    """generate_jax_foundation_model glues download -> convert.
+
+    The real network download is patched out (it points the downloader at the
+    shipped foundation asset), so this tests our glue + the conversion without
+    pulling ~100s of MB. The result must be a loadable mace-jax bundle.
+    """
+    import mace.calculators.foundations_models as fm
+
+    import remote_handler.scripts.mace.mace_utils as mu
+
+    monkeypatch.setattr(
+        fm,
+        "download_mace_mp_checkpoint",
+        lambda model: foundation_model_path(),
+    )
+
+    out = tmp_path / "foundation-jax.pkl"
+    result = mu.generate_jax_foundation_model(model="medium", output_path=out)
+
+    assert result == out
+    assert out.is_file()
+    bundle = pickle.loads(out.read_bytes())
+    assert "config" in bundle
+    assert isinstance(bundle["params"], (bytes, bytearray))

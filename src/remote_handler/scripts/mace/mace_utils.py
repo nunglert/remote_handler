@@ -311,3 +311,41 @@ def convert_torch_model_to_jax(
         pickle.dump(artifact, f)
 
     return output_path
+
+
+def generate_jax_foundation_model(
+    model: str = "medium",
+    output_path: Optional[pathlib.Path] = None,
+    head: Optional[str] = None,
+) -> pathlib.Path:
+    """Download a MACE-MP foundation model and convert it to a mace-jax bundle.
+
+    Bootstraps a mace-jax ``.pkl`` foundation model without having to obtain a
+    torch ``.model`` and convert it by hand: it pulls the MACE-MP foundation
+    checkpoint via MACE's own download helper (cached under MACE's cache dir)
+    and feeds it to :func:`convert_torch_model_to_jax`.
+
+    Runs wherever both stacks are importable (the torch MACE stack and
+    ``mace-jax``) and where the download has network access -- typically a
+    cluster login node. Needs the ``mace_jax`` extra.
+
+    Only the MACE-MP (inorganic) foundations are supported, since MACE exposes
+    a standalone checkpoint downloader only for those; MACE-OFF would need a
+    separate path.
+
+    Args:
+        model: MACE-MP foundation size (``"small"`` / ``"medium"`` /
+            ``"large"``), or a path/URL to a checkpoint.
+        output_path: Destination ``.pkl``. Defaults to ``<checkpoint stem>``
+            ``-jax.pkl`` next to the downloaded checkpoint.
+        head: Optional head name to record in the bundle.
+
+    Returns:
+        Path to the written mace-jax ``.pkl`` bundle.
+    """
+    from mace.calculators.foundations_models import download_mace_mp_checkpoint
+
+    torch_path = download_mace_mp_checkpoint(model)
+    return convert_torch_model_to_jax(
+        pathlib.Path(torch_path), output_path, head
+    )
