@@ -8,6 +8,10 @@ import torch_sim as ts
 from torch_sim.trajectory import TrajectoryReporter
 from torch_sim.units import MetalUnits
 
+from remote_handler.scripts.torch_sim._torchsim_compat import (
+    npt_langevin_integrator,
+)
+
 
 def _get_volume_per_system(state) -> torch.Tensor:
     """
@@ -238,7 +242,7 @@ def parallel_tempering(
         integrate_kwargs["external_pressure"] = P
         state.alpha = alpha
         state.cell_alpha = cell_alpha
-        integrate_kwargs["integrator"] = ts.Integrator.npt_langevin
+        integrate_kwargs["integrator"] = npt_langevin_integrator()
 
     stats = {
         "attempted": 0,

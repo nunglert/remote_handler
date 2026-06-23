@@ -1,3 +1,4 @@
+import torch_sim
 import torch_sim.state
 from torch_sim.state import *
 
@@ -82,4 +83,22 @@ def _split_state_patched(state: SimState) -> list[SimState]:
     return states
 
 
-torch_sim.state._split_state = _split_state_patched
+def _torch_sim_version() -> tuple[int, ...]:
+    raw = getattr(torch_sim, "__version__", "0")
+    parts = []
+    for chunk in raw.split(".")[:2]:
+        digits = "".join(c for c in chunk if c.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+# Why this patch is version-gated:
+#   torch_sim < 0.6 computed per-system ``new_constraints`` in ``_split_state``
+#   but never passed them to the split state, silently dropping constraints.
+#   The copy above fixes that by setting ``_constraints`` before construction.
+#   torch_sim >= 0.6 fixed this upstream AND added ``atom_extras``/
+#   ``system_extras`` routing -- there our stale copy would crash (e.g. it
+#   passes the ``node_energy`` atom-extra straight to ``MDState.__init__``,
+#   which no longer accepts it). So only patch the buggy older versions.
+if _torch_sim_version() < (0, 6):
+    torch_sim.state._split_state = _split_state_patched

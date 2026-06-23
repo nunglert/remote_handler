@@ -46,11 +46,11 @@ docs = [
     "sphinxcontrib-mermaid",
 ]
 torch_sim = [
-    "torch-sim-atomistic==0.5.1",
+    "torch-sim-atomistic>=0.5.1",
 ]
 mace = [
-    "mace-torch==0.3.14",
-    "cuequivariance-torch==0.8.1",
+    "mace-torch>=0.3.14",
+    "cuequivariance-torch>=0.8.1",
 ]
 # MACE fork adding layer-freezing for finetuning (MaceFinetuningTrainer /
 # MACE_FREEZE_TRAIN_RUNNER). It builds the `mace-torch` distribution from git,
@@ -58,7 +58,7 @@ mace = [
 # with [mace] or [torch_sim] (same package, conflicting sources).
 mace_freeze = [
     "mace-torch @ git+https://github.com/7radians/mace-freeze.git@mace-freeze",
-    "cuequivariance-torch==0.8.1",
+    "cuequivariance-torch>=0.8.1",
 ]
 # torch_sim with the freeze fork instead of stock mace-torch. Self-contained:
 # its only mace-torch source is the git fork, so there is no conflicting
@@ -68,7 +68,7 @@ clinamen = [
     "Clinamen2"
 ]
 quests = [
-    "quests==2025.9.29"
+    "quests>=2025.9.29"
 ]
 # NeuralIL force-field training (remote-side payload
 # `remote_handler.scripts.neuralil.train_model`, run by `NeuralilILTrainer`).

@@ -9,7 +9,11 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from _capabilities import foundation_model_available, foundation_model_path
+from _capabilities import (
+    clinamen_available,
+    foundation_model_available,
+    foundation_model_path,
+)
 from _markers import requires_cuda, requires_local_slurm
 from ase.build import bulk
 from ase.io import write
@@ -43,6 +47,10 @@ def founder_poscar(integration_temp_dir):
 
 @pytest.mark.integration
 @requires_cuda  # cmaes evolution loads/runs the model on CUDA (no CPU path)
+@pytest.mark.skipif(
+    not clinamen_available(),
+    reason="Clinamen2 not installed (pip install .[clinamen])",
+)
 @pytest.mark.skipif(
     not foundation_model_available(),
     reason="MACE foundation model asset missing from test/data/assets",

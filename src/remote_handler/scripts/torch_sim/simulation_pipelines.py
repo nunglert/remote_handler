@@ -27,6 +27,10 @@ from remote_handler.scripts.torch_sim import (
     parallel_tempering,
     torchsim_patches,
 )
+from remote_handler.scripts.torch_sim._torchsim_compat import (
+    npt_langevin_init,
+    npt_langevin_integrator,
+)
 from remote_handler.scripts.torch_sim.create_interface import (
     build_sic_ti_interface,
 )
@@ -233,7 +237,7 @@ def interface_pt_simulation(
     # ------------------------------------------------------------------
     if n_steps_npt > 0:
         state = ts.io.atoms_to_state(at, device=device, dtype=dtype)
-        state = ts.npt_langevin_init(
+        state = npt_langevin_init(
             state=state,
             model=model,
             kT=target_temperature * MetalUnits.temperature,
@@ -246,7 +250,7 @@ def interface_pt_simulation(
         state = ts.integrate(
             system=state,
             model=model,
-            integrator=ts.Integrator.npt_langevin,
+            integrator=npt_langevin_integrator(),
             n_steps=n_steps_npt,
             temperature=target_temperature,
             external_pressure=0,
