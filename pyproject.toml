@@ -85,7 +85,7 @@ neuralil = [
 # torch MACE source too (it reads the .model via `mace.tools.scripts_utils`),
 # so install alongside a mace extra, e.g. `.[mace_freeze,mace_jax]`.
 mace_jax = [
-    "mace-jax @ git+https://github.com/ACEsuit/mace-jax.git",
+    "mace-jax @ git+https://github.com/nunglert/mace-jax.git@fixes",
 ]
 
 [project.scripts]
