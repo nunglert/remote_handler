@@ -17,6 +17,7 @@ from ase import Atoms
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.core.tasks import SingleScriptTask
+from remote_handler.exceptions import WorkflowError
 from remote_handler.workflows.selectors import ConfigSelector
 
 from .active_learning_base import Sampler
@@ -206,6 +207,12 @@ class LammpsSampler(Sampler):
         else:
             # Run actual LAMMPS sampling
             self.sampling_task.submit()
+            if not self.sampling_task.finish_check():
+                raise WorkflowError(
+                    "LAMMPS sampling did not finish successfully "
+                    "(no is_finished.info marker). Check the job logs in "
+                    f"{self.sampling_task.calcdir}."
+                )
             self.sampling_task.collect_results()
             output_path = (
                 Path(self.sampling_task.local_savepath) / "out/samples.xyz"
@@ -422,6 +429,12 @@ class CMAESSampler(Sampler):
             ase.io.write(output_path, sampled_configs)
         else:
             self.sampling_task.submit()
+            if not self.sampling_task.finish_check():
+                raise WorkflowError(
+                    "CMA-ES sampling did not finish successfully "
+                    "(no is_finished.info marker). Check the job logs in "
+                    f"{self.sampling_task.calcdir}."
+                )
             self.sampling_task.collect_results()
             output_path = self.results_dir / self.label
 
@@ -565,6 +578,12 @@ class BatchCMAESSampler(CMAESSampler):
         for run_idx, task in enumerate(self.sampling_tasks):
             label = f"{self.label}_{run_idx}"
             task.submit()
+            if not task.finish_check():
+                raise WorkflowError(
+                    f"CMA-ES evolution {run_idx} did not finish successfully "
+                    "(no is_finished.info marker). Check the job logs in "
+                    f"{task.calcdir}."
+                )
             task.collect_results()
 
             results_dir = Path(task.local_savepath)
@@ -872,6 +891,12 @@ class TorchSimSampler(Sampler):
             ase.io.write(output_path, sampled_configs)
         else:
             self.sampling_task.submit()
+            if not self.sampling_task.finish_check():
+                raise WorkflowError(
+                    "torch_sim sampling did not finish successfully "
+                    "(no is_finished.info marker). Check the job logs in "
+                    f"{self.sampling_task.calcdir}."
+                )
             self.sampling_task.collect_results()
 
             if self.selector is not None:
@@ -1013,6 +1038,12 @@ class SSPDSampler(Sampler):
 
     def get_sampled_configs(self) -> Path:
         self.sampling_task.submit()
+        if not self.sampling_task.finish_check():
+            raise WorkflowError(
+                "SSPD sampling did not finish successfully "
+                "(no is_finished.info marker). Check the job logs in "
+                f"{self.sampling_task.calcdir}."
+            )
         self.sampling_task.collect_results()
         # TODO: check possibilities with the sampler
         # would be nice to separate the "reader" functions. Or simply discontinue the support for the non torch-sim version

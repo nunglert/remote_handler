@@ -43,3 +43,6 @@ run_training_from_config(
     storage_dir=calcpath,
     logger=logging.getLogger(),
 )
+
+# Success marker checked by ArrayScriptTask.finish_check on the host.
+(calcpath / "is_finished.info").write_text("MACE training finished")

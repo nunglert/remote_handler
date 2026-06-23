@@ -71,3 +71,6 @@ if input_config.convert_to_jax:
     logging.getLogger().info(
         f"Converted torch model to mace-jax bundle: {jax_model_path}"
     )
+
+# Success marker checked by ArrayScriptTask.finish_check on the host.
+(calcpath / "is_finished.info").write_text("MACE finetuning finished")

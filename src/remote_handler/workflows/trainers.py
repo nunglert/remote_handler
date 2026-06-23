@@ -257,6 +257,12 @@ class MaceModelTrainer(ModelTrainer):
         else:
             # Run actual training
             self.training_task.submit()
+            if not self.training_task.finish_check():
+                raise WorkflowError(
+                    "MACE training did not finish successfully (one or more "
+                    "array tasks left no is_finished.info marker). Check the "
+                    f"training logs in: {self.results_dir}"
+                )
             self.training_task.collect_results()
 
             # Collect trained models
@@ -522,6 +528,12 @@ class MaceFinetuningTrainer(ModelTrainer):
             model_paths = self._create_stub_outputs()
         else:
             self.training_task.submit()
+            if not self.training_task.finish_check():
+                raise WorkflowError(
+                    "MACE finetuning did not finish successfully (one or more "
+                    "array tasks left no is_finished.info marker). Check the "
+                    f"training logs in: {self.results_dir}"
+                )
             self.training_task.collect_results()
 
             # When converting, the artifact handed to the next sampler is the

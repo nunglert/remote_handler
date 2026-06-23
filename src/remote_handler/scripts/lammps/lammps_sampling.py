@@ -328,3 +328,6 @@ get_samples_from_dump(
     full_file=full_traj_file,
     logger=logging.getLogger(),
 )
+
+# Success marker checked by SingleScriptTask.finish_check on the host.
+(calcpath / "is_finished.info").write_text("LAMMPS sampling finished")

@@ -10,3 +10,4 @@
 - [x] rework NeuralILTrainer, maybe also use yaml instead of JSON
 - [ ] Think about reworking all config files from JSON to yaml, could probably be done backwards-compatible
 - [ ] Option to pass VASPHandler INCAR kwargs also via a yaml file
+- [x] Give the RemoteTask derived objects the possibility to finish_check, BEFORE submitting, to prevent redoing calculations that were already finished (for crash scenarios)

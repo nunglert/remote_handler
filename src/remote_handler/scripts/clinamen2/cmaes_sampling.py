@@ -152,3 +152,6 @@ if input_config.do_optimization:
         optimizer=input_config.optimizer,
     )
     print("Optimization done.")
+
+# Success marker checked by SingleScriptTask.finish_check on the host.
+(calcpath / "is_finished.info").write_text("CMA-ES sampling finished")
