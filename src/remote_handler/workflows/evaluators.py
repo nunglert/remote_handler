@@ -223,10 +223,11 @@ class VASPEvaluator(AseCalculatorEvaluator):
     """VASP DFT preset of :class:`AseCalculatorEvaluator`.
 
     Args:
-        singlepoint_script: Path to ``dft_singlepoint.py`` (or compatible).
         remote_fs: Filesystem handler for the evaluation machine.
         cluster_config: Target cluster configuration.
         num_parallel: Number of parallel SLURM jobs to queue.
+        singlepoint_script: Remote payload; defaults to the shipped
+            ``dft_singlepoint.py``.
         incar_kwargs: VASP INCAR tags (optional if ``incar_config_file`` is given).
         remote_savepath: Remote path for the calculation files.
         launcher: VASP launch prefix (e.g. ``"mpirun -n"``).
@@ -241,10 +242,10 @@ class VASPEvaluator(AseCalculatorEvaluator):
 
     def __init__(
         self,
-        singlepoint_script: os.PathLike,
         remote_fs: FileSystemHandlerBase,
         cluster_config: ClusterConfig,
         num_parallel: int,
+        singlepoint_script: Optional[os.PathLike] = None,
         incar_kwargs: Optional[dict] = None,
         remote_savepath: Optional[os.PathLike] = None,
         launcher: str = "mpirun -n",
@@ -257,6 +258,8 @@ class VASPEvaluator(AseCalculatorEvaluator):
     ):
         from remote_handler.workflows.dft_runner import resolve_incar_kwargs
 
+        if singlepoint_script is None:
+            singlepoint_script = str(_SCRIPTS_DIR / "dft_singlepoint.py")
         self.incar_kwargs = resolve_incar_kwargs(
             incar_kwargs, incar_config_file
         )
@@ -288,15 +291,13 @@ class VASPEvaluator(AseCalculatorEvaluator):
 class ORCAEvaluator(AseCalculatorEvaluator):
     """ORCA DFT preset of :class:`AseCalculatorEvaluator`.
 
-    Keeps its historical ``(singlepoint_script, cluster_config, remote_fs, ...)``
-    argument order for backward compatibility. Now also supports ``stub``.
-
     Args:
-        singlepoint_script: Path to ``orca_singlepoint.py`` (or compatible).
         cluster_config: Target cluster configuration.
         remote_fs: Filesystem handler for the evaluation machine.
         num_parallel: Number of parallel SLURM jobs to queue.
         orcasimpleinput: ORCA simple-input line (functional, basis, method).
+        singlepoint_script: Remote payload; defaults to the shipped
+            ``orca_singlepoint.py``.
         remote_savepath: Remote path for the calculation files.
         loop_time: Seconds between polls for completion.
         required_fraction: Fraction of jobs that must succeed.
@@ -307,11 +308,11 @@ class ORCAEvaluator(AseCalculatorEvaluator):
 
     def __init__(
         self,
-        singlepoint_script: os.PathLike,
         cluster_config: ClusterConfig,
         remote_fs: FileSystemHandlerBase,
         num_parallel: int,
         orcasimpleinput: str,
+        singlepoint_script: Optional[os.PathLike] = None,
         remote_savepath: Optional[os.PathLike] = None,
         loop_time: float = 30,
         required_fraction: float = 0.8,
@@ -319,6 +320,8 @@ class ORCAEvaluator(AseCalculatorEvaluator):
         orca_binary: str = "/opt/ohpc/pub/dft/orca_6_1_0/orca",
         stub: bool = False,
     ):
+        if singlepoint_script is None:
+            singlepoint_script = str(_SCRIPTS_DIR / "orca_singlepoint.py")
         self.orcasimpleinput = orcasimpleinput
         calc_config = {
             "orcasimpleinput": orcasimpleinput,

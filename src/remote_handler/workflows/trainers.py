@@ -34,6 +34,11 @@ from .active_learning_base import ModelTrainer
 
 logger = logging.getLogger(__name__)
 
+# Remote payloads shipped with the package live in ``scripts/`` next to this
+# module's package root. Each trainer defaults its ``training_script`` to the
+# shipped payload it was written for, so the path need not be passed in.
+_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
+
 
 def _resolve_mace_train_runner(remote_fs, cluster_config):
     """Locate MACE's ``run_train.py`` in the *remote* conda env, or raise.
@@ -68,8 +73,9 @@ class MaceModelTrainer(ModelTrainer):
 
     Args:
         remote_fs: FileSystemHandlerBase for the machine where training runs
-        training_script: Path to mace_training.py or compatible script
         config_file: Path to MACE YAML config file
+        training_script: Remote payload; defaults to the shipped
+            ``mace/mace_training.py``.
         remote_mace_train_runner: Path to MACE run_train.py on the remote
             machine. Optional -- if omitted, it is resolved automatically by
             probing the remote conda env (requires mace installed there).
@@ -84,8 +90,8 @@ class MaceModelTrainer(ModelTrainer):
         self,
         remote_fs: FileSystemHandlerBase,
         cluster_config: ClusterConfig,
-        training_script: os.PathLike,
         config_file: os.PathLike,
+        training_script: Optional[os.PathLike] = None,
         remote_mace_train_runner: Optional[os.PathLike] = None,
         num_models: int = 5,
         validation_fraction: float = 0.1,
@@ -95,6 +101,8 @@ class MaceModelTrainer(ModelTrainer):
         n_processors: int = 1,
     ):
         super().__init__()
+        if training_script is None:
+            training_script = _SCRIPTS_DIR / "mace" / "mace_training.py"
         self.training_script = training_script
         self.remote_fs = remote_fs
         self.cluster_config = cluster_config
@@ -280,9 +288,10 @@ class MaceFinetuningTrainer(ModelTrainer):
 
     Args:
         remote_fs: FileSystemHandlerBase for the machine where training runs
-        training_script: Path to mace_finetuning.py or compatible script
         config_file: Path to MACE YAML config file
         foundation_model: Path to the pretrained foundation model file
+        training_script: Remote payload; defaults to the shipped
+            ``mace/mace_finetuning.py``.
         remote_mace_train_runner: Path to MACE run_train.py on the remote
             machine. Optional -- if omitted, it is resolved automatically by
             probing the remote conda env (requires mace installed there).
@@ -305,9 +314,9 @@ class MaceFinetuningTrainer(ModelTrainer):
         self,
         remote_fs: FileSystemHandlerBase,
         cluster_config: ClusterConfig,
-        training_script: os.PathLike,
         config_file: os.PathLike,
         foundation_model: os.PathLike,
+        training_script: Optional[os.PathLike] = None,
         remote_mace_train_runner: Optional[os.PathLike] = None,
         num_models: int = 5,
         validation_fraction: float = 0.1,
@@ -319,6 +328,8 @@ class MaceFinetuningTrainer(ModelTrainer):
         jax_output_format: str = "pkl",
     ):
         super().__init__()
+        if training_script is None:
+            training_script = _SCRIPTS_DIR / "mace" / "mace_finetuning.py"
         self.training_script = training_script
         self.remote_fs = remote_fs
         self.cluster_config = cluster_config
@@ -548,7 +559,8 @@ class NeuralilILTrainer(ModelTrainer):
     built-in defaults are used.
 
     Args:
-        training_script: Path to NeuralIL training script
+        training_script: Remote payload; defaults to the shipped
+            ``neuralil/neuralil_training.py``.
         remote_fs: FileSystemHandlerBase for the machine where training runs
         remote_savepath: Path on remote machine for calculation files
         training_kwargs: Explicit hyperparameter overrides (highest precedence).
@@ -590,7 +602,7 @@ class NeuralilILTrainer(ModelTrainer):
         self,
         remote_fs: FileSystemHandlerBase,
         cluster_config: ClusterConfig,
-        training_script: os.PathLike,
+        training_script: Optional[os.PathLike] = None,
         remote_savepath: Optional[os.PathLike] = None,
         training_kwargs: dict = None,
         stub: bool = False,
@@ -598,6 +610,10 @@ class NeuralilILTrainer(ModelTrainer):
         config_file: Optional[os.PathLike] = None,
     ):
         super().__init__()
+        if training_script is None:
+            training_script = (
+                _SCRIPTS_DIR / "neuralil" / "neuralil_training.py"
+            )
         self.training_script = training_script
         self.cluster_config = cluster_config
         self.config_file = config_file

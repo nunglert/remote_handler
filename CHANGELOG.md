@@ -16,6 +16,10 @@ config inputs for the DFT and NeuralIL paths, a choice of mace-jax artifact
 format, and a batch of SLURM/template fixes.
 
 ### Added
+- Every actor's remote ``script`` is now optional: when omitted, the
+  sampler/evaluator/trainer defaults it to the payload shipped under
+  `scripts/` (e.g. `VASPEvaluator` → `dft_singlepoint.py`,
+  `MaceModelTrainer` → `mace/mace_training.py`). Pass one only to override.
 - `MaceFinetuningTrainer(jax_output_format=...)` — choose the converted
   mace-jax artifact: the opaque `.pkl` bundle (`"pkl"`, default — unchanged
   behaviour) or a directory bundle (`"bundle"`: a human-readable `config.json`
@@ -47,6 +51,20 @@ format, and a batch of SLURM/template fixes.
 - `NeuralilILTrainer` no longer mutates its class-level default training kwargs
   across instances (defaults are deep-copied).
 - Corrected the `musica` SLURM template.
+
+### Removed
+- `NSTrajectorySampler` and the `nested_sampling_AL` example. Its sampling
+  payload lives in a separate downstream repository (it always pointed at an
+  external jaxnest `ns_run.py`, never a shipped script), so the in-package
+  actor is dropped in line with the "sampling code is a separate dependency"
+  model.
+
+### Breaking
+- Actor constructors moved the remote ``script`` argument to *after* the
+  required positionals (so it can default). Callers that passed it **by
+  keyword** (the documented style — `sampling_script=`, `singlepoint_script=`,
+  `training_script=`) are unaffected; callers that relied on positional order
+  must update.
 
 ## [0.2.0] — 2026-06-18
 

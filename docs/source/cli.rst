@@ -33,6 +33,8 @@ Overview
      - List the registered SLURM templates and their file paths.
    * - ``remote_handler show clusters``
      - List the registered cluster configs and their file paths.
+   * - ``remote_handler show extras``
+     - Probe which optional dependency groups are actually importable.
    * - ``remote_handler --version``
      - Print the package version.
 
@@ -220,3 +222,27 @@ handy for scripting or confirming what the resolver sees:
 ``show templates`` walks the template search path in priority order, so when
 the same template name exists in both a custom directory and the built-ins, the
 higher-priority one wins (matching how jobs actually resolve templates).
+
+``show extras``
+~~~~~~~~~~~~~~~
+
+Reports which optional dependency groups (the ``[mace]``, ``[mace_jax]``, …
+extras from :doc:`installation`) are usable in the current environment:
+
+.. code-block:: bash
+
+   $ remote_handler show extras
+   Probing optional extras (imports torch / jax / ...; may be slow):
+
+     [x] dev
+     [ ] mace_jax  (missing: mace_jax)
+     [x] mace
+     ...
+
+Unlike the other ``show`` commands, this does not just inspect metadata — it
+**actually imports** each extra's key modules and reports what genuinely works.
+That means it loads heavy stacks (torch, jax, …), so it is deliberately slower
+than the other listings. Importing is also the only way to tell the stock
+``mace`` distribution apart from the ``mace_freeze`` fork, which share a
+distribution name. A ``[ ]`` line names the module(s) that failed to import, so
+you can see exactly which piece is absent.

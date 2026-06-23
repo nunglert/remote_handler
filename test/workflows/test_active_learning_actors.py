@@ -19,7 +19,6 @@ from remote_handler.workflows import (
     LammpsSampler,
     MaceModelTrainer,
     NeuralilILTrainer,
-    NSTrajectorySampler,
     VASPEvaluator,
 )
 
@@ -298,126 +297,6 @@ class TestLammpsSampler:
             assert len(atoms) == 26  # 20 Cu + 4 Co + 2 H
             assert "max_uncertainty" in atoms.info
             assert atoms.info["max_uncertainty"] > 0
-
-
-class TestNSTrajectorySampler:
-    """Test NSTrajectorySampler in stub mode."""
-
-    def test_init_ns_sampler(
-        self, mock_remote_fs, mock_cluster_config, tmp_path
-    ):
-        """Test NSTrajectorySampler initialization."""
-        ns_input = tmp_path / "ns.inp"
-        ns_input.touch()
-
-        sampler = NSTrajectorySampler(
-            sampling_script="/path/to/ns",
-            remote_fs=mock_remote_fs,
-            cluster_config=mock_cluster_config,
-            initial_input_file=ns_input,
-            n_gpu_parallel=4,
-            sample_size=100,
-            resample_size=50,
-            stub=True,
-        )
-
-        assert sampler.stub is True
-        assert sampler.sample_size == 100
-        assert sampler.resample_size == 50
-
-    def test_ns_stub_outputs(
-        self, mock_remote_fs, mock_cluster_config, temp_calcdir,
-        mock_model_files
-    ):
-        """Test NSTrajectorySampler creates stub outputs."""
-        ns_input = temp_calcdir / "ns.inp"
-        ns_input.write_text("# Mock NS input")
-
-        sampler = NSTrajectorySampler(
-            sampling_script="/path/to/ns",
-            remote_fs=mock_remote_fs,
-            cluster_config=mock_cluster_config,
-            initial_input_file=ns_input,
-            n_gpu_parallel=4,
-            sample_size=80,
-            resample_size=None,
-            stub=True,
-        )
-
-        # Update sampler with model file
-        sampler.update(temp_calcdir, mock_model_files[0])
-
-        # Get sampled configs (should create stub outputs and write to file)
-        sampled_configs_file = sampler.get_sampled_configs()
-
-        assert sampled_configs_file.exists()
-        sampled_atoms = ase.io.read(sampled_configs_file, index=":")
-        assert len(sampled_atoms) == 80
-
-        # Check NS-specific fields
-        for atoms in sampled_atoms:
-            assert "run_id" in atoms.info
-            assert "iter" in atoms.info
-            assert "energy_uncert" in atoms.info
-            assert "forces_uncert" in atoms.info
-
-    def test_ns_with_resampling(
-        self, mock_remote_fs, mock_cluster_config, temp_calcdir,
-        mock_model_files
-    ):
-        """Test NSTrajectorySampler with resampling based on uncertainty."""
-        ns_input = temp_calcdir / "ns.inp"
-        ns_input.write_text("# Mock NS input")
-
-        sampler = NSTrajectorySampler(
-            sampling_script="/path/to/ns",
-            remote_fs=mock_remote_fs,
-            cluster_config=mock_cluster_config,
-            initial_input_file=ns_input,
-            n_gpu_parallel=4,
-            sample_size=100,
-            resample_size=30,
-            energy_uncty_weight=0.5,
-            force_uncty_weight=1.0,
-            stub=True,
-        )
-
-        sampler.update(temp_calcdir, mock_model_files[0])
-        sampled_configs_file = sampler.get_sampled_configs()
-
-        # After resampling, should have exactly resample_size configs
-        assert sampled_configs_file.exists()
-        sampled_atoms = ase.io.read(sampled_configs_file, index=":")
-        assert len(sampled_atoms) == 30
-
-        # Check that resampling indices were saved
-        resample_file = temp_calcdir / "ns_sampler/results/resampled_inds.csv"
-        assert resample_file.exists()
-
-    def test_ns_create_stub_outputs(
-        self, mock_remote_fs, mock_cluster_config, tmp_path
-    ):
-        """Test _create_stub_outputs method directly."""
-        ns_input = tmp_path / "ns.inp"
-        ns_input.touch()
-
-        sampler = NSTrajectorySampler(
-            sampling_script="/path/to/ns",
-            remote_fs=mock_remote_fs,
-            cluster_config=mock_cluster_config,
-            initial_input_file=ns_input,
-            n_gpu_parallel=4,
-            sample_size=60,
-            stub=True,
-        )
-
-        stub_samples = sampler._create_stub_outputs()
-
-        assert len(stub_samples) == 60
-        for atoms in stub_samples:
-            assert len(atoms) == 20  # 16 Cu + 4 O
-            assert "energy_uncert" in atoms.info
-            assert "forces_uncert" in atoms.info
 
 
 class TestMaceModelTrainer:
