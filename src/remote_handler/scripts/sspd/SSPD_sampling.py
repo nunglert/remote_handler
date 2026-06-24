@@ -2,20 +2,17 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Optional
-import numpy as np
 
 import ase
+import ase.io
+import jax
+import jax.numpy as jnp
 import numpy as np
 from SSPD.SSPD import SSPD
-import ase.io
-import jax.numpy as jnp
-
-import jax
 
 jax.config.update("jax_platform_name", "cpu")
-from SSPD.calculators.calculator import MACEModel
 import h5py
+from SSPD.calculators.calculator import MACEModel
 
 calcpath = Path(sys.argv[1]).parent
 INPUTFILE = Path(sys.argv[1])
@@ -35,7 +32,10 @@ def get_SSPD_simulator(input_args):
     input_struct = ase.io.read(input_struct_path)
 
     model = MACEModel(
-        model_path, input_struct, N, hessian_method=input_args["hessian_method"]
+        model_path,
+        input_struct,
+        N,
+        hessian_method=input_args["hessian_method"],
     )
 
     positions = jnp.array(input_struct.get_positions()).ravel()
@@ -145,15 +145,25 @@ def run_SSPD(simulator, input_args, model):
             if not written_file:
                 with h5py.File(str(output) + ".hdf5", "w") as f:
                     f.create_dataset(
-                        "positions", data=iter_positions, maxshape=(None, N, natoms * 3)
+                        "positions",
+                        data=iter_positions,
+                        maxshape=(None, N, natoms * 3),
                     )
-                    f.create_dataset("weights", data=weights, maxshape=(None, N))
-                    f.create_dataset("energies", data=energies, maxshape=(None, N))
+                    f.create_dataset(
+                        "weights", data=weights, maxshape=(None, N)
+                    )
+                    f.create_dataset(
+                        "energies", data=energies, maxshape=(None, N)
+                    )
                     f.create_dataset("factors", data=factors, maxshape=(None,))
                     f.create_dataset(
-                        "acceptance_ratio", data=acceptance_ratio, maxshape=(None,)
+                        "acceptance_ratio",
+                        data=acceptance_ratio,
+                        maxshape=(None,),
                     )
-                    f.create_dataset("timesteps", data=timesteps, maxshape=(None,))
+                    f.create_dataset(
+                        "timesteps", data=timesteps, maxshape=(None,)
+                    )
                     if track_evalues:
                         f.create_dataset(
                             "eigenvalues",
@@ -186,15 +196,21 @@ def run_SSPD(simulator, input_args, model):
                     f["positions"][-num_add:] = np.array(iter_positions)
                     f["weights"][-num_add:] = np.array(weights)
                     f["factors"][-num_add:] = np.array(factors)
-                    f["acceptance_ratio"][-num_add:] = np.array(acceptance_ratio)
+                    f["acceptance_ratio"][-num_add:] = np.array(
+                        acceptance_ratio
+                    )
                     f["timesteps"][-num_add:] = np.array(timesteps)
                     f["energies"][-num_add:] = np.array(energies)
                     if track_evalues:
                         f["eigenvalues"][-num_add:] = np.array(eigenvalues)
                     if track_vhp_evaluations:
-                        f["vhp_evaluations"][-output_batch:] = np.array(vhp_evaluations)
+                        f["vhp_evaluations"][-output_batch:] = np.array(
+                            vhp_evaluations
+                        )
                     if full_uncertainty:
-                        f["force_uncertainty"][-num_add:] = np.array(force_uncertainty)
+                        f["force_uncertainty"][-num_add:] = np.array(
+                            force_uncertainty
+                        )
                         f["energy_uncertainty"][-num_add:] = np.array(
                             energy_uncertainty
                         )
@@ -237,3 +253,6 @@ simulator, model = get_SSPD_simulator(input_args)
 database = run_SSPD(simulator, input_args, model)
 
 ase.io.write(samples_file, database, format="extxyz")
+
+# Success marker checked by SingleScriptTask.finish_check on the host.
+(calcpath / "is_finished.info").write_text("SSPD sampling finished")

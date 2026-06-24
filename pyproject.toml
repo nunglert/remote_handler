@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 [build-system]
-requires = ["setuptools", "setuptools-scm>=8"]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -10,6 +10,7 @@ authors = [
     { name = "Nico Unglert", email = "nico.unglert@tuwien.ac.at" }
 ]
 description = "Package for streamlining active learning workflows"
+license = "MIT"
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -46,11 +47,11 @@ docs = [
     "sphinxcontrib-mermaid",
 ]
 torch_sim = [
-    "torch-sim-atomistic==0.5.1",
+    "torch-sim-atomistic>=0.5.1",
 ]
 mace = [
-    "mace-torch==0.3.14",
-    "cuequivariance-torch==0.8.1",
+    "mace-torch>=0.3.14",
+    "cuequivariance-torch>=0.8.1",
 ]
 # MACE fork adding layer-freezing for finetuning (MaceFinetuningTrainer /
 # MACE_FREEZE_TRAIN_RUNNER). It builds the `mace-torch` distribution from git,
@@ -58,7 +59,7 @@ mace = [
 # with [mace] or [torch_sim] (same package, conflicting sources).
 mace_freeze = [
     "mace-torch @ git+https://github.com/7radians/mace-freeze.git@mace-freeze",
-    "cuequivariance-torch==0.8.1",
+    "cuequivariance-torch>=0.8.1",
 ]
 # torch_sim with the freeze fork instead of stock mace-torch. Self-contained:
 # its only mace-torch source is the git fork, so there is no conflicting
@@ -68,7 +69,7 @@ clinamen = [
     "Clinamen2"
 ]
 quests = [
-    "quests==2025.9.29"
+    "quests>=2025.9.29"
 ]
 # NeuralIL force-field training (remote-side payload
 # `remote_handler.scripts.neuralil.train_model`, run by `NeuralilILTrainer`).
@@ -85,7 +86,7 @@ neuralil = [
 # torch MACE source too (it reads the .model via `mace.tools.scripts_utils`),
 # so install alongside a mace extra, e.g. `.[mace_freeze,mace_jax]`.
 mace_jax = [
-    "mace-jax @ git+https://github.com/ACEsuit/mace-jax.git",
+    "mace-jax @ git+https://github.com/nunglert/mace-jax.git@fixes",
 ]
 
 [project.scripts]

@@ -10,7 +10,7 @@ from any single backend's handler code.
 import json
 import logging
 import os
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Optional
 
@@ -48,6 +48,15 @@ class ClusterConfig:
         executor: Which execution backend to run jobs through. ``"slurm"``
             (default) submits via sbatch; other backends are selected by the
             executor factory. Unset in a config JSON means ``"slurm"``.
+        environment: Per-application shell setup for *this* cluster, keyed by
+            application name (e.g. ``"vasp"``, ``"orca"``). Each value is shell
+            lines injected into the SLURM header for jobs of that application
+            (module loads, ``source`` of an env script, ``export`` of paths
+            like ``VASP_PP_PATH``). This is where cluster- and site-specific
+            setup belongs -- so it lives in the (per-user) cluster JSON rather
+            than hardcoded in an actor. Actors that need it (e.g.
+            ``VASPEvaluator`` -> ``"vasp"``) look up their key; anything passed
+            as ``slurm_header_add`` is appended after it. Empty by default.
 
     Example:
         >>> config = ClusterConfig.from_file("my_cluster.json")
@@ -65,6 +74,7 @@ class ClusterConfig:
     connection_retry_interval: float = 60.0
     connection_max_wait: Optional[float] = None
     executor: str = "slurm"
+    environment: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # SFTP never expands '~', so a tilde savepath can never resolve. Reject

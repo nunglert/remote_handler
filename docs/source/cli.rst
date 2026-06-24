@@ -33,6 +33,8 @@ Overview
      - List the registered SLURM templates and their file paths.
    * - ``remote_handler show clusters``
      - List the registered cluster configs and their file paths.
+   * - ``remote_handler show extras [MACHINE ...]``
+     - Probe importable extras — locally, or per machine (``local`` / clusters).
    * - ``remote_handler --version``
      - Print the package version.
 
@@ -105,6 +107,33 @@ header templates. Pass a name as an argument
 Re-running against an existing file pre-fills the answers and asks before
 overwriting. Defaults for ``partition``, ``conda_env`` and ``conda_source``
 come from the global configuration.
+
+Two optional fields are not prompted for -- add them to the JSON by hand:
+
+* ``executor`` -- ``"slurm"`` (default) or ``"direct"`` (scheduler-free).
+* ``environment`` -- a map of *application* name to the shell lines that set
+  that application up **on this cluster** (module loads, ``source`` of an env
+  script, ``export`` of paths). This is where cluster- and site-specific DFT
+  setup belongs, instead of being hardcoded in an actor. Actors that need it
+  look up their key -- ``VASPEvaluator`` uses ``"vasp"``, ``ORCAEvaluator``
+  uses ``"orca"``. This is the supported home for the setup; the legacy
+  per-call ``slurm_header_add`` still works and **takes precedence** when both
+  are given:
+
+  .. code-block:: json
+
+     {
+       "remote_machine": "lugus",
+       "partition": "normal",
+       "conda_env": "remote_handler",
+       "conda_source": "/home/me/miniconda3/bin/activate",
+       "savepath": "/home/me/dump/remote_handler",
+       "template": "dirona.sh.j2",
+       "environment": {
+         "vasp": "module purge\nmodule load vasp/6.4.2_intel\nsource /opt/intel/oneapi/setvars.sh --force\nexport VASP_PP_PATH=/home/me/cellar/vasp/paw",
+         "orca": "module load orca/6.1.0"
+       }
+     }
 
 ``configure`` (global)
 ----------------------
@@ -220,3 +249,56 @@ handy for scripting or confirming what the resolver sees:
 ``show templates`` walks the template search path in priority order, so when
 the same template name exists in both a custom directory and the built-ins, the
 higher-priority one wins (matching how jobs actually resolve templates).
+
+``show extras``
+~~~~~~~~~~~~~~~
+
+Reports which optional dependency groups (the ``[mace]``, ``[mace_jax]``, …
+extras from :doc:`installation`) are usable in the current environment:
+
+.. code-block:: bash
+
+   $ remote_handler show extras
+   Probing optional extras (imports torch / jax / ...; may be slow):
+
+     [x] dev
+     [ ] mace_jax  (missing: mace_jax)
+     [x] mace
+     ...
+
+Unlike the other ``show`` commands, this does not just inspect metadata — it
+**actually imports** each extra's key modules and reports what genuinely works.
+That means it loads heavy stacks (torch, jax, …), so it is deliberately slower
+than the other listings. Importing is also the only way to tell the stock
+``mace`` distribution apart from the ``mace_freeze`` fork, which share a
+distribution name. A ``[ ]`` line names the module(s) that failed to import, so
+you can see exactly which piece is absent.
+
+Probing other machines
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Pass one or more **targets** — ``local`` and/or registered cluster names — to
+compare what is installed *where*. Each cluster is probed over SSH inside its
+conda env (the host needs no ML stacks for the remote columns), and any binary
+applications declared in the cluster's ``environment`` map (e.g. ``vasp``) are
+checked on ``PATH`` after their setup runs:
+
+.. code-block:: bash
+
+   $ remote_handler show extras local lugus musica
+   extra        local  lugus  musica
+   ---------------------------------
+   mace           ✓      ✓      ✓
+   mace_jax       ✗      ✓      ✗
+   torch_sim      ✓      ✓      ✓
+   ---------------------------------
+   vasp           ✗      ✓      —
+
+``✓`` available, ``✗`` not available, ``?`` machine unreachable, ``—`` the
+binary is not configured on that cluster (no ``environment`` entry, so the tool
+will not guess how to set it up). ``local`` has no ``environment`` map, so its
+binary cells reflect the **current** local ``PATH`` (``shutil.which``) — which
+is exactly right when ``local`` is itself a cluster node with modules loaded.
+On a cluster, the app's ``environment`` setup is run first (in a login shell,
+so ``module load`` works) before checking the binary. The command exits
+non-zero if any requested machine could not be reached.

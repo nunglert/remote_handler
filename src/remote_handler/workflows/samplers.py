@@ -8,7 +8,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 import ase.io
 import numpy as np
@@ -17,16 +17,17 @@ from ase import Atoms
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.core.tasks import SingleScriptTask
-from remote_handler.exceptions import (
-    DependencyError,
-    FileSystemError,
-    WorkflowError,
-)
+from remote_handler.exceptions import WorkflowError
 from remote_handler.workflows.selectors import ConfigSelector
 
 from .active_learning_base import Sampler
 
 logger = logging.getLogger(__name__)
+
+# Remote payloads shipped with the package live in ``scripts/`` next to this
+# module's package root. Each sampler defaults its ``sampling_script`` to the
+# shipped payload it was written for, so the path need not be passed in.
+_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 
 
 def update_default_args(args, default):
@@ -46,13 +47,14 @@ class LammpsSampler(Sampler):
 
     Args:
         remote_fs: FileSystemHandlerBase for the machine where sampling runs
-        sampling_script: Path to lammps_sampling.py or compatible script
         template_path: Path to jinja2 template for lammps.in file
         data_path: Path to lammps.data file with starting configuration
         element_mapping: Dict mapping atom type numbers to element symbols
         num_samples: Number of configurations to sample per generation
         uncertainty_cutoff_radius: Cutoff radius (Angstrom) for local uncertainty
         remote_lammps_executable_path: Path to LAMMPS executable on remote machine
+        sampling_script: Remote payload; defaults to the shipped
+            ``lammps/lammps_sampling.py``.
         remote_savepath: Path on remote machine for calculation files
         loop_time: Interval (seconds) to poll for job completion
     """
@@ -60,18 +62,20 @@ class LammpsSampler(Sampler):
     def __init__(
         self,
         remote_fs: FileSystemHandlerBase,
-        sampling_script: os.PathLike,
         template_path: os.PathLike,
         data_path: os.PathLike,
         element_mapping: dict,
         num_samples: int,
         uncertainty_cutoff_radius: float,
         remote_lammps_executable_path: os.PathLike,
+        sampling_script: Optional[os.PathLike] = None,
         remote_savepath: Optional[os.PathLike] = None,
         loop_time: float = 30,
         stub: bool = False,
     ):
         super().__init__()
+        if sampling_script is None:
+            sampling_script = _SCRIPTS_DIR / "lammps" / "lammps_sampling.py"
         self.remote_fs = remote_fs
         self.sampling_script = sampling_script
         self.template_path = template_path
@@ -203,6 +207,12 @@ class LammpsSampler(Sampler):
         else:
             # Run actual LAMMPS sampling
             self.sampling_task.submit()
+            if not self.sampling_task.finish_check():
+                raise WorkflowError(
+                    "LAMMPS sampling did not finish successfully "
+                    "(no is_finished.info marker). Check the job logs in "
+                    f"{self.sampling_task.calcdir}."
+                )
             self.sampling_task.collect_results()
             output_path = (
                 Path(self.sampling_task.local_savepath) / "out/samples.xyz"
@@ -223,8 +233,9 @@ class CMAESSampler(Sampler):
     Args:
         remote_fs: FileSystemHandlerBase for the machine where sampling runs
         cluster_config: ClusterConfig with partition, conda env, template settings
-        sampling_script: Path to cmaes_sampling.py or compatible script
         founder_path: Path to founder POSCAR structure file
+        sampling_script: Remote payload; defaults to the shipped
+            ``clinamen2/cmaes_sampling.py``.
         label: Run label for the evolution
         generations: Number of CMA-ES generations to run
         step_size: Initial CMA-ES step size
@@ -251,8 +262,8 @@ class CMAESSampler(Sampler):
         self,
         remote_fs: FileSystemHandlerBase,
         cluster_config: ClusterConfig,
-        sampling_script: os.PathLike,
         founder_path: os.PathLike,
+        sampling_script: Optional[os.PathLike] = None,
         label: str = "cmaes_run",
         generations: int = 1000,
         step_size: float = 0.12,
@@ -276,6 +287,8 @@ class CMAESSampler(Sampler):
         opt_optimizer: str = "FIRE",
     ):
         super().__init__()
+        if sampling_script is None:
+            sampling_script = _SCRIPTS_DIR / "clinamen2" / "cmaes_sampling.py"
         self.remote_fs = remote_fs
         self.cluster_config = cluster_config
         self.sampling_script = sampling_script
@@ -416,6 +429,12 @@ class CMAESSampler(Sampler):
             ase.io.write(output_path, sampled_configs)
         else:
             self.sampling_task.submit()
+            if not self.sampling_task.finish_check():
+                raise WorkflowError(
+                    "CMA-ES sampling did not finish successfully "
+                    "(no is_finished.info marker). Check the job logs in "
+                    f"{self.sampling_task.calcdir}."
+                )
             self.sampling_task.collect_results()
             output_path = self.results_dir / self.label
 
@@ -442,8 +461,8 @@ class BatchCMAESSampler(CMAESSampler):
         batch_size: int,
         remote_fs: FileSystemHandlerBase,
         cluster_config: ClusterConfig,
-        sampling_script: os.PathLike,
         founder_path: os.PathLike,
+        sampling_script: Optional[os.PathLike] = None,
         label: str = "cmaes_run",
         generations: int = 1000,
         step_size: float = 0.12,
@@ -469,8 +488,8 @@ class BatchCMAESSampler(CMAESSampler):
         super().__init__(
             remote_fs,
             cluster_config,
-            sampling_script,
             founder_path,
+            sampling_script,
             label,
             generations,
             step_size,
@@ -559,6 +578,12 @@ class BatchCMAESSampler(CMAESSampler):
         for run_idx, task in enumerate(self.sampling_tasks):
             label = f"{self.label}_{run_idx}"
             task.submit()
+            if not task.finish_check():
+                raise WorkflowError(
+                    f"CMA-ES evolution {run_idx} did not finish successfully "
+                    "(no is_finished.info marker). Check the job logs in "
+                    f"{task.calcdir}."
+                )
             task.collect_results()
 
             results_dir = Path(task.local_savepath)
@@ -577,317 +602,6 @@ class BatchCMAESSampler(CMAESSampler):
 
         logger.info(f"Batch CMA-ES completed {len(output_paths)} evolutions")
         return output_paths
-
-
-class NSTrajectorySampler(Sampler):
-    """
-    Sampler using Nested Sampling with JAXNEST.
-
-    Performs nested sampling runs to explore configuration space with uncertainty quantification.
-    Supports stub mode for testing without actual NS execution.
-
-    Args:
-        sampling_script: Path to JAXNEST executable on remote machine
-        remote_fs: FileSystemHandlerBase for the machine where sampling runs
-        initial_input_file: Path to NS input file
-        n_gpu_parallel: Number of GPUs to use in parallel
-        sample_size: Total number of configurations to sample
-        resample_size: Number of configs to resample based on uncertainty (optional)
-        remote_savepath: Path on remote machine for calculation files
-        loop_time: Interval (seconds) to poll for job completion
-        energy_uncty_weight: Weight for energy uncertainty in resampling
-        force_uncty_weight: Weight for force uncertainty in resampling
-        optimize_traj: Optional trajectory optimization function
-        optimize_walkers: Optional walker optimization function
-    """
-
-    def __init__(
-        self,
-        remote_fs: FileSystemHandlerBase,
-        cluster_config: ClusterConfig,
-        sampling_script: os.PathLike,
-        initial_input_file: os.PathLike,
-        n_gpu_parallel: int,
-        sample_size: int = 100,
-        resample_size: Optional[int] = None,
-        energy_uncty_weight: float = 1.0,
-        force_uncty_weight: float = 1.0,
-        optimize_traj: Optional[Callable] = None,
-        optimize_walkers: Optional[Callable] = None,
-        remote_savepath: Optional[os.PathLike] = None,
-        additional_files: Optional[list[os.PathLike]] = [],
-        loop_time: float = 30,
-        stub: bool = False,
-    ):
-        super().__init__()
-        self.sampling_script = sampling_script
-        self.remote_fs = remote_fs
-        self.cluster_config = cluster_config
-        self.n_gpu_parallel = n_gpu_parallel
-        self.initial_input_file = initial_input_file
-        self.additional_files = additional_files
-        self.sample_size = sample_size
-        self.resample_size = resample_size
-        self.loop_time = loop_time
-        self.optimize_traj = optimize_traj
-        self.optimize_walkers = optimize_walkers
-        self.energy_uncty_weight = energy_uncty_weight
-        self.force_uncty_weight = force_uncty_weight
-        self.stub = stub
-        self.remote_savepath = (
-            Path(remote_savepath) if remote_savepath else None
-        )
-
-        if self.resample_size and self.resample_size > self.sample_size:
-            raise WorkflowError(
-                f"Invalid resample configuration: resample_size ({self.resample_size}) "
-                f"must be <= sample_size ({self.sample_size})"
-            )
-        if not self.stub:
-            try:
-                from jaxnest import input_parser
-            except ImportError:
-                raise DependencyError(
-                    "jaxnest",
-                    "NSTrajectorySampler requires the 'jaxnest' package. "
-                    "Install it according to the guide on the JAXNEST gitlab repo\n"
-                    "Or use stub=True for testing.",
-                )
-                # Read the initial ns.inp file
-            with open(initial_input_file, "r") as f:
-                self.ns_params = input_parser.input_str_to_dict(f.read())
-
-    def update(
-        self, calcdir: os.PathLike, model_file: os.PathLike, **kwargs
-    ) -> None:
-        """
-        Prepare sampler for a new iteration.
-
-        Args:
-            calcdir: Directory for this AL iteration
-            model_file: Path to model file for uncertainty estimation
-            **kwargs: Additional NS parameters
-        """
-        self.ns_dir = Path(calcdir) / "ns_sampler"
-        self.results_dir = self.ns_dir / "results"
-        os.makedirs(self.ns_dir, exist_ok=True)
-
-        self.model_file = model_file
-        it = str(calcdir).split("/")[-1]
-
-        # In stub mode, we don't need to create the task
-        if not self.stub:
-            try:
-                from jaxnest import input_parser
-            except ImportError:
-                raise DependencyError(
-                    "jaxnest",
-                    "NSTrajectorySampler requires the 'jaxnest' package. "
-                    "Install it according to the guide on the JAXNEST gitlab repo\n"
-                    "Or use stub=True for testing.",
-                )
-
-            self.ns_task = SingleScriptTask(
-                cluster_config=self.cluster_config,
-                n_processors=self.n_gpu_parallel,
-                script_file=self.sampling_script,
-                input_file=self.initial_input_file,
-                local_savepath=self.results_dir,
-                remote_fs=self.remote_fs,
-                logfile="ns.log",
-                remote_savepath=self.remote_savepath,
-                collect_only=False,
-                loop_time=self.loop_time,
-                jobname=f"AL_NS_{it}",
-                additional_files=self.additional_files,
-                job_type_template="body_ns.sh.j2",
-            )
-
-            # Prepare NS input file with model file path
-            model_file_remote = self.ns_task.copy_file(model_file)
-
-            with open(self.initial_input_file, "r") as f:
-                input_kwargs = input_parser.input_str_to_dict(f.read())
-
-            kwargs["pickle_file"] = str(model_file_remote)
-            update_default_args(kwargs, input_kwargs)
-            input_parser.write_ns_inputfile(
-                self.initial_input_file, input_kwargs
-            )
-
-            # Allocate data (copies input file and writes jobfile)
-            self.ns_task.allocate_data()
-
-    def _create_stub_outputs(self) -> list[Atoms]:
-        """
-        Create mock NS trajectory outputs for testing.
-
-        Generates fake NS trajectories with uncertainty information.
-
-        Returns:
-            List of Atoms objects with mock NS results
-        """
-        logger.info(f"Creating {self.sample_size} stub NS samples")
-
-        n_runs = 4  # Mock 4 parallel runs
-        samples_per_run = self.sample_size // n_runs
-
-        all_ats = []
-        for run_id in range(n_runs):
-            for sample_idx in range(samples_per_run):
-                # Create mock atomic structure
-                symbols = ["Cu"] * 16 + ["O"] * 4
-                positions = np.random.uniform(0, 8, (len(symbols), 3))
-
-                atoms = Atoms(
-                    symbols=symbols,
-                    positions=positions,
-                    cell=[8, 8, 8],
-                    pbc=True,
-                )
-
-                # Add NS-specific information
-                atoms.info["run_id"] = run_id
-                atoms.info["iter"] = np.random.randint(0, 1000)
-                atoms.info["energy_uncert"] = np.random.uniform(0.01, 0.5)
-                atoms.info["forces_uncert"] = np.random.uniform(0.1, 2.0)
-                atoms.info["log_L"] = -100 + np.random.uniform(-50, 0)
-
-                all_ats.append(atoms)
-
-        # Apply resampling if requested
-        if self.resample_size:
-            all_ats = self._resample_configs(all_ats)
-
-        return all_ats
-
-    def _resample_configs(self, all_ats: list[Atoms]) -> list[Atoms]:
-        """
-        Resample configurations based on uncertainty scores.
-
-        Args:
-            all_ats: List of all sampled configurations
-
-        Returns:
-            Resampled list of configurations
-        """
-        funcs = np.array([at.info["forces_uncert"] for at in all_ats])
-        euncs = np.array([at.info["energy_uncert"] for at in all_ats])
-
-        # Normalize uncertainties
-        funcs_norm = funcs / np.sum(funcs)
-        euncs_norm = euncs / np.sum(euncs)
-
-        # Compute weighted score
-        score = (
-            self.force_uncty_weight * funcs_norm
-            + self.energy_uncty_weight * euncs_norm
-        )
-        score = score / np.sum(score)
-
-        # Sample based on uncertainty scores
-        indices = np.arange(len(all_ats))
-        selected_inds = np.random.choice(
-            indices, self.resample_size, replace=False, p=score
-        )
-        selected_inds.sort()
-
-        resampled_ats = [all_ats[i] for i in selected_inds]
-
-        logger.info(
-            f"Resampled {len(resampled_ats)} configurations from {len(all_ats)}"
-        )
-
-        # Save resampling indices
-        if hasattr(self, "results_dir"):
-            os.makedirs(self.results_dir, exist_ok=True)
-            np.savetxt(
-                self.results_dir / "resampled_inds.csv",
-                selected_inds,
-                header="selected_indices",
-            )
-
-        return resampled_ats
-
-    def get_sampled_configs(self) -> Path:
-        """
-        Run NS sampling and collect configurations.
-
-        Returns:
-            Path to XYZ file containing sampled configurations
-        """
-        if self.stub:
-            # In stub mode, create mock outputs directly
-            logger.info("Running in stub mode - creating mock NS samples")
-            all_ats = self._create_stub_outputs()
-        else:
-            # Run actual NS
-            self.ns_task.run()
-
-            ns_output_data = self.results_dir / "output_data"
-            if not os.path.exists(ns_output_data):
-                raise WorkflowError(
-                    f"Nested sampling did not complete successfully\n"
-                    f"Missing output directory: {ns_output_data}"
-                )
-
-            # Load trajectories from NS runs
-            from remote_handler.core.utils import grep
-
-            tfiles = grep(str(ns_output_data), "traj")
-
-            n_runs = len(tfiles)
-            if n_runs == 0:
-                raise WorkflowError(
-                    f"Failed to collect trajectory files from nested sampling run\n"
-                    f"Results directory: {self.results_dir}"
-                )
-
-            n_samples = len(ase.io.read(tfiles[0], index=":"))
-            if n_samples == 0:
-                raise WorkflowError(
-                    f"Nested sampling trajectories are empty\n"
-                    f"Check NS run in: {self.results_dir}"
-                )
-
-            # Calculate sampling interval
-            sample_size_per_run = self.sample_size // n_runs
-            every = n_samples // sample_size_per_run
-            if sample_size_per_run > n_samples:
-                logger.warning(
-                    f"sample_size_per_run={sample_size_per_run} is larger than "
-                    f"n_samples={n_samples}. Taking all samples."
-                )
-                every = 1
-
-            # Optimize trajectories if requested
-            if self.optimize_traj is not None:
-                optimizer = self.optimize_traj(tfiles, self.model_file)
-                optimizer.run()
-
-            # Load and label trajectories
-            all_ats = []
-            for run_id, tfile in enumerate(tfiles):
-                ats = ase.io.read(tfile, index=f"::{every}")
-
-                for at in ats:
-                    at.info["run_id"] = run_id
-
-                all_ats.extend(ats)
-
-            # Apply resampling if requested
-            if self.resample_size is not None:
-                all_ats = self._resample_configs(all_ats)
-
-        logger.info(f"Collected {len(all_ats)} sampled configurations")
-
-        # Write sampled configurations to file for ActiveLearningHandler
-        os.makedirs(self.results_dir, exist_ok=True)
-        output_file = self.results_dir / "sampled_configs.extxyz"
-        ase.io.write(output_file, all_ats)
-        logger.info(f"Wrote sampled configurations to {output_file}")
-
-        return output_file
 
 
 def _read_trajectory_frames(traj) -> list[Atoms]:
@@ -944,10 +658,11 @@ class TorchSimSampler(Sampler):
     Args:
         remote_fs: FileSystemHandlerBase for the machine where sampling runs
         cluster_config: ClusterConfig with partition, conda env, template settings
-        sampling_script: Path to torch_sim_sampling.py or compatible script
         founder_path: Path to founder structure file (ASE-readable)
         ensemble: Ensemble type, "nvt" or "npt"
         temperatures: List of replica temperatures in K
+        sampling_script: Remote payload; defaults to the shipped
+            ``torch_sim/torch_sim_sampling.py``.
         target_temperature: Target temperature in K (required for NVT ensemble)
         model_paths: List of MACE model identifiers. Use ["foundation"] for
             the MACE-MP foundation model. A single-element list runs a
@@ -973,10 +688,10 @@ class TorchSimSampler(Sampler):
         self,
         remote_fs: FileSystemHandlerBase,
         cluster_config: ClusterConfig,
-        sampling_script: os.PathLike,
         founder_path: os.PathLike,
         ensemble: str,
         temperatures: list[float],
+        sampling_script: Optional[os.PathLike] = None,
         target_temperature: Optional[float] = None,
         model_paths: Optional[list[str]] = None,
         dt: float = 0.001,
@@ -994,6 +709,10 @@ class TorchSimSampler(Sampler):
         selector: Optional[ConfigSelector] = None,
     ):
         super().__init__()
+        if sampling_script is None:
+            sampling_script = (
+                _SCRIPTS_DIR / "torch_sim" / "torch_sim_sampling.py"
+            )
         self.remote_fs = remote_fs
         self.cluster_config = cluster_config
         self.sampling_script = sampling_script
@@ -1172,6 +891,12 @@ class TorchSimSampler(Sampler):
             ase.io.write(output_path, sampled_configs)
         else:
             self.sampling_task.submit()
+            if not self.sampling_task.finish_check():
+                raise WorkflowError(
+                    "torch_sim sampling did not finish successfully "
+                    "(no is_finished.info marker). Check the job logs in "
+                    f"{self.sampling_task.calcdir}."
+                )
             self.sampling_task.collect_results()
 
             if self.selector is not None:
@@ -1216,9 +941,9 @@ class SSPDSampler(Sampler):
     def __init__(
         self,
         remote_fs: FileSystemHandlerBase,
-        sampling_script: os.PathLike,  # SSPD_sampling.py
         data_path: os.PathLike,  # path to .xyz for starting configuration
         cluster_config: ClusterConfig,
+        sampling_script: Optional[os.PathLike] = None,
         remote_savepath: Optional[os.PathLike] = None,
         loop_time: float = 30,
         selector: Optional[ConfigSelector] = None,
@@ -1228,13 +953,24 @@ class SSPDSampler(Sampler):
         Args:
             remote_fs:FileSystemHandlerBase` for the machine on which the sampling
                 should be run
-            sampling_script: Path to SSPD_sampling.py or another compatible sampling
-                script
+            sampling_script: Remote payload; defaults to the shipped
+                ``sspd/SSPD_torch_sim_sampling.py`` when ``torch_sim`` is set,
+                else ``sspd/SSPD_sampling.py``.
             remote_savepath: Path in which files for the remote calculations are stored
             loop_time: interval (in seconds) at which to poll if the sampling slurm job
                 has finished
         """
         super().__init__()
+        if sampling_script is None:
+            sampling_script = (
+                _SCRIPTS_DIR
+                / "sspd"
+                / (
+                    "SSPD_torch_sim_sampling.py"
+                    if torch_sim
+                    else "SSPD_sampling.py"
+                )
+            )
         self.remote_fs = remote_fs
         self.sampling_script = sampling_script
         self.data_path = data_path
@@ -1255,7 +991,6 @@ class SSPDSampler(Sampler):
         self.model_files = sampler_input
         # suggestion: go over everything in kwargs and just write it in there,
         # implement defaults for each omission
-        # see the nested sampling sampler above
         if "struct" in kwargs.keys():
             self.data_path = kwargs["struct"]
         script_input = {
@@ -1303,6 +1038,12 @@ class SSPDSampler(Sampler):
 
     def get_sampled_configs(self) -> Path:
         self.sampling_task.submit()
+        if not self.sampling_task.finish_check():
+            raise WorkflowError(
+                "SSPD sampling did not finish successfully "
+                "(no is_finished.info marker). Check the job logs in "
+                f"{self.sampling_task.calcdir}."
+            )
         self.sampling_task.collect_results()
         # TODO: check possibilities with the sampler
         # would be nice to separate the "reader" functions. Or simply discontinue the support for the non torch-sim version

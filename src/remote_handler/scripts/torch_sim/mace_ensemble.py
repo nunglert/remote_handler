@@ -18,7 +18,12 @@ import torch
 import torch_sim as ts
 from torch_sim.models.interface import ModelInterface
 from torch_sim.neighbors import torchsim_nl
-from torch_sim.typing import StateDict
+
+try:
+    # torch_sim < 0.6 exported this dict-of-tensors alias.
+    from torch_sim.typing import StateDict
+except ImportError:  # torch_sim >= 0.6 dropped it; only used as a type hint.
+    StateDict = dict[str, torch.Tensor]
 
 try:
     from mace.modules.models import MACE, ScaleShiftMACE

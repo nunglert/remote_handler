@@ -2,13 +2,12 @@
 Sampler for using SSPD_torch-sim with MACE
 """
 
-from torch_SSPD.runners.MACE_runners import run_SSPD_MACE
-import ase.io
-import ase.units
-import sys
 import json
+import sys
 from pathlib import Path
-import os
+
+import ase.units
+from torch_SSPD.runners.MACE_runners import run_SSPD_MACE
 
 
 def main():
@@ -50,6 +49,11 @@ def main():
     # sampling_frequency = input_args["sampling_frequency"]
 
     # ase.io.write(samples_file, database, format="extxyz")
+
+    # Success marker checked by SingleScriptTask.finish_check on the host.
+    (calcpath / "is_finished.info").write_text(
+        "SSPD torch_sim sampling finished"
+    )
 
 
 if __name__ == "__main__":

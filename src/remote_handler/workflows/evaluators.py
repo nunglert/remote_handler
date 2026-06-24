@@ -35,18 +35,6 @@ _SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 # ``dft_<DATABASE>``; SinglePointHandler always sets DATABASE = "dft.extxyz".
 _LABELLED_FILENAME = "dft_dft.extxyz"
 
-# Historical default SLURM header for the VASP evaluator (kept verbatim for
-# backward compatibility -- note it differs from the VASPHandler default path).
-_VASP_EVAL_HEADER = (
-    "#SBATCH --time=0-02:00:00\n"
-    "module purge\n"
-    "module load vasp/6.4.2_intel\n"
-    "source /opt/intel/oneapi/setvars.sh --force\n"
-    "export VASP_PP_PATH=/home/nunglert/cellar/vasp/paw"
-)
-
-_ORCA_EVAL_HEADER = "#SBATCH --time=0-02:00:00\nmodule"
-
 
 class AseCalculatorEvaluator(GroundTruthEvaluator):
     """Single-point ground-truth evaluation with any ASE calculator.
@@ -68,8 +56,17 @@ class AseCalculatorEvaluator(GroundTruthEvaluator):
         required_fraction: Fraction of jobs that must succeed to proceed.
         n_processors: CPU cores per job.
         stub: If True, produce mock outputs without running anything.
-        slurm_header_add: Extra SLURM header lines.
+        slurm_header_add: Extra SLURM header lines (appended after any
+            cluster-declared ``environment`` setup for this calculator).
+        time_limit: SLURM ``--time`` value (e.g. ``"0-02:00:00"``) capping each
+            job. ``None`` (default) emits no ``--time``, so the job runs to the
+            partition maximum.
     """
+
+    # Key into ``ClusterConfig.environment`` for this calculator's cluster
+    # setup (modules / paths). Presets override it (e.g. VASP -> "vasp"); the
+    # generic base and pure-ASE presets (EMT) inject nothing.
+    _environment_key: Optional[str] = None
 
     def __init__(
         self,
@@ -84,6 +81,7 @@ class AseCalculatorEvaluator(GroundTruthEvaluator):
         n_processors: int = 8,
         stub: bool = False,
         slurm_header_add: str = "",
+        time_limit: Optional[str] = None,
     ):
         super().__init__()
         self.singlepoint_script = singlepoint_script
@@ -99,6 +97,7 @@ class AseCalculatorEvaluator(GroundTruthEvaluator):
         self.n_processors = n_processors
         self.stub = stub
         self.slurm_header_add = slurm_header_add
+        self.time_limit = time_limit
         self.handler = None
 
     def update(
@@ -141,6 +140,8 @@ class AseCalculatorEvaluator(GroundTruthEvaluator):
             tag="dft",
             n_processors=self.n_processors,
             slurm_header_add=self.slurm_header_add,
+            environment_key=self._environment_key,
+            time_limit=self.time_limit,
         )
 
     def get_evaluated_configs(self) -> Path:
@@ -223,10 +224,11 @@ class VASPEvaluator(AseCalculatorEvaluator):
     """VASP DFT preset of :class:`AseCalculatorEvaluator`.
 
     Args:
-        singlepoint_script: Path to ``dft_singlepoint.py`` (or compatible).
         remote_fs: Filesystem handler for the evaluation machine.
         cluster_config: Target cluster configuration.
         num_parallel: Number of parallel SLURM jobs to queue.
+        singlepoint_script: Remote payload; defaults to the shipped
+            ``dft_singlepoint.py``.
         incar_kwargs: VASP INCAR tags (optional if ``incar_config_file`` is given).
         remote_savepath: Remote path for the calculation files.
         launcher: VASP launch prefix (e.g. ``"mpirun -n"``).
@@ -234,17 +236,22 @@ class VASPEvaluator(AseCalculatorEvaluator):
         loop_time: Seconds between polls for completion.
         required_fraction: Fraction of jobs that must succeed.
         n_processors: CPU cores per VASP job.
-        slurm_header_add: Extra SLURM header lines.
+        slurm_header_add: Legacy per-call SLURM header lines. If given it takes
+            precedence over the cluster's ``environment["vasp"]`` (and emits a
+            DeprecationWarning when both are set). Prefer putting the VASP
+            module load and ``VASP_PP_PATH`` in that cluster JSON entry.
         incar_config_file: Optional path to a YAML file of INCAR tags, used instead of
             (or as a base for) ``incar_kwargs``.
     """
 
+    _environment_key = "vasp"
+
     def __init__(
         self,
-        singlepoint_script: os.PathLike,
         remote_fs: FileSystemHandlerBase,
         cluster_config: ClusterConfig,
         num_parallel: int,
+        singlepoint_script: Optional[os.PathLike] = None,
         incar_kwargs: Optional[dict] = None,
         remote_savepath: Optional[os.PathLike] = None,
         launcher: str = "mpirun -n",
@@ -252,11 +259,14 @@ class VASPEvaluator(AseCalculatorEvaluator):
         loop_time: float = 30,
         required_fraction: float = 0.5,
         n_processors: int = 8,
-        slurm_header_add: str = _VASP_EVAL_HEADER,
+        slurm_header_add: str = "",
         incar_config_file: Optional[os.PathLike] = None,
+        time_limit: Optional[str] = None,
     ):
         from remote_handler.workflows.dft_runner import resolve_incar_kwargs
 
+        if singlepoint_script is None:
+            singlepoint_script = str(_SCRIPTS_DIR / "dft_singlepoint.py")
         self.incar_kwargs = resolve_incar_kwargs(
             incar_kwargs, incar_config_file
         )
@@ -277,6 +287,7 @@ class VASPEvaluator(AseCalculatorEvaluator):
             n_processors=n_processors,
             stub=stub,
             slurm_header_add=slurm_header_add,
+            time_limit=time_limit,
         )
 
     @property
@@ -288,37 +299,45 @@ class VASPEvaluator(AseCalculatorEvaluator):
 class ORCAEvaluator(AseCalculatorEvaluator):
     """ORCA DFT preset of :class:`AseCalculatorEvaluator`.
 
-    Keeps its historical ``(singlepoint_script, cluster_config, remote_fs, ...)``
-    argument order for backward compatibility. Now also supports ``stub``.
-
     Args:
-        singlepoint_script: Path to ``orca_singlepoint.py`` (or compatible).
         cluster_config: Target cluster configuration.
         remote_fs: Filesystem handler for the evaluation machine.
         num_parallel: Number of parallel SLURM jobs to queue.
         orcasimpleinput: ORCA simple-input line (functional, basis, method).
+        singlepoint_script: Remote payload; defaults to the shipped
+            ``orca_singlepoint.py``.
         remote_savepath: Remote path for the calculation files.
         loop_time: Seconds between polls for completion.
         required_fraction: Fraction of jobs that must succeed.
         n_processors: CPU cores per ORCA job.
         orca_binary: Full path to the ORCA executable.
         stub: If True, produce mock outputs without running ORCA.
+        slurm_header_add: Legacy per-call SLURM header lines. If given it takes
+            precedence over the cluster's ``environment["orca"]`` (and emits a
+            DeprecationWarning when both are set). Prefer putting the ORCA
+            module load in that cluster JSON entry.
     """
+
+    _environment_key = "orca"
 
     def __init__(
         self,
-        singlepoint_script: os.PathLike,
         cluster_config: ClusterConfig,
         remote_fs: FileSystemHandlerBase,
         num_parallel: int,
         orcasimpleinput: str,
+        singlepoint_script: Optional[os.PathLike] = None,
         remote_savepath: Optional[os.PathLike] = None,
         loop_time: float = 30,
         required_fraction: float = 0.8,
         n_processors: int = 2,
         orca_binary: str = "/opt/ohpc/pub/dft/orca_6_1_0/orca",
         stub: bool = False,
+        slurm_header_add: str = "",
+        time_limit: Optional[str] = None,
     ):
+        if singlepoint_script is None:
+            singlepoint_script = str(_SCRIPTS_DIR / "orca_singlepoint.py")
         self.orcasimpleinput = orcasimpleinput
         calc_config = {
             "orcasimpleinput": orcasimpleinput,
@@ -336,7 +355,8 @@ class ORCAEvaluator(AseCalculatorEvaluator):
             required_fraction=required_fraction,
             n_processors=n_processors,
             stub=stub,
-            slurm_header_add=_ORCA_EVAL_HEADER,
+            slurm_header_add=slurm_header_add,
+            time_limit=time_limit,
         )
 
     @property
@@ -381,6 +401,7 @@ class EMTEvaluator(AseCalculatorEvaluator):
         n_processors: int = 1,
         stub: bool = False,
         slurm_header_add: str = "",
+        time_limit: Optional[str] = None,
     ):
         if singlepoint_script is None:
             singlepoint_script = str(_SCRIPTS_DIR / "ase_singlepoint.py")
@@ -400,4 +421,5 @@ class EMTEvaluator(AseCalculatorEvaluator):
             n_processors=n_processors,
             stub=stub,
             slurm_header_add=slurm_header_add,
+            time_limit=time_limit,
         )

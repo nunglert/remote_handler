@@ -117,3 +117,6 @@ for i, at in enumerate(final_atoms):
     at.info["ensemble"] = input_config.ensemble
 
 ase.io.write(out_dir / "samples.extxyz", final_atoms)
+
+# Success marker checked by SingleScriptTask.finish_check on the host.
+(calcpath / "is_finished.info").write_text("torch_sim sampling finished")

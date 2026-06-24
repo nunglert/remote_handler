@@ -140,3 +140,52 @@ def test_header_template_missing_path_errors():
             header_template="/no/such/dir/custom.sh.j2",
             job_type_template="body_single.sh.j2",
         )
+
+
+def _single(time_limit, header=HEADER):
+    return get_slurm_str(
+        input_file="i.json",
+        python_script_path="s.py",
+        jobname="j",
+        partition="p",
+        n_cores=2,
+        conda_env="env",
+        conda_source="/home/u/miniconda3",
+        header_template=header,
+        job_type_template="body_single.sh.j2",
+        time_limit=time_limit,
+    )
+
+
+def _array(time_limit, header=HEADER):
+    return get_array_slurm_str(
+        calcdir="/remote/calc",
+        python_script_path="/remote/script.py",
+        num_array_tasks=2,
+        conda_env="env",
+        conda_source="/home/u/miniconda3",
+        header_template=header,
+        job_type_template="body_array.sh.j2",
+        time_limit=time_limit,
+    )
+
+
+def test_time_limit_renders_directive_when_set():
+    assert "#SBATCH --time=0-02:00:00" in _single("0-02:00:00")
+    assert "#SBATCH --time=0-02:00:00" in _array("0-02:00:00")
+
+
+def test_no_time_limit_emits_no_directive():
+    # The default: no --time line at all, so the job runs to the partition max.
+    assert "--time" not in _single(None)
+    assert "--time" not in _array(None)
+
+
+@pytest.mark.parametrize(
+    "header", ["dirona.sh.j2", "datalab.sh.j2", "musica.sh.j2"]
+)
+def test_time_limit_uniform_across_templates(header):
+    # No shipped template hardcodes a --time anymore; it is driven solely by
+    # the parameter, consistently across all of them.
+    assert "--time" not in _array(None, header=header)
+    assert "#SBATCH --time=1-00:00:00" in _array("1-00:00:00", header=header)

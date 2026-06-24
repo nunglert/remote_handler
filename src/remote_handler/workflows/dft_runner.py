@@ -14,6 +14,7 @@ config and default remote script. Their public signatures are unchanged.
 
 import logging
 import os
+import warnings
 from copy import deepcopy
 from pathlib import Path
 from typing import Optional, Union
@@ -46,13 +47,63 @@ _DEFAULT_INCAR_KWARGS = {
     "kspacing": 0.3,
 }
 
-_DEFAULT_VASP_HEADER = (
-    "#SBATCH --time=0-02:00:00\n"
-    "module purge\n"
-    "module load vasp/6.4.2_intel\n"
-    "source /opt/intel/oneapi/setvars.sh --force\n"
-    "export VASP_PP_PATH=/home/aserafini/cellar/vasp/paw"
-)
+
+def _resolve_environment_header(
+    cluster_config, environment_key, slurm_header_add
+):
+    """Resolve the SLURM header lines for an application on a cluster.
+
+    The cluster declares *how* an application is set up on it (modules, env
+    scripts, paths) under ``ClusterConfig.environment[<key>]`` -- that is the
+    supported home for this setup. ``slurm_header_add`` is the legacy per-call
+    knob, kept for backward compatibility.
+
+    The two are **alternatives, never combined** (so setup is never
+    duplicated), with this precedence:
+
+    * ``slurm_header_add`` given -> it wins, verbatim. Existing callers that
+      pass a header keep their exact behaviour. If the cluster *also* declares
+      ``environment[key]``, that entry is ignored and a ``DeprecationWarning``
+      is emitted -- move the setup into ``environment`` and drop the header.
+    * only ``environment[key]`` -> the cluster's setup (the preferred way).
+    * neither -> ``""`` plus a warning that nothing is configured for this app.
+    """
+    if not environment_key:
+        return slurm_header_add
+    env_setup = (getattr(cluster_config, "environment", {}) or {}).get(
+        environment_key, ""
+    )
+    machine = getattr(cluster_config, "remote_machine", "?")
+
+    if slurm_header_add:
+        if env_setup:
+            warnings.warn(
+                f"Both a slurm_header_add and "
+                f"ClusterConfig.environment['{environment_key}'] are set for "
+                f"cluster '{machine}'. slurm_header_add takes precedence and "
+                "the environment entry is ignored (so the two are never "
+                f"combined). Move the '{environment_key}' setup into the "
+                "cluster's environment map and stop passing slurm_header_add; "
+                "supplying both is deprecated.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return slurm_header_add
+
+    if env_setup:
+        return env_setup
+
+    logger.warning(
+        "No '%s' environment configured for cluster '%s' (and no "
+        "slurm_header_add given); the job may not find %s on the remote. "
+        "Add an 'environment' entry to the cluster JSON, e.g. "
+        '{"environment": {"%s": "module load ..."}}.',
+        environment_key,
+        machine,
+        environment_key,
+        environment_key,
+    )
+    return ""
 
 
 def resolve_incar_kwargs(incar_kwargs=None, incar_config_file=None) -> dict:
@@ -104,7 +155,16 @@ class SinglePointHandler(RemoteAtomsHandler):
         collect_only: If True, only collect results (no submission).
         tag: Tag prepended to collected trajectory filenames.
         n_processors: Processors requested per job.
-        slurm_header_add: Extra SLURM header lines.
+        slurm_header_add: Legacy per-call SLURM header lines. If given, it
+            takes precedence over the cluster's ``environment[environment_key]``
+            (a ``DeprecationWarning`` fires when both are set); the two are
+            never combined.
+        environment_key: Key into ``cluster_config.environment`` for this
+            application's cluster setup (e.g. ``"vasp"``). ``None`` injects
+            nothing -- the historical behaviour.
+        time_limit: SLURM ``--time`` value (e.g. ``"0-02:00:00"``) to cap each
+            job -- useful to kill hanging DFT runs. ``None`` (default) emits no
+            ``--time`` directive, so the job runs to the partition maximum.
     """
 
     def __init__(
@@ -127,7 +187,12 @@ class SinglePointHandler(RemoteAtomsHandler):
         tag: str = "dft",
         n_processors: int = 8,
         slurm_header_add: str = "",
+        environment_key: Optional[str] = None,
+        time_limit: Optional[str] = None,
     ):
+        slurm_header_add = _resolve_environment_header(
+            cluster_config, environment_key, slurm_header_add
+        )
         super().__init__(
             traj_files,
             cluster_config,
@@ -146,6 +211,7 @@ class SinglePointHandler(RemoteAtomsHandler):
             tag,
             n_processors,
             slurm_header_add=slurm_header_add,
+            time_limit=time_limit,
         )
 
         self.logger = tasks.SimpleLogger(logfile)
@@ -261,11 +327,12 @@ class VASPHandler(SinglePointHandler):
         python_script_path: Optional[str] = None,
         stub: bool = False,
         launcher: str = "mpiexec -np",
-        slurm_header_add: str = _DEFAULT_VASP_HEADER,
+        slurm_header_add: str = "",
         vasp_binary: str = "vasp_std",
         n_processors: int = 8,
         incar_kwargs: Optional[dict] = None,
         incar_config_file: Optional[os.PathLike] = None,
+        time_limit: Optional[str] = None,
     ):
         incar_kwargs = resolve_incar_kwargs(incar_kwargs, incar_config_file)
         if python_script_path is None:
@@ -295,6 +362,8 @@ class VASPHandler(SinglePointHandler):
             tag=tag,
             n_processors=n_processors,
             slurm_header_add=slurm_header_add,
+            environment_key="vasp",
+            time_limit=time_limit,
         )
 
 
@@ -347,10 +416,11 @@ class ORCAHandler(SinglePointHandler):
         collect_only: bool = False,
         tag: str = "orca",
         python_script_path: Optional[str] = None,
-        slurm_header_add: str = "#SBATCH --time=0-02:00:00\nmodule",
+        slurm_header_add: str = "",
         orca_binary: str = "/opt/ohpc/pub/dft/orca_6_1_0/orca",
         n_processors: int = 8,
         orcasimpleinput: str = "wB97X 6-31G(d) ENGRAD",
+        time_limit: Optional[str] = None,
     ):
         if python_script_path is None:
             python_script_path = str(_SCRIPTS_DIR / "orca_singlepoint.py")
@@ -380,4 +450,6 @@ class ORCAHandler(SinglePointHandler):
             tag=tag,
             n_processors=n_processors,
             slurm_header_add=slurm_header_add,
+            environment_key="orca",
+            time_limit=time_limit,
         )

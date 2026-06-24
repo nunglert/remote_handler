@@ -2,18 +2,16 @@ import logging
 import os
 import random
 import string
-import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 from remote_handler.core import executors, file_handler, file_utils, remote_env
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import (
     FileSystemHandlerBase,
     LocalFileSystem,
-    RemoteFileSystem,
 )
 from remote_handler.core.file_utils import tag_path
 from remote_handler.core.utils import SimpleLogger
@@ -281,6 +279,7 @@ class SingleScriptTask(RemoteTask):
         n_processors: int = 2,
         jobfile_name: str = "run_slurm.sh",
         job_type_template: os.PathLike = "body_single.sh.j2",
+        time_limit: Optional[str] = None,
     ):
         # If no remote_savepath is provided, fall back to the savepath from
         # the cluster_config
@@ -325,6 +324,7 @@ class SingleScriptTask(RemoteTask):
             jobfile_name=jobfile_name,
             loop_time=loop_time,
             job_type_template=job_type_template,
+            time_limit=time_limit,
         )
         # Back-compat alias: external callers (e.g. RemoteAtomsHandler) still
         # reference ``.slurm_handler``. Same object as ``.executor``.
@@ -746,6 +746,7 @@ class ArrayScriptTask(RemoteTask):
         n_processors: int = 2,
         jobfile_name: str = "run_slurm.sh",
         slurm_header_add: str = "",
+        time_limit: Optional[str] = None,
     ):
         if individual_ressources:
             # Save the number of individual jobs in the array
@@ -791,6 +792,7 @@ class ArrayScriptTask(RemoteTask):
             loop_time=loop_time,
             num_parallel=num_parallel,
             job_type_template="body_array.sh.j2",
+            time_limit=time_limit,
         )
         # Back-compat alias (see SingleScriptTask). Same object as ``.executor``.
         self.slurm_handler = self.executor

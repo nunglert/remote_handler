@@ -69,6 +69,14 @@ def mace_freeze_available() -> bool:
         return False
 
 
+def clinamen_available() -> bool:
+    """True if the Clinamen2 package is importable (``.[clinamen]``)."""
+    try:
+        return importlib.util.find_spec("clinamen2") is not None
+    except Exception:
+        return False
+
+
 def mace_jax_available() -> bool:
     """True if both stacks for torch->mace-jax conversion are importable.
 
