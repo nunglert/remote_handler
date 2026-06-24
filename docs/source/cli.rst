@@ -33,8 +33,8 @@ Overview
      - List the registered SLURM templates and their file paths.
    * - ``remote_handler show clusters``
      - List the registered cluster configs and their file paths.
-   * - ``remote_handler show extras``
-     - Probe which optional dependency groups are actually importable.
+   * - ``remote_handler show extras [MACHINE ...]``
+     - Probe importable extras — locally, or per machine (``local`` / clusters).
    * - ``remote_handler --version``
      - Print the package version.
 
@@ -273,3 +273,32 @@ than the other listings. Importing is also the only way to tell the stock
 ``mace`` distribution apart from the ``mace_freeze`` fork, which share a
 distribution name. A ``[ ]`` line names the module(s) that failed to import, so
 you can see exactly which piece is absent.
+
+Probing other machines
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Pass one or more **targets** — ``local`` and/or registered cluster names — to
+compare what is installed *where*. Each cluster is probed over SSH inside its
+conda env (the host needs no ML stacks for the remote columns), and any binary
+applications declared in the cluster's ``environment`` map (e.g. ``vasp``) are
+checked on ``PATH`` after their setup runs:
+
+.. code-block:: bash
+
+   $ remote_handler show extras local lugus musica
+   extra        local  lugus  musica
+   ---------------------------------
+   mace           ✓      ✓      ✓
+   mace_jax       ✗      ✓      ✗
+   torch_sim      ✓      ✓      ✓
+   ---------------------------------
+   vasp           ✗      ✓      —
+
+``✓`` available, ``✗`` not available, ``?`` machine unreachable, ``—`` the
+binary is not configured on that cluster (no ``environment`` entry, so the tool
+will not guess how to set it up). ``local`` has no ``environment`` map, so its
+binary cells reflect the **current** local ``PATH`` (``shutil.which``) — which
+is exactly right when ``local`` is itself a cluster node with modules loaded.
+On a cluster, the app's ``environment`` setup is run first (in a login shell,
+so ``module load`` works) before checking the binary. The command exits
+non-zero if any requested machine could not be reached.

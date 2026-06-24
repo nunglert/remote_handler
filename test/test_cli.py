@@ -391,3 +391,108 @@ def test_show_extras_probes_imports(capsys, monkeypatch):
     assert "[ ] mace_freeze  (missing: mace.tools.freeze)" in out
     # A plain (non-fork) extra resolves.
     assert "[x] dev" in out
+
+
+# --------------------------------------------------------------------------
+# show extras: remote / multi-machine
+# --------------------------------------------------------------------------
+from collections import namedtuple  # noqa: E402
+
+_CR = namedtuple("CR", ["returncode", "stdout", "stderr"])
+
+
+class _FakeFS:
+    """Records commands and returns a canned ``run_command`` result."""
+
+    def __init__(self, stdout):
+        self._stdout = stdout
+        self.commands = []
+
+    def run_command(self, command):
+        self.commands.append(command)
+        return _CR(0, self._stdout, "")
+
+
+class _FakeCC:
+    conda_source = "/opt/conda/bin/activate"
+    conda_env = "rh"
+    remote_machine = "lugus"
+    environment = {
+        "vasp": "module load vasp/6.4.2_intel\nexport VASP_PP_PATH=/p",
+    }
+
+
+def test_probe_extras_remote_parses_json():
+    fs = _FakeFS('noise\nRH_EXTRAS:{"mace": true, "mace_jax": false}\n')
+    result = cli._probe_extras_remote(fs, _FakeCC())
+    assert result == {"mace": True, "mace_jax": False}
+    # The probe runs python in the remote conda env via a heredoc.
+    assert "RH_PY" in fs.commands[0]
+
+
+def test_probe_binaries_remote_uses_login_shell():
+    fs = _FakeFS("vasp=yes\n")
+    result = cli._probe_binaries_remote(fs, _FakeCC())
+    assert result == {"vasp": True}
+    # ``module`` needs a login shell, and the env setup must be sourced.
+    assert "bash -l" in fs.commands[0]
+    assert "module load vasp/6.4.2_intel" in fs.commands[0]
+
+
+def test_probe_binaries_local_uses_which(monkeypatch):
+    import shutil
+
+    monkeypatch.setattr(
+        shutil, "which", lambda b: "/usr/bin/" + b if b == "vasp_std" else None
+    )
+    result = cli._probe_binaries_local()
+    assert result["vasp"] is True  # vasp_std resolved on PATH
+    assert result["orca"] is False  # orca not found
+
+
+def test_local_probe_includes_binaries(monkeypatch):
+    # `local` is just another machine: it must report binaries, not skip them.
+    import shutil
+
+    monkeypatch.setattr(cli, "_probe_extras_local", lambda: {"mace": True})
+    monkeypatch.setattr(shutil, "which", lambda b: None)
+    status = cli._probe_machine("local")
+    assert "vasp" in status and status["vasp"] is False
+    assert "mace" in status
+
+
+def test_probe_binaries_remote_empty_when_no_environment():
+    class _NoEnv(_FakeCC):
+        environment = {}
+
+    fs = _FakeFS("")
+    assert cli._probe_binaries_remote(fs, _NoEnv()) == {}
+    assert fs.commands == []  # nothing to probe -> no SSH call
+
+
+def test_show_extras_table_renders_grid(capsys, monkeypatch):
+    canned = {
+        "local": {"mace": True, "mace_jax": False},
+        "lugus": {"mace": True, "mace_jax": True, "vasp": True},
+        "down": None,
+    }
+    monkeypatch.setattr(cli, "_probe_machine", lambda t: canned[t])
+    rc = cli._show_extras_table(["local", "lugus", "down"])
+    out = capsys.readouterr().out
+
+    # Header lists the machine columns in order.
+    assert "local" in out and "lugus" in out and "down" in out
+    # Cells: present / absent / unreachable.
+    assert "✓" in out and "✗" in out and "?" in out
+    # vasp is a binary-app row: applicable on lugus, n/a (—) on local.
+    assert "vasp" in out and "—" in out
+    # One machine was unreachable -> non-zero exit.
+    assert rc == 1
+
+
+def test_show_extras_table_all_ok_returns_zero(capsys, monkeypatch):
+    monkeypatch.setattr(
+        cli, "_probe_machine", lambda t: {"mace": True, "mace_jax": False}
+    )
+    rc = cli._show_extras_table(["local", "lugus"])
+    assert rc == 0

@@ -8,10 +8,11 @@ Subcommands:
   show [--json]          print the resolved configuration
   show templates         list registered SLURM templates + paths
   show clusters          list registered cluster configs + paths
-  show extras            probe which optional extras are installed
+  show extras [M ...]    probe extras locally, or per-machine (local/clusters)
 
 Light imports only at module load; ``show extras`` imports the ML stacks
-lazily, inside the command. Interactive prompts live in ``cli_prompts``.
+(local probe) or paramiko (remote probe) lazily, inside the command.
+Interactive prompts live in ``cli_prompts``.
 """
 
 import argparse
@@ -487,30 +488,53 @@ _EXTRA_IMPORTS: dict[str, list[str]] = {
     "mace_jax": ["mace_jax"],
 }
 
+# External (non-Python) applications a cluster sets up via its
+# ``ClusterConfig.environment[<key>]`` entry, mapped to the launch binary to
+# look for after that setup. Probed by checking the binary is on PATH (a
+# ``command -v`` after the module loads) -- presence is the signal we need.
+_BINARY_PROBES: dict[str, str] = {
+    "vasp": "vasp_std",
+    "orca": "orca",
+}
 
-def cmd_show_extras(args: argparse.Namespace) -> int:
-    """Probe which optional extras are usable in this environment.
 
-    Unlike the other ``show`` commands, this *actually imports* each extra's
-    key modules -- so it reports what genuinely works (and distinguishes the
-    mace-freeze fork from stock mace, which share a distribution). That loads
-    torch / jax / ..., so it is deliberately slower than the other commands.
-    """
-    import importlib
+def _declared_extras() -> set:
+    """The optional-dependency groups declared in this package's metadata."""
     import importlib.metadata as md
-    import warnings
 
-    declared = {
+    return {
         e.replace("-", "_")
         for e in (
             md.metadata("remote_handler").get_all("Provides-Extra") or []
         )
     }
 
+
+def cmd_show_extras(args: argparse.Namespace) -> int:
+    """Probe which optional extras / applications are usable on a machine.
+
+    With no target, probes the **local** environment (imports each extra's
+    modules). With one or more targets (``local`` and/or registered cluster
+    names) it prints a machine-by-machine table -- each cluster is probed over
+    SSH inside its conda env, and any binary applications declared in the
+    cluster's ``environment`` map (e.g. ``vasp``) are checked on PATH after
+    their setup runs.
+    """
+    targets = getattr(args, "targets", None) or []
+    if not targets:
+        return _show_extras_local()
+    return _show_extras_table(targets)
+
+
+def _show_extras_local() -> int:
+    """Single-machine view: import each extra's modules in this process."""
+    import importlib
+    import warnings
+
     print(
         "Probing optional extras (imports torch / jax / ...; may be slow):\n"
     )
-    for extra in sorted(declared):
+    for extra in sorted(_declared_extras()):
         modules = _EXTRA_IMPORTS.get(extra)
         if modules is None:
             print(f"  [??] {extra}  (no probe defined)")
@@ -527,7 +551,200 @@ def cmd_show_extras(args: argparse.Namespace) -> int:
             print(f"  [ ] {extra}  (missing: {', '.join(missing)})")
         else:
             print(f"  [x] {extra}")
+
+    binaries = _probe_binaries_local()
+    if binaries:
+        print()
+        for app in sorted(binaries):
+            binary = _BINARY_PROBES[app]
+            mark = "x" if binaries[app] else " "
+            where = "on PATH" if binaries[app] else "not on PATH"
+            print(f"  [{mark}] {app}  ({binary} {where})")
     return 0
+
+
+def _probe_extras_local() -> dict:
+    """Map each extra -> importable? in this process."""
+    import importlib
+    import warnings
+
+    result = {}
+    for extra, modules in _EXTRA_IMPORTS.items():
+        ok = True
+        for module in modules:
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    importlib.import_module(module)
+            except Exception:  # noqa: BLE001
+                ok = False
+                break
+        result[extra] = ok
+    return result
+
+
+def _remote_extras_snippet() -> str:
+    """A python script (for ``python - <<EOF``) that import-probes the extras
+    and prints ``RH_EXTRAS:{json}`` -- run inside the remote conda env."""
+    return (
+        "import importlib, json, warnings\n"
+        f"mods = {_EXTRA_IMPORTS!r}\n"
+        "res = {}\n"
+        "for _x, _ms in mods.items():\n"
+        "    _ok = True\n"
+        "    for _m in _ms:\n"
+        "        try:\n"
+        "            with warnings.catch_warnings():\n"
+        "                warnings.simplefilter('ignore')\n"
+        "                importlib.import_module(_m)\n"
+        "        except Exception:\n"
+        "            _ok = False\n"
+        "            break\n"
+        "    res[_x] = _ok\n"
+        "print('RH_EXTRAS:' + json.dumps(res))\n"
+    )
+
+
+def _probe_extras_remote(remote_fs, cluster_config) -> dict:
+    """Import-probe the extras in a cluster's conda env over SSH."""
+    import json
+
+    from remote_handler.core import remote_env
+
+    activation = remote_env.conda_activation_script(
+        cluster_config.conda_source, cluster_config.conda_env
+    )
+    cmd = (
+        f"{activation}\n"
+        f"python - <<'RH_PY'\n{_remote_extras_snippet()}RH_PY\n"
+    )
+    result = remote_fs.run_command(cmd)
+    for line in (result.stdout or "").splitlines():
+        if line.startswith("RH_EXTRAS:"):
+            return json.loads(line[len("RH_EXTRAS:") :])
+    raise RuntimeError("remote extras probe returned no parseable result")
+
+
+def _probe_binaries_local() -> dict:
+    """Map each known binary app -> on PATH locally?
+
+    There is no ``environment`` setup to source for ``local``, so this reflects
+    the *current* local PATH -- which is exactly right when ``local`` is itself
+    a cluster node where the modules are already loaded.
+    """
+    import shutil
+
+    return {
+        app: shutil.which(binary) is not None
+        for app, binary in _BINARY_PROBES.items()
+    }
+
+
+def _probe_binaries_remote(remote_fs, cluster_config) -> dict:
+    """For each binary app declared in the cluster's ``environment`` map, run
+    its setup (in a login shell, so ``module`` works) and check the launch
+    binary is on PATH. Returns ``{app: bool}``."""
+    environment = getattr(cluster_config, "environment", {}) or {}
+    apps = [(a, b) for a, b in _BINARY_PROBES.items() if a in environment]
+    if not apps:
+        return {}
+    lines = ["bash -l <<'RH_BIN'"]
+    for app, binary in apps:
+        lines.append(f"( {environment[app]}")
+        lines.append(
+            f"command -v {binary} >/dev/null 2>&1 "
+            f"&& echo {app}=yes || echo {app}=no )"
+        )
+    lines.append("RH_BIN")
+    result = remote_fs.run_command("\n".join(lines) + "\n")
+    keys = {a for a, _ in apps}
+    out = {}
+    for line in (result.stdout or "").splitlines():
+        key, sep, val = line.partition("=")
+        if sep and key.strip() in keys:
+            out[key.strip()] = val.strip() == "yes"
+    return out
+
+
+def _probe_machine(target: str):
+    """Probe one target. Returns a ``{row: bool}`` dict, or ``None`` if the
+    machine could not be reached/resolved (its column renders as unknown)."""
+    if target == "local":
+        status = _probe_extras_local()
+        status.update(_probe_binaries_local())
+        return status
+
+    from remote_handler.core.cluster_handler import ClusterConfig
+    from remote_handler.core.file_handler import RemoteFileSystem
+
+    try:
+        cc = ClusterConfig.from_name(target)
+        remote_fs = RemoteFileSystem(remote_alias=cc.remote_machine)
+    except Exception as exc:  # noqa: BLE001 - unresolved/unreachable cluster
+        print(f"[WARN] {target}: cannot connect ({exc})", file=sys.stderr)
+        return None
+    try:
+        status = _probe_extras_remote(remote_fs, cc)
+        status.update(_probe_binaries_remote(remote_fs, cc))
+        return status
+    except Exception as exc:  # noqa: BLE001 - probe failure
+        print(f"[WARN] {target}: probe failed ({exc})", file=sys.stderr)
+        return None
+
+
+def _show_extras_table(targets) -> int:
+    """Probe each target and render a machine-by-machine availability table."""
+    print(f"Probing {', '.join(targets)} (SSH per cluster; may be slow):\n")
+    columns = [(t, _probe_machine(t)) for t in targets]
+
+    extra_rows = sorted(_declared_extras())
+    # Binary-app rows: only those that surfaced on at least one machine.
+    binary_rows = sorted(
+        {
+            app
+            for _, status in columns
+            if status
+            for app in status
+            if app in _BINARY_PROBES
+        }
+    )
+
+    def cell(status, row):
+        if status is None:
+            return "?"
+        if row not in status:
+            return "—"  # em dash: not applicable on this machine
+        return "✓" if status[row] else "✗"  # check / cross
+
+    label_w = max([len("extra")] + [len(r) for r in extra_rows + binary_rows])
+    col_w = {t: max(len(t), 3) for t, _ in columns}
+
+    header = (
+        "extra".ljust(label_w)
+        + "  "
+        + "  ".join(t.center(col_w[t]) for t, _ in columns)
+    )
+    print(header)
+    print("-" * len(header))
+
+    def emit(rows):
+        for row in rows:
+            line = (
+                row.ljust(label_w)
+                + "  "
+                + "  ".join(
+                    cell(status, row).center(col_w[t]) for t, status in columns
+                )
+            )
+            print(line)
+
+    emit(extra_rows)
+    if binary_rows:
+        print("-" * len(header))
+        emit(binary_rows)
+
+    # Non-zero if any requested machine could not be probed (scriptable).
+    return 0 if all(status is not None for _, status in columns) else 1
 
 
 def cmd_show_clusters(args: argparse.Namespace) -> int:
@@ -614,8 +831,16 @@ def _build_parser() -> argparse.ArgumentParser:
     show_sub.add_parser(
         "clusters", help="list registered cluster configs + their paths"
     )
-    show_sub.add_parser(
+    p_extras = show_sub.add_parser(
         "extras", help="probe which optional extras are installed"
+    )
+    p_extras.add_argument(
+        "targets",
+        nargs="*",
+        help=(
+            "machines to probe: 'local' and/or registered cluster names "
+            "(none = local only; multiple = comparison table)"
+        ),
     )
     return parser
 
