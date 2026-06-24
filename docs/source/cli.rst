@@ -108,6 +108,33 @@ Re-running against an existing file pre-fills the answers and asks before
 overwriting. Defaults for ``partition``, ``conda_env`` and ``conda_source``
 come from the global configuration.
 
+Two optional fields are not prompted for -- add them to the JSON by hand:
+
+* ``executor`` -- ``"slurm"`` (default) or ``"direct"`` (scheduler-free).
+* ``environment`` -- a map of *application* name to the shell lines that set
+  that application up **on this cluster** (module loads, ``source`` of an env
+  script, ``export`` of paths). This is where cluster- and site-specific DFT
+  setup belongs, instead of being hardcoded in an actor. Actors that need it
+  look up their key -- ``VASPEvaluator`` uses ``"vasp"``, ``ORCAEvaluator``
+  uses ``"orca"``. This is the supported home for the setup; the legacy
+  per-call ``slurm_header_add`` still works and **takes precedence** when both
+  are given:
+
+  .. code-block:: json
+
+     {
+       "remote_machine": "lugus",
+       "partition": "normal",
+       "conda_env": "remote_handler",
+       "conda_source": "/home/me/miniconda3/bin/activate",
+       "savepath": "/home/me/dump/remote_handler",
+       "template": "dirona.sh.j2",
+       "environment": {
+         "vasp": "module purge\nmodule load vasp/6.4.2_intel\nsource /opt/intel/oneapi/setvars.sh --force\nexport VASP_PP_PATH=/home/me/cellar/vasp/paw",
+         "orca": "module load orca/6.1.0"
+       }
+     }
+
 ``configure`` (global)
 ----------------------
 

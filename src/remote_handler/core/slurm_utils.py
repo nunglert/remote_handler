@@ -257,6 +257,7 @@ def get_array_slurm_str(
     job_type_template="body_array.sh.j2",
     slurm_header_add="",
     per_task=1,
+    time_limit=None,
 ):
     """
     Get the SLURM script for an array job as a string.
@@ -304,6 +305,7 @@ def get_array_slurm_str(
         slurm_header_add=slurm_header_add,
         job_type_template=job_type_template,
         per_task=per_task,
+        time_limit=time_limit,
     )
 
     return slurm_str
@@ -321,6 +323,7 @@ def get_slurm_str(
     job_type_template="body_single.sh.j2",
     slurm_header_add="",
     exclude_nodes: str = None,
+    time_limit=None,
 ):
     """
     Get the SLURM script as a string.
@@ -360,6 +363,7 @@ def get_slurm_str(
         slurm_header_add=slurm_header_add,
         job_type_template=job_type_template,
         exclude_nodes=exclude_nodes,
+        time_limit=time_limit,
     )
 
     return slurm_str

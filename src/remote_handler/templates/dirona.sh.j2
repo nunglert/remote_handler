@@ -2,6 +2,7 @@
 #SBATCH --job-name={{ jobname }}
 #SBATCH --ntasks={{ n_cores }} 
 #SBATCH --partition={{ partition }}
+{% if time_limit %}#SBATCH --time={{ time_limit }}{% endif %}
 {{ slurm_header_add }}
 
 ulimit -u 40000
