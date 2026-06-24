@@ -3,11 +3,9 @@ Sampler for using SSPD_torch-sim with MACE
 """
 
 import json
-import os
 import sys
 from pathlib import Path
 
-import ase.io
 import ase.units
 from torch_SSPD.runners.MACE_runners import run_SSPD_MACE
 

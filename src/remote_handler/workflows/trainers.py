@@ -24,11 +24,7 @@ from remote_handler.core.tasks import (
     SingleScriptTask,
 )
 from remote_handler.core.utils import grep
-from remote_handler.exceptions import (
-    ConfigurationError,
-    DependencyError,
-    WorkflowError,
-)
+from remote_handler.exceptions import ConfigurationError, WorkflowError
 
 from .active_learning_base import ModelTrainer
 

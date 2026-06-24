@@ -2,18 +2,16 @@ import logging
 import os
 import random
 import string
-import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 from remote_handler.core import executors, file_handler, file_utils, remote_env
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import (
     FileSystemHandlerBase,
     LocalFileSystem,
-    RemoteFileSystem,
 )
 from remote_handler.core.file_utils import tag_path
 from remote_handler.core.utils import SimpleLogger

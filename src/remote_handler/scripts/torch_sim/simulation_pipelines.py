@@ -31,9 +31,6 @@ from remote_handler.scripts.torch_sim._torchsim_compat import (
     npt_langevin_init,
     npt_langevin_integrator,
 )
-from remote_handler.scripts.torch_sim.create_interface import (
-    build_sic_ti_interface,
-)
 
 SerializedTorch = Any
 
