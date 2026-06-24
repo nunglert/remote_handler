@@ -60,7 +60,237 @@ def _resolve_mace_train_runner(remote_fs, cluster_config):
     return path
 
 
-class MaceModelTrainer(ModelTrainer):
+class _MaceArrayTrainer(ModelTrainer):
+    """Shared machinery for the MACE array trainers.
+
+    ``MaceModelTrainer`` (train from scratch) and ``MaceFinetuningTrainer``
+    (finetune a foundation model) differ only in a few spots: the default
+    payload script, the SLURM job name, a few extra keys/resources for the
+    remote input, the artifact filename collected back, and the stub contents.
+    Those are expressed as the class attributes / hook methods below; the rest
+    (data prep, array submission, finish-check, collection, stub scaffolding)
+    lives here once.
+    """
+
+    # Per-subclass constants -----------------------------------------------
+    _script_name = "mace_training.py"  # shipped payload under scripts/mace/
+    _jobname = "train"  # SLURM job name
+    _action = "training"  # "MACE {action} did not finish ..."
+    _participle = "trained"  # "No models were successfully {participle}"
+
+    def __init__(
+        self,
+        remote_fs: FileSystemHandlerBase,
+        cluster_config: ClusterConfig,
+        config_file: os.PathLike,
+        training_script: Optional[os.PathLike] = None,
+        remote_mace_train_runner: Optional[os.PathLike] = None,
+        num_models: int = 5,
+        validation_fraction: float = 0.1,
+        remote_savepath: Optional[os.PathLike] = None,
+        loop_time: float = 30,
+        stub: bool = False,
+        n_processors: int = 1,
+    ):
+        super().__init__()
+        if training_script is None:
+            training_script = _SCRIPTS_DIR / "mace" / self._script_name
+        self.training_script = training_script
+        self.remote_fs = remote_fs
+        self.cluster_config = cluster_config
+        self.config_file = config_file
+        self.num_models = num_models
+        self.validation_fraction = validation_fraction
+        self.remote_mace_train_runner = remote_mace_train_runner
+        self.remote_savepath = remote_savepath
+        self.loop_time = loop_time
+        self.stub = stub
+        # Resources per training job; for GPU templates this is the GPU count
+        # (``--gres=gpu:n``). One model per job -> one GPU by default.
+        self.n_processors = n_processors
+        self.model_name = "Model"  # Default model name
+
+    # Hooks subclasses override --------------------------------------------
+    def _extra_shared_input(self) -> dict:
+        """Extra keys merged into the remote script's shared input JSON."""
+        return {}
+
+    def _extra_shared_resources(self) -> list:
+        """Extra files staged into the shared resource dir (after config)."""
+        return []
+
+    def _artifact_name(self) -> str:
+        """Per-job filename, under ``models/``, handed to the next sampler."""
+        return f"{self.model_name}.model"
+
+    def _stub_model_dict(self) -> dict:
+        """Mock model payload written by stub mode."""
+        return {
+            "model_type": "MACE",
+            "seed": np.random.randint(1e6),
+            "num_interactions": 2,
+            "hidden_irreps": "32x0e + 32x1o",
+            "r_max": 4.0,
+            "energy_weight": 1.0,
+            "forces_weight": 100.0,
+            "training_loss": np.random.uniform(0.01, 0.05),
+            "validation_loss": np.random.uniform(0.02, 0.08),
+        }
+
+    def _write_stub_artifact(self, model_dir, model_path, mock_model) -> Path:
+        """Write any extra stub artifact and return the path to hand on.
+
+        Base trainers hand on the torch ``.model`` itself.
+        """
+        return model_path
+
+    # Shared implementation -------------------------------------------------
+    def update(
+        self, calcdir: Path, trainer_input: Path | list[Path], **kwargs
+    ) -> None:
+        """Prepare the trainer for a new iteration.
+
+        Args:
+            calcdir: Directory for this AL iteration
+            trainer_input: Path(s) to database files with training data
+            **kwargs: Additional parameters
+        """
+        self.train_dir = calcdir / "train"
+        self.results_dir = self.train_dir / "results"
+        os.makedirs(self.train_dir, exist_ok=True)
+
+        self.db_files = (
+            [trainer_input]
+            if isinstance(trainer_input, Path)
+            else trainer_input
+        )
+
+        # In stub mode, we don't need to create the task
+        if self.stub:
+            return
+
+        # Auto-resolve the remote run_train.py path if not given.
+        if self.remote_mace_train_runner is None:
+            self.remote_mace_train_runner = _resolve_mace_train_runner(
+                self.remote_fs, self.cluster_config
+            )
+        # Shared resources live in rootpath/, but scripts run in a subdir of
+        # it; reference them via SHARED_RESOURCE_PREFIX so each script resolves
+        # them relative to its own calcpath.
+        script_input_shared = {
+            "database_files": [
+                f"{SHARED_RESOURCE_PREFIX}/{Path(p).name}"
+                for p in self.db_files
+            ],
+            "config_file": (
+                f"{SHARED_RESOURCE_PREFIX}/{Path(self.config_file).name}"
+            ),
+            "model_name": self.model_name,
+            "validation_fraction": self.validation_fraction,
+            "train_runner": Path(self.remote_mace_train_runner).as_posix(),
+            **self._extra_shared_input(),
+        }
+
+        # Create individual input files with different seeds
+        individual_resources = [
+            [
+                DictJSON(
+                    content=script_input_shared
+                    | {"seed": np.random.randint(1e6)},
+                    filename="input_train.json",
+                    remote_fs=self.remote_fs,
+                )
+                for i in range(self.num_models)
+            ]
+        ]
+
+        self.training_task = ArrayScriptTask(
+            cluster_config=self.cluster_config,
+            local_savepath=self.results_dir,
+            remote_fs=self.remote_fs,
+            python_script_file=self.training_script,
+            individual_ressources=individual_resources,
+            shared_ressources=(
+                [self.config_file]
+                + self._extra_shared_resources()
+                + self.db_files
+            ),
+            logfile="train.log",
+            remote_savepath=self.remote_savepath,
+            collect_only=False,
+            num_parallel=min(self.num_models, 5),
+            loop_time=self.loop_time,
+            jobname=self._jobname,
+            n_processors=self.n_processors,
+        )
+
+        self.training_task.allocate_data()
+
+    def _create_stub_outputs(self) -> list[Path]:
+        """Create mock per-job model files (and artifacts) for testing."""
+        logger.info(f"Creating {self.num_models} stub MACE models")
+
+        calcdirs = self.results_dir / "calcdirs"
+        os.makedirs(calcdirs, exist_ok=True)
+
+        model_paths = []
+        for i in range(self.num_models):
+            model_dir = calcdirs / f"job_{i}" / "models"
+            os.makedirs(model_dir, exist_ok=True)
+
+            model_path = model_dir / f"{self.model_name}.model"
+            mock_model = self._stub_model_dict()
+            with open(model_path, "wb") as f:
+                pickle.dump(mock_model, f)
+
+            artifact = self._write_stub_artifact(
+                model_dir, model_path, mock_model
+            )
+            model_paths.append(artifact)
+            logger.info(f"Created stub model: {artifact}")
+
+        return model_paths
+
+    def get_trained_model(self) -> list[Path]:
+        """Run the array job and collect the per-model artifacts.
+
+        Raises:
+            WorkflowError: If the job left no ``is_finished.info`` marker, or
+                no model artifacts were produced.
+        """
+        if self.stub:
+            logger.info("Running in stub mode - creating mock MACE models")
+            return self._create_stub_outputs()
+
+        self.training_task.submit()
+        if not self.training_task.finish_check():
+            raise WorkflowError(
+                f"MACE {self._action} did not finish successfully (one or "
+                "more array tasks left no is_finished.info marker). Check the "
+                f"training logs in: {self.results_dir}"
+            )
+        self.training_task.collect_results()
+
+        artifact = self._artifact_name()
+        model_paths = []
+        for calcpath in grep(str(self.results_dir / "calcdirs"), ""):
+            model_path = Path(calcpath) / "models" / artifact
+            if model_path.exists():
+                model_paths.append(model_path)
+            else:
+                logger.warning(f"Model not found at {model_path}")
+
+        if not model_paths:
+            raise WorkflowError(
+                f"No models were successfully {self._participle}\n"
+                f"Check training logs in: {self.results_dir}"
+            )
+
+        logger.info(f"Collected {len(model_paths)} {self._participle} models")
+        return model_paths
+
+
+class MaceModelTrainer(_MaceArrayTrainer):
     """
     Trainer for MACE models using array script tasks.
 
@@ -82,211 +312,17 @@ class MaceModelTrainer(ModelTrainer):
         stub: If True, creates mock model outputs without training
     """
 
-    def __init__(
-        self,
-        remote_fs: FileSystemHandlerBase,
-        cluster_config: ClusterConfig,
-        config_file: os.PathLike,
-        training_script: Optional[os.PathLike] = None,
-        remote_mace_train_runner: Optional[os.PathLike] = None,
-        num_models: int = 5,
-        validation_fraction: float = 0.1,
-        remote_savepath: Optional[os.PathLike] = None,
-        loop_time: float = 30,
-        stub: bool = False,
-        n_processors: int = 1,
-    ):
-        super().__init__()
-        if training_script is None:
-            training_script = _SCRIPTS_DIR / "mace" / "mace_training.py"
-        self.training_script = training_script
-        self.remote_fs = remote_fs
-        self.cluster_config = cluster_config
-        self.config_file = config_file
-        self.num_models = num_models
-        self.validation_fraction = validation_fraction
-        self.remote_mace_train_runner = remote_mace_train_runner
-        self.remote_savepath = remote_savepath
-        self.loop_time = loop_time
-        self.stub = stub
-        # Resources per training job; for GPU templates this is the GPU count
-        # (``--gres=gpu:n``). One model per job -> one GPU by default.
-        self.n_processors = n_processors
-        self.model_name = "Model"  # Default model name
-
-    def update(
-        self, calcdir: Path, trainer_input: Path | list[Path], **kwargs
-    ) -> None:
-        """
-        Prepare trainer for a new iteration.
-
-        Args:
-            calcdir: Directory for this AL iteration
-            trainer_input: Path(s) to database files with training data
-            **kwargs: Additional parameters
-        """
-        self.train_dir = calcdir / "train"
-        self.results_dir = self.train_dir / "results"
-        os.makedirs(self.train_dir, exist_ok=True)
-
-        self.db_files = (
-            [trainer_input]
-            if isinstance(trainer_input, Path)
-            else trainer_input
-        )
-
-        # In stub mode, we don't need to create the task
-        if not self.stub:
-            # Auto-resolve the remote run_train.py path if not given.
-            if self.remote_mace_train_runner is None:
-                self.remote_mace_train_runner = _resolve_mace_train_runner(
-                    self.remote_fs, self.cluster_config
-                )
-            # Shared resources live in rootpath/, but scripts run in a
-            # subdir of it; reference them via SHARED_RESOURCE_PREFIX so each
-            # script resolves them relative to its own calcpath.
-            script_input_shared = {
-                "database_files": [
-                    f"{SHARED_RESOURCE_PREFIX}/{Path(p).name}"
-                    for p in self.db_files
-                ],
-                "config_file": (
-                    f"{SHARED_RESOURCE_PREFIX}/{Path(self.config_file).name}"
-                ),
-                "model_name": self.model_name,
-                "validation_fraction": self.validation_fraction,
-                "train_runner": Path(self.remote_mace_train_runner).as_posix(),
-            }
-
-            # Create individual input files with different seeds
-            individual_resources = [
-                [
-                    DictJSON(
-                        content=script_input_shared
-                        | {"seed": np.random.randint(1e6)},
-                        filename="input_train.json",
-                        remote_fs=self.remote_fs,
-                    )
-                    for i in range(self.num_models)
-                ]
-            ]
-
-            self.training_task = ArrayScriptTask(
-                cluster_config=self.cluster_config,
-                local_savepath=self.results_dir,
-                remote_fs=self.remote_fs,
-                python_script_file=self.training_script,
-                individual_ressources=individual_resources,
-                shared_ressources=[self.config_file] + self.db_files,
-                logfile="train.log",
-                remote_savepath=self.remote_savepath,
-                collect_only=False,
-                num_parallel=min(self.num_models, 5),
-                loop_time=self.loop_time,
-                jobname="train",
-                n_processors=self.n_processors,
-            )
-
-            self.training_task.allocate_data()
-
-    def _create_stub_outputs(self) -> list[Path]:
-        """
-        Create mock MACE model files for testing.
-
-        Generates fake trained models with realistic structure.
-
-        Returns:
-            List of paths to mock model files
-        """
-        logger.info(f"Creating {self.num_models} stub MACE model files")
-
-        # Create mock calcdirs structure
-        calcdirs = self.results_dir / "calcdirs"
-        os.makedirs(calcdirs, exist_ok=True)
-
-        model_paths = []
-        for i in range(self.num_models):
-            # Create calculation directory
-            calcdir = calcdirs / f"job_{i}"
-            model_dir = calcdir / "models"
-            os.makedirs(model_dir, exist_ok=True)
-
-            # Create mock model file
-            model_path = model_dir / f"{self.model_name}.model"
-
-            # Mock model content (simple dict with metadata)
-            mock_model = {
-                "model_type": "MACE",
-                "seed": np.random.randint(1e6),
-                "num_interactions": 2,
-                "hidden_irreps": "32x0e + 32x1o",
-                "r_max": 4.0,
-                "energy_weight": 1.0,
-                "forces_weight": 100.0,
-                "training_loss": np.random.uniform(0.01, 0.05),
-                "validation_loss": np.random.uniform(0.02, 0.08),
-            }
-
-            # Write as pickle (MACE models are typically pickle files)
-            with open(model_path, "wb") as f:
-                pickle.dump(mock_model, f)
-
-            model_paths.append(model_path)
-            logger.info(f"Created stub model: {model_path}")
-
-        return model_paths
-
-    def get_trained_model(self) -> list[Path]:
-        """
-        Run training and collect model files.
-
-        Returns:
-            List of paths to trained model files
-
-        Raises:
-            Exception: If training doesn't complete successfully
-        """
-        if self.stub:
-            # In stub mode, create mock outputs directly
-            logger.info("Running in stub mode - creating mock MACE models")
-            model_paths = self._create_stub_outputs()
-        else:
-            # Run actual training
-            self.training_task.submit()
-            if not self.training_task.finish_check():
-                raise WorkflowError(
-                    "MACE training did not finish successfully (one or more "
-                    "array tasks left no is_finished.info marker). Check the "
-                    f"training logs in: {self.results_dir}"
-                )
-            self.training_task.collect_results()
-
-            # Collect trained models
-            model_paths = []
-            for calcpath in grep(str(self.results_dir / "calcdirs"), ""):
-                model_path = Path(calcpath) / f"models/{self.model_name}.model"
-                if model_path.exists():
-                    model_paths.append(model_path)
-                else:
-                    logger.warning(f"Model not found at {model_path}")
-
-            if not model_paths:
-                raise WorkflowError(
-                    "No models were successfully trained\n"
-                    f"Check training logs in: {self.results_dir}"
-                )
-
-        logger.info(f"Collected {len(model_paths)} trained models")
-        return model_paths
+    # Behaviour is entirely the base default (script mace_training.py, jobname
+    # "train"); this subclass only fixes the public name and documentation.
 
 
-class MaceFinetuningTrainer(ModelTrainer):
+class MaceFinetuningTrainer(_MaceArrayTrainer):
     """
     Trainer for finetuning MACE models from a foundation model.
 
-    Similar to MaceModelTrainer but takes a pretrained foundation model
-    as an additional shared resource. Trains multiple finetuned models
-    in parallel using different random seeds.
+    Like MaceModelTrainer but stages a pretrained foundation model as an extra
+    shared resource and, optionally, converts each trained torch model to a
+    mace-jax bundle in the same job.
 
     Args:
         remote_fs: FileSystemHandlerBase for the machine where training runs
@@ -312,6 +348,11 @@ class MaceFinetuningTrainer(ModelTrainer):
             inspectable format mace-jax's loader / jaxrens consume).
     """
 
+    _script_name = "mace_finetuning.py"
+    _jobname = "finetune"
+    _action = "finetuning"
+    _participle = "finetuned"
+
     def __init__(
         self,
         remote_fs: FileSystemHandlerBase,
@@ -329,20 +370,20 @@ class MaceFinetuningTrainer(ModelTrainer):
         n_processors: int = 1,
         jax_output_format: str = "pkl",
     ):
-        super().__init__()
-        if training_script is None:
-            training_script = _SCRIPTS_DIR / "mace" / "mace_finetuning.py"
-        self.training_script = training_script
-        self.remote_fs = remote_fs
-        self.cluster_config = cluster_config
-        self.config_file = config_file
+        super().__init__(
+            remote_fs=remote_fs,
+            cluster_config=cluster_config,
+            config_file=config_file,
+            training_script=training_script,
+            remote_mace_train_runner=remote_mace_train_runner,
+            num_models=num_models,
+            validation_fraction=validation_fraction,
+            remote_savepath=remote_savepath,
+            loop_time=loop_time,
+            stub=stub,
+            n_processors=n_processors,
+        )
         self.foundation_model = foundation_model
-        self.num_models = num_models
-        self.validation_fraction = validation_fraction
-        self.remote_mace_train_runner = remote_mace_train_runner
-        self.remote_savepath = remote_savepath
-        self.loop_time = loop_time
-        self.stub = stub
         self.convert_to_jax = convert_to_jax
         # When convert_to_jax: "pkl" (default, opaque) or "bundle" (a directory
         # with config.json + params.msgpack -- mace-jax's canonical format).
@@ -352,154 +393,12 @@ class MaceFinetuningTrainer(ModelTrainer):
                 f"'{jax_output_format}'"
             )
         self.jax_output_format = jax_output_format
-        # Resources per training job; for GPU templates this is the GPU count
-        # (``--gres=gpu:n``). One model per job -> one GPU by default.
-        self.n_processors = n_processors
-        self.model_name = "Model"  # Default model name
-
-    def update(
-        self, calcdir: Path, trainer_input: Path | list[Path], **kwargs
-    ) -> None:
-        """
-        Prepare trainer for a new iteration.
-
-        Args:
-            calcdir: Directory for this AL iteration
-            trainer_input: Path(s) to database files with training data
-            **kwargs: Additional parameters
-        """
-        self.train_dir = calcdir / "train"
-        self.results_dir = self.train_dir / "results"
-        os.makedirs(self.train_dir, exist_ok=True)
-
-        self.db_files = (
-            [trainer_input]
-            if isinstance(trainer_input, Path)
-            else trainer_input
-        )
-
-        # In stub mode, we don't need to create the task
-        if not self.stub:
-            # Auto-resolve the remote run_train.py path if not given.
-            if self.remote_mace_train_runner is None:
-                self.remote_mace_train_runner = _resolve_mace_train_runner(
-                    self.remote_fs, self.cluster_config
-                )
-            # Shared resources live in rootpath/, but scripts run in a
-            # subdir of it; reference them via SHARED_RESOURCE_PREFIX so each
-            # script resolves them relative to its own calcpath.
-            script_input_shared = {
-                "database_files": [
-                    f"{SHARED_RESOURCE_PREFIX}/{Path(p).name}"
-                    for p in self.db_files
-                ],
-                "config_file": (
-                    f"{SHARED_RESOURCE_PREFIX}/{Path(self.config_file).name}"
-                ),
-                "foundation_model": (
-                    f"{SHARED_RESOURCE_PREFIX}/"
-                    f"{Path(self.foundation_model).name}"
-                ),
-                "model_name": self.model_name,
-                "validation_fraction": self.validation_fraction,
-                "train_runner": Path(self.remote_mace_train_runner).as_posix(),
-                "convert_to_jax": self.convert_to_jax,
-                "jax_output_format": self.jax_output_format,
-            }
-
-            # Create individual input files with different seeds
-            individual_resources = [
-                [
-                    DictJSON(
-                        content=script_input_shared
-                        | {"seed": np.random.randint(1e6)},
-                        filename="input_train.json",
-                        remote_fs=self.remote_fs,
-                    )
-                    for i in range(self.num_models)
-                ]
-            ]
-
-            self.training_task = ArrayScriptTask(
-                cluster_config=self.cluster_config,
-                local_savepath=self.results_dir,
-                remote_fs=self.remote_fs,
-                python_script_file=self.training_script,
-                individual_ressources=individual_resources,
-                shared_ressources=[self.config_file, self.foundation_model]
-                + self.db_files,
-                logfile="train.log",
-                remote_savepath=self.remote_savepath,
-                collect_only=False,
-                num_parallel=min(self.num_models, 5),
-                loop_time=self.loop_time,
-                jobname="finetune",
-                n_processors=self.n_processors,
-            )
-
-            self.training_task.allocate_data()
-
-    def _create_stub_outputs(self) -> list[Path]:
-        """
-        Create mock finetuned MACE model files for testing.
-
-        Returns:
-            List of paths to mock model files
-        """
-        logger.info(f"Creating {self.num_models} stub finetuned MACE models")
-
-        # Create mock calcdirs structure
-        calcdirs = self.results_dir / "calcdirs"
-        os.makedirs(calcdirs, exist_ok=True)
-
-        model_paths = []
-        for i in range(self.num_models):
-            calcdir = calcdirs / f"job_{i}"
-            model_dir = calcdir / "models"
-            os.makedirs(model_dir, exist_ok=True)
-
-            model_path = model_dir / f"{self.model_name}.model"
-
-            mock_model = {
-                "model_type": "MACE_finetuned",
-                "seed": np.random.randint(1e6),
-                "foundation_model": str(self.foundation_model),
-                "training_loss": np.random.uniform(0.01, 0.05),
-                "validation_loss": np.random.uniform(0.02, 0.08),
-            }
-
-            with open(model_path, "wb") as f:
-                pickle.dump(mock_model, f)
-
-            if self.convert_to_jax:
-                jax_path = model_dir / self._jax_artifact_name()
-                if self.jax_output_format == "bundle":
-                    jax_path.mkdir(parents=True, exist_ok=True)
-                    (jax_path / "config.json").write_text("{}")
-                    (jax_path / "params.msgpack").write_bytes(b"")
-                else:
-                    with open(jax_path, "wb") as f:
-                        pickle.dump(
-                            {
-                                "config": mock_model,
-                                "params": b"",
-                                "head": None,
-                            },
-                            f,
-                        )
-                model_paths.append(jax_path)
-                logger.info(f"Created stub mace-jax bundle: {jax_path}")
-            else:
-                model_paths.append(model_path)
-                logger.info(f"Created stub finetuned model: {model_path}")
-
-        return model_paths
 
     def _jax_artifact_name(self) -> str:
         """Filename of the per-job artifact handed to the next sampler.
 
         A ``.model`` (no conversion), a ``-jax.pkl`` file, or a ``-jax``
-        directory bundle, depending on ``convert_to_jax`` / ``jax_output_format``.
+        directory bundle, per ``convert_to_jax`` / ``jax_output_format``.
         """
         if not self.convert_to_jax:
             return f"{self.model_name}.model"
@@ -507,51 +406,46 @@ class MaceFinetuningTrainer(ModelTrainer):
             return f"{self.model_name}-jax"
         return f"{self.model_name}-jax.pkl"
 
-    def get_trained_model(self) -> list[Path]:
-        """
-        Run finetuning and collect model files.
+    # Hook overrides --------------------------------------------------------
+    def _artifact_name(self) -> str:
+        return self._jax_artifact_name()
 
-        Returns:
-            List of paths to finetuned model files
+    def _extra_shared_input(self) -> dict:
+        return {
+            "foundation_model": (
+                f"{SHARED_RESOURCE_PREFIX}/"
+                f"{Path(self.foundation_model).name}"
+            ),
+            "convert_to_jax": self.convert_to_jax,
+            "jax_output_format": self.jax_output_format,
+        }
 
-        Raises:
-            WorkflowError: If no models were successfully trained
-        """
-        if self.stub:
-            logger.info(
-                "Running in stub mode - creating mock finetuned MACE models"
-            )
-            model_paths = self._create_stub_outputs()
+    def _extra_shared_resources(self) -> list:
+        return [self.foundation_model]
+
+    def _stub_model_dict(self) -> dict:
+        return {
+            "model_type": "MACE_finetuned",
+            "seed": np.random.randint(1e6),
+            "foundation_model": str(self.foundation_model),
+            "training_loss": np.random.uniform(0.01, 0.05),
+            "validation_loss": np.random.uniform(0.02, 0.08),
+        }
+
+    def _write_stub_artifact(self, model_dir, model_path, mock_model) -> Path:
+        if not self.convert_to_jax:
+            return model_path
+        jax_path = model_dir / self._jax_artifact_name()
+        if self.jax_output_format == "bundle":
+            jax_path.mkdir(parents=True, exist_ok=True)
+            (jax_path / "config.json").write_text("{}")
+            (jax_path / "params.msgpack").write_bytes(b"")
         else:
-            self.training_task.submit()
-            if not self.training_task.finish_check():
-                raise WorkflowError(
-                    "MACE finetuning did not finish successfully (one or more "
-                    "array tasks left no is_finished.info marker). Check the "
-                    f"training logs in: {self.results_dir}"
+            with open(jax_path, "wb") as f:
+                pickle.dump(
+                    {"config": mock_model, "params": b"", "head": None}, f
                 )
-            self.training_task.collect_results()
-
-            # When converting, the artifact handed to the next sampler is the
-            # mace-jax bundle produced alongside the torch .model: a ``.pkl``
-            # file, or a ``-jax/`` directory bundle.
-            model_filename = self._jax_artifact_name()
-            model_paths = []
-            for calcpath in grep(str(self.results_dir / "calcdirs"), ""):
-                model_path = Path(calcpath) / "models" / model_filename
-                if model_path.exists():
-                    model_paths.append(model_path)
-                else:
-                    logger.warning(f"Model not found at {model_path}")
-
-            if not model_paths:
-                raise WorkflowError(
-                    "No models were successfully finetuned\n"
-                    f"Check training logs in: {self.results_dir}"
-                )
-
-        logger.info(f"Collected {len(model_paths)} finetuned models")
-        return model_paths
+        return jax_path
 
 
 class NeuralilILTrainer(ModelTrainer):
