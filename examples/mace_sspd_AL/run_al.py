@@ -34,17 +34,17 @@ from pathlib import Path
 
 import ase.io
 
+from remote_handler import configure_logging
 from remote_handler.core.cluster_handler import ClusterConfig
-from remote_handler.core.file_handler import RemoteFileSystem, LocalFileSystem
+from remote_handler.core.file_handler import LocalFileSystem, RemoteFileSystem
 from remote_handler.scripts import input_models
+from remote_handler.workflows import active_learning_base
 from remote_handler.workflows.active_learning_base import ActiveLearningHandler
 from remote_handler.workflows.evaluators import ORCAEvaluator
 from remote_handler.workflows.samplers import SSPDSampler
 from remote_handler.workflows.trainers import MaceModelTrainer
-from remote_handler.workflows import active_learning_base
 
-
-logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+configure_logging()  # timestamped logs (level=INFO -> stdout)
 
 # ---------------------------------------------------------------------------
 # Paths  (adjust to your setup)
@@ -57,10 +57,11 @@ inputs_dir.mkdir(parents=True, exist_ok=True)
 
 # Cluster filesystems
 gpu_fs = RemoteFileSystem(
-    remote_alias="datalab", local_temp_path=_tmpdir, identityfile="/home/mketter/.ssh/datalab_key"
+    remote_alias="datalab",
+    local_temp_path=_tmpdir,
+    identityfile="/home/mketter/.ssh/datalab_key",
 )  # GPU cluster for sampling + training
-dft_fs = LocalFileSystem(
-)  # CPU cluster for DFT
+dft_fs = LocalFileSystem()  # CPU cluster for DFT
 
 # Cluster configs
 gpu_cluster_config_a40 = ClusterConfig(
@@ -94,7 +95,9 @@ dft_cluster_config = ClusterConfig(
 # Inputs  (adjust to your system)
 # ---------------------------------------------------------------------------
 initial_database = calchome / "inputs" / "configs" / "InitialDatabase.extxyz"
-mace_template = calchome / "config" / "templates" / "mace_config_l2.yaml.template"
+mace_template = (
+    calchome / "config" / "templates" / "mace_config_l2.yaml.template"
+)
 initial_config = calchome / "inputs" / "configs" / "StartStruct.xyz"
 
 # ---------------------------------------------------------------------------
@@ -150,8 +153,8 @@ mace_trainer = MaceModelTrainer(
 # ---------------------------------------------------------------------------
 num_iterations = 5
 
-class SamplerSchedule(active_learning_base.Schedule):
 
+class SamplerSchedule(active_learning_base.Schedule):
     def __init__(self, num_iterations: int, starting_beta_inv: float):
         self.beta_inv = starting_beta_inv
         super().__init__(num_iterations)
@@ -159,10 +162,11 @@ class SamplerSchedule(active_learning_base.Schedule):
     def get_kwargs(self, iteration_idx):
         kwargs = {
             "threshold": 0.99,
-            "inv_beta": self.beta_inv + iteration_idx*0.05,
+            "inv_beta": self.beta_inv + iteration_idx * 0.05,
             "sampling_threshold": 0,
         }
         return kwargs
+
 
 sampler_schedule = SamplerSchedule(num_iterations, 0.25)
 
@@ -181,7 +185,7 @@ al_handler = ActiveLearningHandler(
     initial_trainer_out=None,
     combine_evaluator_outputs=True,
     sampler_output_extension="extxyz",
-    trainer_output_extension="model",)
+    trainer_output_extension="model",
+)
 
 al_handler.run()
-

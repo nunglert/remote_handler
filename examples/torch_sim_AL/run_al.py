@@ -34,6 +34,7 @@ from pathlib import Path
 
 import ase.io
 
+from remote_handler import configure_logging
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import RemoteFileSystem
 from remote_handler.scripts import input_models
@@ -47,7 +48,7 @@ from remote_handler.workflows.selectors import (
 )
 from remote_handler.workflows.trainers import MaceFinetuningTrainer
 
-logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+configure_logging()  # timestamped logs (level=INFO -> stdout)
 
 # ---------------------------------------------------------------------------
 # Paths  (adjust to your setup)
