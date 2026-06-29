@@ -492,20 +492,28 @@ class TestQUESTSSelector:
         scores = [at.info["quests_novelty_score"] for at in result]
         assert scores == sorted(scores, reverse=True)
 
-    def test_set_reference(self):
-        """set_reference updates the reference dataset."""
+    def test_reference_arg_enables_novelty(self):
+        """A per-call reference= switches select() to novelty mode.
+
+        The reference is now an argument (the ``set_reference`` mutator was
+        removed), so passing it per call -- without mutating the selector --
+        flips diversity to novelty mode.
+        """
         configs = _make_varied_configs(10, rng_seed=42)
         selector = QUESTSSelector(n_configs=3)
 
-        # Initially no reference → diversity mode
+        # No reference → diversity mode
         result1 = selector.select(configs)
         assert result1[0].info["quests_mode"] == "diversity"
 
-        # Set reference → novelty mode
+        # Reference passed as a call argument → novelty mode
         ref = _make_varied_configs(5, rng_seed=0)
-        selector.set_reference(ref)
-        result2 = selector.select(configs)
+        result2 = selector.select(configs, reference=ref)
         assert result2[0].info["quests_mode"] == "novelty"
+
+        # It was not stored on the selector: the next call is diversity again.
+        result3 = selector.select(configs)
+        assert result3[0].info["quests_mode"] == "diversity"
 
     def test_empty_input(self):
         selector = QUESTSSelector(n_configs=5, method="msc")
@@ -630,6 +638,31 @@ class TestPipelineSelector:
         for at in result:
             assert "uncertainty_score" in at.info
             assert at.info["quests_mode"] == "diversity"
+
+    def test_forwards_reference_to_members(self):
+        """A reference passed to the pipeline reaches a QUESTS member.
+
+        This is the fix's headline: composing "stride then QUESTS-novelty"
+        must run QUESTS in *novelty* mode. The pipeline forwards ``reference``
+        to every member, while a non-novelty member (UniformSelector) ignores
+        it -- so no per-member ``set_reference`` plumbing is needed.
+        """
+        pytest.importorskip("quests")
+        configs = _make_varied_configs(20, rng_seed=42)
+        reference = _make_varied_configs(5, rng_seed=0)
+
+        pipeline = PipelineSelector(
+            [UniformSelector(n_configs=10), QUESTSSelector(n_configs=3)]
+        )
+
+        # No reference -> the QUESTS member runs in diversity mode.
+        diversity = pipeline.select(configs)
+        assert all(at.info["quests_mode"] == "diversity" for at in diversity)
+
+        # Reference forwarded -> the QUESTS member runs in novelty mode.
+        novelty = pipeline.select(configs, reference=reference)
+        assert all(at.info["quests_mode"] == "novelty" for at in novelty)
+        assert all("quests_novelty_score" in at.info for at in novelty)
 
     def test_single_selector(self):
         """Pipeline with one selector behaves like the selector alone."""

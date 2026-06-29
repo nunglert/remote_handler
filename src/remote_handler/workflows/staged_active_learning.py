@@ -149,9 +149,9 @@ class SelectorActor(Selector):
                 frames = [frames]
             grouped.append(frames)
 
-        self._apply_reference(reference)
-
-        selected = self.selector.select(grouped)
+        selected = self.selector.select(
+            grouped, reference=self._resolve_reference(reference)
+        )
 
         out_dir = Path(calcdir) / "selector"
         os.makedirs(out_dir, exist_ok=True)
@@ -164,38 +164,28 @@ class SelectorActor(Selector):
             out_path,
         )
 
-    def _apply_reference(self, reference: Optional[list[Path]]) -> None:
-        """Feed reference configs to the strategy for novelty scoring.
+    def _resolve_reference(
+        self, reference: Optional[list[Path]]
+    ) -> Optional[list[Atoms]]:
+        """Read reference config files into a flat ``list[Atoms]`` (or None).
 
-        When a non-empty reference is supplied and the wrapped selector
-        exposes ``set_reference`` (e.g. ``QUESTSSelector``), it switches to
-        novelty mode relative to that reference. An empty/absent reference
-        leaves the strategy untouched -- so a novelty selector transparently
-        falls back to diversity on the cold-start iteration.
+        The result is passed to ``selector.select(grouped, reference=...)`` as
+        an argument -- not via a mutator -- so a novelty selector
+        (``QUESTSSelector``) scores against it while selectors that take no
+        reference (``UniformSelector``) just ignore it, and a composed
+        ``PipelineSelector`` forwards it to its members. An empty/absent
+        reference yields None, so a novelty selector transparently falls back
+        to diversity on the cold-start iteration.
         """
         if not reference:
-            return
+            return None
         ref_atoms: list[Atoms] = []
         for p in reference:
             frames = ase.io.read(p, index=":")
             if isinstance(frames, Atoms):
                 frames = [frames]
             ref_atoms.extend(frames)
-        if not ref_atoms:
-            return
-        setter = getattr(self.selector, "set_reference", None)
-        if callable(setter):
-            setter(ref_atoms)
-            logger.info(
-                "SelectorActor: novelty reference set (%d configs).",
-                len(ref_atoms),
-            )
-        else:
-            logger.warning(
-                "SelectorActor: reference provided but %s has no "
-                "set_reference; ignoring it.",
-                type(self.selector).__name__,
-            )
+        return ref_atoms or None
 
     def get_selected_configs(self) -> Path:
         if self._output is None:

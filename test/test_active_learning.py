@@ -351,3 +351,55 @@ class Test_process_progress:
             "sampler_output",
             "evaluator_output",
         ]
+
+
+def test_trainer_directory_bundle_is_collected(data_dir):
+    """Regression: a trained artifact that is a *directory* bundle (e.g. a
+    mace-jax model: config.json + params.msgpack) must be collected with
+    copytree, not shutil.copy (which raises IsADirectoryError on a dir).
+    """
+    temp_dir = data_dir / "temp/active_learning/bundle"
+    local_dir = temp_dir / "local_dir"
+    if os.path.exists(local_dir):
+        shutil.rmtree(local_dir)
+    os.makedirs(local_dir)
+
+    # The trainer emits a directory bundle rather than a single file.
+    bundle = temp_dir / "Model-jax"
+    if os.path.exists(bundle):
+        shutil.rmtree(bundle)
+    os.makedirs(bundle)
+    (bundle / "config.json").write_text("{}")
+    (bundle / "params.msgpack").write_text("params")
+
+    class DirTrainerMock(TrainerMock):
+        def get_trained_model(self):
+            return bundle
+
+    sampler = SamplerMock(temp_dir)
+    evaluator = EvaluatorMock(temp_dir)
+    trainer = DirTrainerMock(temp_dir)
+
+    initial_db_file = local_dir / "initial_db.extxyz"
+    with open(initial_db_file, "w") as f:
+        f.write("db")
+
+    al_handler = ActiveLearningHandler(
+        sampler,
+        evaluator,
+        trainer,
+        calchome=local_dir,
+        initial_evaluator_out=initial_db_file,
+        num_iterations=2,
+        cycle_entry_point="training",
+        cycle_exit_point="training",
+        trainer_output_extension="",
+    )
+    al_handler.run()
+
+    collected = list((local_dir / "trainer_output").glob("trainer_it*"))
+    assert collected, "trainer output bundle was not collected"
+    dir_bundles = [p for p in collected if p.is_dir()]
+    assert dir_bundles, "bundle was not collected as a directory"
+    assert (dir_bundles[0] / "config.json").exists()
+    assert (dir_bundles[0] / "params.msgpack").exists()

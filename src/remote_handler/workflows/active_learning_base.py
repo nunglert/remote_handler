@@ -790,7 +790,15 @@ class ActiveLearningHandler(ABC):
                 self.sampler_output_dir
                 / f"sampler_it{self.iteration_idx}_{i}.{self.sampler_output_extension}"
             )
-            shutil.copy(p, self.calchome / path)
+            # Artifacts may be a directory bundle (e.g. a mace-jax model:
+            # config.json + params.msgpack), not just a single file -- copy
+            # the whole tree in that case (mirrors move_file_to_home above).
+            src_artifact = Path(p)
+            dst_artifact = self.calchome / path
+            if src_artifact.is_dir():
+                shutil.copytree(src_artifact, dst_artifact, dirs_exist_ok=True)
+            else:
+                shutil.copy(src_artifact, dst_artifact)
             new_paths.append(path)
 
         if self.combine_sampler_outputs:
@@ -833,7 +841,15 @@ class ActiveLearningHandler(ABC):
                 self.evaluator_output_dir
                 / f"evaluator_it{self.iteration_idx}_{i}.{self.evaluator_output_extension}"
             )
-            shutil.copy(p, self.calchome / path)
+            # Artifacts may be a directory bundle (e.g. a mace-jax model:
+            # config.json + params.msgpack), not just a single file -- copy
+            # the whole tree in that case (mirrors move_file_to_home above).
+            src_artifact = Path(p)
+            dst_artifact = self.calchome / path
+            if src_artifact.is_dir():
+                shutil.copytree(src_artifact, dst_artifact, dirs_exist_ok=True)
+            else:
+                shutil.copy(src_artifact, dst_artifact)
             new_paths.append(path)
 
         if self.combine_evaluator_outputs:
@@ -879,7 +895,15 @@ class ActiveLearningHandler(ABC):
                 self.trainer_output_dir
                 / f"trainer_it{self.iteration_idx}_{i}.{self.trainer_output_extension}"
             )
-            shutil.copy(p, self.calchome / path)
+            # Artifacts may be a directory bundle (e.g. a mace-jax model:
+            # config.json + params.msgpack), not just a single file -- copy
+            # the whole tree in that case (mirrors move_file_to_home above).
+            src_artifact = Path(p)
+            dst_artifact = self.calchome / path
+            if src_artifact.is_dir():
+                shutil.copytree(src_artifact, dst_artifact, dirs_exist_ok=True)
+            else:
+                shutil.copy(src_artifact, dst_artifact)
             new_paths.append(path)
 
         if self.combine_trainer_outputs:

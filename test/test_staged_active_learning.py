@@ -479,27 +479,22 @@ class _RefRecordingSelector(ConfigSelector):
     """A QUESTS-like selector recording the reference size per select call.
 
     ``ref_calls`` holds, for each ``select`` invocation, the number of
-    reference configs in effect at that time (``None`` if novelty mode is
-    not active, i.e. ``set_reference`` was never called with data).
+    reference configs passed as the ``reference=`` argument (``None`` when no
+    reference is supplied, i.e. the diversity-mode cold-start fallback). The
+    reference is an argument now -- the ``set_reference`` mutator was removed.
     """
 
     def __init__(self, n_configs: int):
         self.n_configs = n_configs
-        self.reference = None
         self.ref_calls: list = []
 
-    def set_reference(self, reference):
-        self.reference = reference
-
-    def select(self, configs):
+    def select(self, configs, reference=None):
         flat = (
             [a for g in configs for a in g]
             if configs and isinstance(configs[0], list)
             else list(configs)
         )
-        self.ref_calls.append(
-            None if self.reference is None else len(self.reference)
-        )
+        self.ref_calls.append(None if reference is None else len(reference))
         return flat[: self.n_configs]
 
 
@@ -642,6 +637,68 @@ def test_from_actors_wires_novelty_reference(tmp_path):
 
     handler.run()
     assert selector.ref_calls == [None, 2]
+
+
+def test_directory_bundle_output_is_collected(tmp_path):
+    """A stage emitting a directory bundle (e.g. a mace-jax model) is
+    collected via copytree, not shutil.copy.
+    """
+    calchome = tmp_path / "calc"
+    bundle = tmp_path / "Model-jax"
+    bundle.mkdir()
+    (bundle / "config.json").write_text("{}")
+    (bundle / "params.msgpack").write_text("params")
+
+    class _BundleTrainer:
+        def update(self, calcdir, actor_input, **kwargs):
+            pass
+
+        def get_output(self):
+            return bundle
+
+    stages = [
+        Stage(
+            "sampler",
+            _Actor(tmp_path, "sampler"),
+            initial_input=_seed(tmp_path, "model.pkl"),
+        ),
+        Stage("trainer", _BundleTrainer(), output_extension="bundle"),
+    ]
+    StagedActiveLearningHandler(
+        stages, calchome=calchome, num_iterations=1
+    ).run()
+
+    data = json.loads((calchome / "AL_progress.json").read_text())
+    dest = calchome / data["outputs"]["trainer"]["0"][0]
+    assert dest.is_dir()
+    assert (dest / "config.json").exists()
+    assert (dest / "params.msgpack").exists()
+
+
+def test_directory_bundle_seed_is_ingested(tmp_path):
+    """A directory bundle passed as initial_input is moved in via copytree."""
+    calchome = tmp_path / "calc"
+    bundle = tmp_path / "foundation-jax"
+    bundle.mkdir()
+    (bundle / "config.json").write_text("{}")
+    (bundle / "params.msgpack").write_text("params")
+
+    seen: list[bool] = []
+
+    class _DirConsumer:
+        def update(self, calcdir, actor_input, **kwargs):
+            seen.append(Path(actor_input).is_dir())
+
+        def get_output(self):
+            return _seed(tmp_path, "out.xyz")
+
+    stages = [Stage("sampler", _DirConsumer(), initial_input=bundle)]
+    StagedActiveLearningHandler(
+        stages, calchome=calchome, num_iterations=1
+    ).run()
+
+    # The sampler received the bundle as an existing directory.
+    assert seen == [True]
 
 
 def test_resolve_actor_output_legacy_getter(tmp_path):
