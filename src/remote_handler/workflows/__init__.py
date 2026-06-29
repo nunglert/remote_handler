@@ -15,6 +15,7 @@ Required Dependencies:
 Each component can run in stub mode for testing without actual execution.
 """
 
+from remote_handler.workflows.active_learning_base import Selector
 from remote_handler.workflows.evaluators import (
     AseCalculatorEvaluator,
     EMTEvaluator,
@@ -22,6 +23,12 @@ from remote_handler.workflows.evaluators import (
     VASPEvaluator,
 )
 from remote_handler.workflows.samplers import LammpsSampler, TorchSimSampler
+from remote_handler.workflows.staged_active_learning import (
+    InputSource,
+    SelectorActor,
+    Stage,
+    StagedActiveLearningHandler,
+)
 from remote_handler.workflows.trainers import (
     MaceFinetuningTrainer,
     MaceModelTrainer,
@@ -38,4 +45,9 @@ __all__ = [
     "MaceFinetuningTrainer",
     "MaceModelTrainer",
     "NeuralilILTrainer",
+    "StagedActiveLearningHandler",
+    "Stage",
+    "InputSource",
+    "Selector",
+    "SelectorActor",
 ]
