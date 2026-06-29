@@ -391,6 +391,27 @@ def test_show_extras_probes_imports(capsys, monkeypatch):
     assert "[ ] mace_freeze  (missing: mace.tools.freeze)" in out
     # A plain (non-fork) extra resolves.
     assert "[x] dev" in out
+    # The installed remote_handler version (and env) is shown at the top.
+    assert "remote_handler" in out and "(local" in out
+
+
+def test_local_version_helper_reports_installed():
+    # Whatever is installed, the helper returns a non-empty string (the real
+    # version, or "unknown" if metadata is somehow missing) -- never crashes.
+    assert isinstance(cli._local_rh_version(), str)
+    assert cli._local_rh_version()
+
+
+def test_rh_version_remote_parses_line():
+    fs = _FakeFS("noise\nRH_VERSION:0.3.0\n")
+    assert cli._rh_version_remote(fs, _FakeCC()) == "0.3.0"
+    # Probe runs inside the remote conda env.
+    assert "importlib.metadata" in fs.commands[0]
+
+
+def test_rh_version_remote_unknown_when_absent():
+    fs = _FakeFS("ModuleNotFoundError: remote_handler\n")
+    assert cli._rh_version_remote(fs, _FakeCC()) == "unknown"
 
 
 # --------------------------------------------------------------------------
@@ -496,3 +517,32 @@ def test_show_extras_table_all_ok_returns_zero(capsys, monkeypatch):
     )
     rc = cli._show_extras_table(["local", "lugus"])
     assert rc == 0
+
+
+def test_show_extras_table_shows_versions(capsys, monkeypatch):
+    canned = {
+        "local": {
+            "mace": True,
+            cli._RH_VERSION_KEY: "0.4.0",
+            cli._RH_ENV_KEY: "rh_dev",
+        },
+        "lugus": {
+            "mace": True,
+            cli._RH_VERSION_KEY: "0.3.0",
+            cli._RH_ENV_KEY: "jaxrens_al",
+        },
+        "down": None,
+    }
+    monkeypatch.setattr(cli, "_probe_machine", lambda t: canned[t])
+    cli._show_extras_table(["local", "lugus", "down"])
+    out = capsys.readouterr().out
+
+    assert "remote_handler version" in out
+    # Each machine's version is shown; the unreachable one renders as "?".
+    assert "local" in out and "0.4.0" in out
+    assert "lugus" in out and "0.3.0" in out
+    # The conda env the version was read from is shown alongside.
+    assert "(env: rh_dev)" in out and "(env: jaxrens_al)" in out
+    # The reserved keys are a separate block, never raw ✓/✗ grid rows.
+    assert cli._RH_VERSION_KEY not in out
+    assert cli._RH_ENV_KEY not in out

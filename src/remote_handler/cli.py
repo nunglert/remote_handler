@@ -497,6 +497,53 @@ _BINARY_PROBES: dict[str, str] = {
     "orca": "orca",
 }
 
+# Reserved keys under which ``_probe_machine`` stashes the installed
+# ``remote_handler`` version and the conda env it was read from. Neither is an
+# extra/binary, so they never become grid rows -- they are pulled out and shown
+# separately above the table.
+_RH_VERSION_KEY = "__rh_version__"
+_RH_ENV_KEY = "__rh_env__"
+
+
+def _local_rh_version() -> str:
+    """Installed ``remote_handler`` version in this process, or ``unknown``."""
+    import importlib.metadata as md
+
+    try:
+        return md.version("remote_handler")
+    except Exception:  # noqa: BLE001 - report rather than crash the command
+        return "unknown"
+
+
+def _local_conda_env() -> str:
+    """The active conda env name for this process, or ``""`` if not in one."""
+    import os
+
+    return os.environ.get("CONDA_DEFAULT_ENV", "")
+
+
+def _rh_version_remote(remote_fs, cluster_config) -> str:
+    """Installed ``remote_handler`` version in a cluster's conda env, over SSH.
+
+    Reuses the already-open ``remote_fs`` connection. Returns ``unknown`` if it
+    is not importable / not installed there.
+    """
+    from remote_handler.core import remote_env
+
+    activation = remote_env.conda_activation_script(
+        cluster_config.conda_source, cluster_config.conda_env
+    )
+    cmd = (
+        f"{activation}\n"
+        'python -c "import importlib.metadata as m; '
+        "print('RH_VERSION:' + m.version('remote_handler'))\"\n"
+    )
+    result = remote_fs.run_command(cmd)
+    for line in (result.stdout or "").splitlines():
+        if line.startswith("RH_VERSION:"):
+            return line[len("RH_VERSION:") :].strip()
+    return "unknown"
+
 
 def _declared_extras() -> set:
     """The optional-dependency groups declared in this package's metadata."""
@@ -531,6 +578,9 @@ def _show_extras_local() -> int:
     import importlib
     import warnings
 
+    env = _local_conda_env()
+    where = f"local, env: {env}" if env else "local"
+    print(f"remote_handler {_local_rh_version()} ({where})\n")
     print(
         "Probing optional extras (imports torch / jax / ...; may be slow):\n"
     )
@@ -672,6 +722,8 @@ def _probe_machine(target: str):
     if target == "local":
         status = _probe_extras_local()
         status.update(_probe_binaries_local())
+        status[_RH_VERSION_KEY] = _local_rh_version()
+        status[_RH_ENV_KEY] = _local_conda_env()
         return status
 
     from remote_handler.core.cluster_handler import ClusterConfig
@@ -686,6 +738,8 @@ def _probe_machine(target: str):
     try:
         status = _probe_extras_remote(remote_fs, cc)
         status.update(_probe_binaries_remote(remote_fs, cc))
+        status[_RH_VERSION_KEY] = _rh_version_remote(remote_fs, cc)
+        status[_RH_ENV_KEY] = getattr(cc, "conda_env", "") or ""
         return status
     except Exception as exc:  # noqa: BLE001 - probe failure
         print(f"[WARN] {target}: probe failed ({exc})", file=sys.stderr)
@@ -696,6 +750,29 @@ def _show_extras_table(targets) -> int:
     """Probe each target and render a machine-by-machine availability table."""
     print(f"Probing {', '.join(targets)} (SSH per cluster; may be slow):\n")
     columns = [(t, _probe_machine(t)) for t in targets]
+
+    # Installed remote_handler version per machine (not a ✓/✗ row -- a version
+    # string), with the conda env it was read from. Shown as its own block so a
+    # stale install -- or a probe hitting a different env than you expect -- is
+    # easy to spot.
+    def _version(status):
+        if status is None:
+            return "?"  # unreachable
+        return status.get(_RH_VERSION_KEY, "unknown")
+
+    def _env(status):
+        if status is None:
+            return ""
+        return status.get(_RH_ENV_KEY, "")
+
+    name_w = max(len(t) for t, _ in columns)
+    ver_w = max(len(_version(s)) for _, s in columns)
+    print("remote_handler version")
+    for t, status in columns:
+        env = _env(status)
+        suffix = f"  (env: {env})" if env else ""
+        print(f"  {t.ljust(name_w)}  {_version(status).ljust(ver_w)}{suffix}")
+    print()
 
     extra_rows = sorted(_declared_extras())
     # Binary-app rows: only those that surfaced on at least one machine.
