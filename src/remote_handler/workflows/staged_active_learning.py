@@ -172,7 +172,7 @@ class SelectorActor(Selector):
         The result is passed to ``selector.select(grouped, reference=...)`` as
         an argument -- not via a mutator -- so a novelty selector
         (``QUESTSSelector``) scores against it while selectors that take no
-        reference (``UniformSelector``) just ignore it, and a composed
+        reference (``StrideSelector``) just ignore it, and a composed
         ``PipelineSelector`` forwards it to its members. An empty/absent
         reference yields None, so a novelty selector transparently falls back
         to diversity on the cold-start iteration.

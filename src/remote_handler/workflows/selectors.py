@@ -9,12 +9,12 @@ The ``select`` method accepts either:
     list per trajectory/replica)
 
 Selectors that care about grouping (e.g., ``LastFrameSelector``) use
-the nested structure. Selectors that don't (e.g., ``UniformSelector``)
+the nested structure. Selectors that don't (e.g., ``StrideSelector``)
 flatten it automatically.
 
 Example:
-    >>> from remote_handler.workflows.selectors import UniformSelector
-    >>> selector = UniformSelector(n_configs=20)
+    >>> from remote_handler.workflows.selectors import StrideSelector
+    >>> selector = StrideSelector(n_configs=20)
     >>> sampler = TorchSimSampler(..., selector=selector)
 
     >>> from remote_handler.workflows.selectors import QUESTSSelector
@@ -25,6 +25,7 @@ Example:
 
 import json
 import logging
+import warnings
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Union
@@ -113,12 +114,13 @@ class LastFrameSelector(ConfigSelector):
         return configs
 
 
-class UniformSelector(ConfigSelector):
-    """Select configurations at uniform intervals.
+class StrideSelector(ConfigSelector):
+    """Select configurations at evenly spaced (strided) intervals.
 
-    Picks ``n_configs`` evenly spaced configurations from the
-    (flattened) input. Useful for subsampling long trajectories
-    without bias.
+    Picks ``n_configs`` evenly spaced configurations from the (flattened)
+    input -- i.e. every *stride*-th frame, with the stride chosen so the
+    selection spans the whole pool. This is deterministic, *not* random
+    subsampling; useful for thinning long trajectories without bias.
 
     Args:
         n_configs: Number of configurations to select.
@@ -133,7 +135,7 @@ class UniformSelector(ConfigSelector):
         flat = _flatten(configs)
         n_total = len(flat)
         if n_total == 0:
-            logger.warning("UniformSelector: received empty config list")
+            logger.warning("StrideSelector: received empty config list")
             return []
 
         n_select = min(self.n_configs, n_total)
@@ -143,10 +145,29 @@ class UniformSelector(ConfigSelector):
 
         selected = [flat[i] for i in indices]
         logger.info(
-            f"UniformSelector: selected {len(selected)} from "
+            f"StrideSelector: selected {len(selected)} from "
             f"{n_total} configs"
         )
         return selected
+
+
+class UniformSelector(StrideSelector):
+    """Deprecated alias for :class:`StrideSelector`.
+
+    The old name read as *uniform-random* sampling, but the behaviour is
+    deterministic evenly-spaced (strided) selection. Kept for backward
+    compatibility; instantiating it emits a :class:`DeprecationWarning`.
+    """
+
+    def __init__(self, n_configs: int):
+        warnings.warn(
+            "UniformSelector is deprecated and will be removed in a future "
+            "release; use StrideSelector instead (same behaviour, clearer "
+            "name -- it selects evenly-spaced frames, not a random sample).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(n_configs)
 
 
 class UncertaintySelector(ConfigSelector):
@@ -529,7 +550,7 @@ class PipelineSelector(ConfigSelector):
         result = configs
         for selector in self.selectors:
             # Forward the reference to every member; non-novelty selectors
-            # (e.g. UniformSelector) simply ignore it. This is what makes a
+            # (e.g. StrideSelector) simply ignore it. This is what makes a
             # composed "stride then QUESTS-novelty" pipeline work -- no
             # per-member set_reference plumbing.
             result = selector.select(result, reference=reference)

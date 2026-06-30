@@ -9,7 +9,7 @@ from ase import Atoms
 
 from remote_handler.exceptions import WorkflowError
 from remote_handler.workflows.active_learning_base import Selector
-from remote_handler.workflows.selectors import ConfigSelector, UniformSelector
+from remote_handler.workflows.selectors import ConfigSelector, StrideSelector
 from remote_handler.workflows.staged_active_learning import (
     InputSource,
     SelectorActor,
@@ -305,7 +305,7 @@ def test_selector_stage_subsamples_pool(tmp_path):
             _PoolSampler(pool),
             initial_input=_seed(tmp_path, "model.pkl"),
         ),
-        Stage("selector", SelectorActor(UniformSelector(n_configs=3))),
+        Stage("selector", SelectorActor(StrideSelector(n_configs=3))),
         Stage("evaluator", evaluator),
         Stage("trainer", trainer, output_extension="pkl"),
     ]
@@ -342,7 +342,7 @@ def test_from_actors_inserts_selector_stage(tmp_path):
         sampler=_PoolSampler(pool),
         evaluator=evaluator,
         trainer=trainer,
-        selector=UniformSelector(n_configs=2),
+        selector=StrideSelector(n_configs=2),
         calchome=calchome,
         num_iterations=1,
         cycle_exit_point="training",
@@ -608,7 +608,7 @@ def test_unknown_extra_input_stage_raises(tmp_path):
         ),
         Stage(
             "selector",
-            SelectorActor(UniformSelector(n_configs=2)),
+            SelectorActor(StrideSelector(n_configs=2)),
             extra_inputs={"reference": InputSource("nope")},
         ),
     ]
