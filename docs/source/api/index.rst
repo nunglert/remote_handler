@@ -71,8 +71,12 @@ Atoms Handler
    :undoc-members:
    :show-inheritance:
 
-Optimization Handler
-~~~~~~~~~~~~~~~~~~~~
+Trajectory Processing Handlers
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Optimization and structural analysis are separate sibling handlers
+(``RemoteOptimizationHandler`` / ``RemoteAnalysisHandler``) over a shared
+sharding/collection base.
 
 .. automodule:: remote_handler.workflows.optimizer
    :members:

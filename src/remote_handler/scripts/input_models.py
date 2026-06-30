@@ -440,18 +440,20 @@ class AseSinglepointInput(ScriptInput):
 
 @dataclass
 class OptimizeTrajInput(ScriptInput):
-    """Input configuration for jaxnest/optimize_traj.py script.
+    """Input configuration for ``jaxnest/optimize_traj.py`` (optimization only).
+
+    Structural analysis (Steinhardt/RDF) lives in :class:`AnalyzeTrajInput`
+    and ``jaxnest/analyze_traj.py`` -- this schema carries optimization
+    parameters only.
 
     Attributes:
         tag: Tag to prepend to output files
         DATABASE: Path to input trajectory file
-        do_optimization: Whether to perform structure optimization
-        do_steinhardt: Whether to compute Steinhardt parameters
-        do_rdf: Whether to compute radial distribution function
-        general_args: General parameters (cutoff, nbins, etc.)
-        calculator_args: Calculator configuration (optional, required if do_optimization=True)
-        optimization_args: Optimization parameters (optional, required if do_optimization=True)
-        steinhardt_args: Steinhardt parameters (optional, required if do_steinhardt=True)
+        calculator_args: Calculator configuration (backend, supercell, ...)
+        optimization_args: Optimization parameters (fmax, steps)
+        STUB: If True, the remote payload runs in mock mode
+        do_optimization: Retained for the remote payload's branch; the handler
+            always sets it True.
 
     Example:
         >>> config = OptimizeTrajInput.from_file(Path("input_opt.json"))
@@ -460,13 +462,61 @@ class OptimizeTrajInput(ScriptInput):
 
     tag: str
     DATABASE: str
-    do_optimization: bool
+    calculator_args: dict[str, Any]
+    optimization_args: dict[str, Any]
+    STUB: bool = False
+    do_optimization: bool = True
+
+    def validate(self, root: Optional[Path] = None) -> None:
+        """Validate configuration parameters.
+
+        Raises:
+            ScriptInputError: If any parameter is invalid
+        """
+        if not self.DATABASE:
+            raise ScriptInputError("DATABASE cannot be empty")
+
+        if not self.calculator_args:
+            raise ScriptInputError("calculator_args required for optimization")
+
+        if not self.optimization_args:
+            raise ScriptInputError(
+                "optimization_args required for optimization"
+            )
+
+        if root is not None:
+            _require_path(root, self.DATABASE, "DATABASE")
+
+
+@dataclass
+class AnalyzeTrajInput(ScriptInput):
+    """Input configuration for ``jaxnest/analyze_traj.py`` (analysis only).
+
+    Drives structural-descriptor computation (Steinhardt order parameters via
+    QUIP, and/or the radial distribution function) on a trajectory shard. No
+    force-field model is involved -- contrast :class:`OptimizeTrajInput`.
+
+    Attributes:
+        tag: Tag to prepend to output files
+        DATABASE: Path to input trajectory file
+        do_steinhardt: Whether to compute Steinhardt parameters
+        do_rdf: Whether to compute the radial distribution function
+        general_args: General parameters (cutoff, nbins)
+        steinhardt_args: Steinhardt parameters (required if do_steinhardt=True)
+        STUB: If True, the remote payload runs in mock mode
+
+    Example:
+        >>> config = AnalyzeTrajInput.from_file(Path("input_analysis.json"))
+        >>> config.validate()
+    """
+
+    tag: str
+    DATABASE: str
     do_steinhardt: bool
     do_rdf: bool
     general_args: dict[str, Any]
-    calculator_args: Optional[dict[str, Any]] = None
-    optimization_args: Optional[dict[str, Any]] = None
     steinhardt_args: Optional[dict[str, Any]] = None
+    STUB: bool = False
 
     def validate(self, root: Optional[Path] = None) -> None:
         """Validate configuration parameters.
@@ -480,14 +530,9 @@ class OptimizeTrajInput(ScriptInput):
         if not isinstance(self.general_args, dict):
             raise ScriptInputError("general_args must be a dictionary")
 
-        if self.do_optimization and not self.calculator_args:
+        if not (self.do_steinhardt or self.do_rdf):
             raise ScriptInputError(
-                "calculator_args required when do_optimization=True"
-            )
-
-        if self.do_optimization and not self.optimization_args:
-            raise ScriptInputError(
-                "optimization_args required when do_optimization=True"
+                "at least one of do_steinhardt / do_rdf must be enabled"
             )
 
         if self.do_steinhardt and not self.steinhardt_args:

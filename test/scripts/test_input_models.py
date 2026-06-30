@@ -7,6 +7,7 @@ import pytest
 
 from remote_handler.exceptions import ScriptInputError
 from remote_handler.scripts.input_models import (
+    AnalyzeTrajInput,
     CmaesSamplingInput,
     DftSinglepointInput,
     LammpsSamplingInput,
@@ -362,7 +363,7 @@ class TestOrcaSinglepointInput:
 
 
 class TestOptimizeTrajInput:
-    """Tests for OptimizeTrajInput."""
+    """Tests for OptimizeTrajInput (optimization-only schema)."""
 
     def test_from_file_valid(self, tmp_path):
         """Test loading from valid JSON file."""
@@ -370,10 +371,6 @@ class TestOptimizeTrajInput:
         input_data = {
             "tag": "optimized",
             "DATABASE": "trajectory.xyz",
-            "do_optimization": True,
-            "do_steinhardt": False,
-            "do_rdf": True,
-            "general_args": {"cutoff": 5.0, "nbins": 100},
             "calculator_args": {"optimization_backend": "LJ"},
             "optimization_args": {"fmax": 0.01},
         }
@@ -383,19 +380,16 @@ class TestOptimizeTrajInput:
 
         assert config.tag == "optimized"
         assert config.DATABASE == "trajectory.xyz"
-        assert config.do_optimization is True
-        assert config.general_args["cutoff"] == 5.0
+        assert config.do_optimization is True  # always-true default
+        assert config.calculator_args["optimization_backend"] == "LJ"
 
-    def test_validate_optimization_without_calculator_args(self):
-        """Test validation when do_optimization=True but no calculator_args."""
+    def test_validate_without_calculator_args(self):
+        """Validation fails when calculator_args is missing."""
         config = OptimizeTrajInput(
             tag="test",
             DATABASE="data.xyz",
-            do_optimization=True,
-            do_steinhardt=False,
-            do_rdf=False,
-            general_args={},
             calculator_args=None,  # Missing!
+            optimization_args={"fmax": 0.1},
         )
 
         with pytest.raises(ScriptInputError) as exc_info:
@@ -403,15 +397,65 @@ class TestOptimizeTrajInput:
 
         assert "calculator_args required" in str(exc_info.value)
 
-    def test_validate_steinhardt_without_args(self):
-        """Test validation when do_steinhardt=True but no steinhardt_args."""
+    def test_validate_without_optimization_args(self):
+        """Validation fails when optimization_args is missing."""
         config = OptimizeTrajInput(
             tag="test",
             DATABASE="data.xyz",
-            do_optimization=False,
+            calculator_args={"optimization_backend": "LJ"},
+            optimization_args=None,  # Missing!
+        )
+
+        with pytest.raises(ScriptInputError) as exc_info:
+            config.validate()
+
+        assert "optimization_args required" in str(exc_info.value)
+
+
+class TestAnalyzeTrajInput:
+    """Tests for AnalyzeTrajInput (analysis-only schema)."""
+
+    def test_from_file_valid(self, tmp_path):
+        input_file = tmp_path / "input.json"
+        input_data = {
+            "tag": "analysis",
+            "DATABASE": "trajectory.xyz",
+            "do_steinhardt": True,
+            "do_rdf": True,
+            "general_args": {"cutoff": 5.0, "nbins": 100},
+            "steinhardt_args": {"steinhardt_l_value": 6},
+        }
+        input_file.write_text(json.dumps(input_data))
+
+        config = AnalyzeTrajInput.from_file(input_file)
+
+        assert config.do_steinhardt is True
+        assert config.general_args["cutoff"] == 5.0
+        assert config.steinhardt_args["steinhardt_l_value"] == 6
+
+    def test_validate_nothing_to_compute(self):
+        """Validation fails when neither descriptor is enabled."""
+        config = AnalyzeTrajInput(
+            tag="test",
+            DATABASE="data.xyz",
+            do_steinhardt=False,
+            do_rdf=False,
+            general_args={"cutoff": 5.0, "nbins": 100},
+        )
+
+        with pytest.raises(ScriptInputError) as exc_info:
+            config.validate()
+
+        assert "do_steinhardt / do_rdf" in str(exc_info.value)
+
+    def test_validate_steinhardt_without_args(self):
+        """Validation fails when do_steinhardt=True but no steinhardt_args."""
+        config = AnalyzeTrajInput(
+            tag="test",
+            DATABASE="data.xyz",
             do_steinhardt=True,
             do_rdf=False,
-            general_args={},
+            general_args={"cutoff": 5.0, "nbins": 100},
             steinhardt_args=None,  # Missing!
         )
 

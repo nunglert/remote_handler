@@ -193,14 +193,16 @@ def get_parser():
     parser.add_argument(
         "--python_script_path",
         type=str,
-        default="/home/nunglert/code/jaxnest_dev/scripts/utility/optimize_traj.py",
-        help="Path to the Python script to be executed.",
+        default=None,
+        help="Remote payload to run. Defaults to the shipped script for the "
+        "selected mode (optimize_traj.py / analyze_traj.py).",
     )
     parser.add_argument(
         "--pickle_file",
         type=str,
-        default="/home/nunglert/nnff_trainings/velo/si_bartok_gpu7/run11_r2scan_rerun/model_params_plain_ensemble_VELO_8E04F5B1.pkl",
-        help="Path to the pickle file with model parameters.",
+        default=None,
+        help="Path to the pickle file with NNFF/MACE model parameters "
+        "(required for those optimization backends).",
     )
     parser.add_argument(
         "--supercell_trafo",
@@ -225,12 +227,6 @@ def get_parser():
         type=str,
         default="NNFF",
         help="Backend for optimization. Also supports ASE LJ.",
-    )
-    parser.add_argument(
-        "--steinhardt_backend",
-        type=str,
-        default="pyscal",
-        help="Backend for steinhardt. Supports quip and pyscal.",
     )
     parser.add_argument(
         "--steinhardt_l_values",
@@ -484,9 +480,9 @@ def process_args(args, parser):
     return args
 
 
-def setup_optimizer(args):
-    return optimizer.RemoteOptimizationHandler(
-        args.ats_files,
+def _shared_handler_kwargs(args):
+    """Sharding / scheduling kwargs common to both handler types."""
+    return dict(
         cluster_config=args.cluster_config,
         remote_fs=args.remote_fs,
         n_processors=args.n_processors,
@@ -494,28 +490,59 @@ def setup_optimizer(args):
         savepath=args.savepath,
         num_parallel=args.num_parallel,
         python_script_path=args.python_script_path,
-        pickle_file=args.pickle_file,
-        supercell_trafo=args.supercell_trafo,
-        max_neighbors_list=args.max_neighbors_list,
-        max_neighbors_offset=args.max_neighbors_offset,
-        optimization_backend=args.optimization_backend,
-        steinhardt_backend=args.steinhardt_backend,
-        steinhardt_l_value=args.steinhardt_l_values[0]
-        if isinstance(args.steinhardt_l_values, list)
-        else args.steinhardt_l_values,
         loop_time=args.loop_time,
         jobname=args.jobname,
         stub=args.stub,
-        steps=args.steps,
-        fmax=args.fmax,
-        rmax=args.rmax,
-        nbins=args.nbins,
         every=args.every,
-        do_steinhardt=args.do_steinhardt,
-        do_optimization=args.do_optimization,
         logfile=args.logfile,
         collect_only=args.collect_only,
-        # partition=args.partition
+    )
+
+
+def setup_optimizer(args):
+    """Build a :class:`~remote_handler.workflows.optimizer.RemoteOptimizationHandler`."""
+    return optimizer.RemoteOptimizationHandler(
+        args.ats_files,
+        pickle_file=args.pickle_file,
+        optimization_backend=args.optimization_backend,
+        supercell_trafo=args.supercell_trafo,
+        max_neighbors_list=args.max_neighbors_list,
+        max_neighbors_offset=args.max_neighbors_offset,
+        steps=args.steps,
+        fmax=args.fmax,
+        **_shared_handler_kwargs(args),
+    )
+
+
+def setup_analysis(args):
+    """Build a :class:`~remote_handler.workflows.optimizer.RemoteAnalysisHandler`."""
+    l_values = args.steinhardt_l_values
+    return optimizer.RemoteAnalysisHandler(
+        args.ats_files,
+        do_steinhardt=args.do_steinhardt,
+        do_rdf=args.do_rdf,
+        steinhardt_l_value=(
+            l_values[0] if isinstance(l_values, list) else l_values
+        ),
+        cutoff=args.rmax,
+        nbins=args.nbins,
+        **_shared_handler_kwargs(args),
+    )
+
+
+def setup_handler(args):
+    """Pick the handler for the requested mode.
+
+    Optimization and analysis are now separate concerns -- one invocation does
+    one of them. Optimization takes precedence if both are somehow requested.
+    """
+    if args.do_optimization:
+        return setup_optimizer(args)
+    if args.do_steinhardt or args.do_rdf:
+        return setup_analysis(args)
+    raise ValueError(
+        "Nothing to do: enable --do_optimization, or --do_steinhardt / "
+        "--do_rdf for analysis."
     )
 
 
@@ -525,7 +552,7 @@ if __name__ == "__main__":
 
     args = process_args(args, parser)
 
-    handler = setup_optimizer(args)
+    handler = setup_handler(args)
 
     if args.recompute_failed:
         handler.recompute_failed()
