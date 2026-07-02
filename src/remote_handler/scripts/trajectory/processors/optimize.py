@@ -12,6 +12,31 @@ deps. Expected ``args`` keys: ``backend``, ``fmax``, ``steps``, and for the NNFF
 backends ``pickle_file``, ``max_neighbors``, ``supercell_diag``.
 """
 
+from remote_handler.exceptions import ScriptInputError
+
+_BACKENDS = ("NNFF", "MACE", "LJ")
+
+
+def validate_args(args):
+    """Enforce the optimize step's arg contract (run at job start).
+
+    Checks only the keys ``run`` actually dereferences, so a malformed payload
+    is rejected before any structure is relaxed rather than mid-shard.
+    """
+    backend = args.get("backend")
+    if backend not in _BACKENDS:
+        raise ScriptInputError(
+            f"optimize: 'backend' must be one of {_BACKENDS}, got {backend!r}"
+        )
+    if not isinstance(args.get("fmax"), (int, float)):
+        raise ScriptInputError("optimize: 'fmax' must be a number")
+    if not isinstance(args.get("steps"), int):
+        raise ScriptInputError("optimize: 'steps' must be an int")
+    if backend in ("NNFF", "MACE") and not args.get("pickle_file"):
+        raise ScriptInputError(
+            f"optimize: backend={backend} requires a 'pickle_file'"
+        )
+
 
 def _build_calculator(args):
     backend = args["backend"]

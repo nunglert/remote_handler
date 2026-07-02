@@ -9,24 +9,32 @@ The design separates the two concerns that pulled against each other:
 * **Data movement** (shared): sharding, distributing the trajectory, and
   collecting/reshaping results -- done once, in :class:`RemoteTrajectoryProcessor`
   (and, beneath it, :class:`~remote_handler.core.atoms_handler.RemoteAtomsHandler`).
-* **Computation** (composable): a *list* of :class:`Processor` steps. Each is a
-  small, single-responsibility unit contributing only its own remote arguments
-  and any files it needs staged. The remote payload (``process_traj.py``) reads
-  a shard once and runs the requested steps in order via a processor registry
-  (``scripts/trajectory/processors``), so a single job can e.g. optimize *then*
-  characterize the relaxed structures, with the trajectory distributed only
-  once. Each processor sources its science upstream (the NNFF calculator from
-  neuralil-jaxrens, Steinhardt from jaxrens); dependency-light glue (LBFGS
-  relaxation, the ASE RDF) is owned here.
+* **Computation** (composable): a *list* of
+  :class:`~remote_handler.workflows.processors.Processor` steps -- the host-side
+  specs, which live in ``workflows.processors`` (and are re-exported here for
+  backward compatibility). Each is a small, single-responsibility unit
+  contributing only its own remote arguments and any files it needs staged. The
+  remote payload (``process_traj.py``) reads a shard once and runs the requested
+  steps in order via a processor registry (``scripts/trajectory/processors``),
+  so a single job can e.g. optimize *then* characterize the relaxed structures,
+  with the trajectory distributed only once. Each processor sources its science
+  upstream (the NNFF calculator from neuralil-jaxrens, Steinhardt from jaxrens);
+  dependency-light glue (LBFGS relaxation, the ASE RDF) is owned here.
 
-``RemoteOptimizationHandler`` and ``RemoteAnalysisHandler`` are thin factories
-over the same core -- they just assemble the processor list for the common
-cases.
+``RemoteOptimizationHandler`` is a thin factory over the same core for the one
+common case whose processor has a wide constructor (the optimize step). Analysis
+has no dedicated handler: it is just ``RemoteTrajectoryProcessor`` with the
+processors you want, e.g. ``processors=[RDFProcessor(), SteinhardtProcessor()]``
+-- RDF is one processor among many, not a handler feature.
+
+Downstream steps self-register: a :class:`Processor` declares its
+:attr:`~Processor.registration_module`, and the stock ``process_traj.py`` driver
+imports those modules on the cluster before resolving steps -- so a downstream
+processor (e.g. a jaxrens-based Steinhardt) works with no custom driver.
 """
 
 import logging
 import os
-from abc import ABC, abstractmethod
 from copy import deepcopy
 from pathlib import Path
 from typing import Optional
@@ -34,6 +42,14 @@ from typing import Optional
 from remote_handler.core import file_handler, tasks
 from remote_handler.core.atoms_handler import RemoteAtomsHandler
 from remote_handler.core.cluster_handler import ClusterConfig
+
+# The composable computation layer lives in ``processors`` now. Re-exported here
+# so existing ``from ...optimizer import Processor, RDFProcessor`` keeps working.
+from remote_handler.workflows.processors import (  # noqa: F401
+    OptimizeProcessor,
+    Processor,
+    RDFProcessor,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,108 +65,8 @@ _SHARD_ATOMS_NAME = "opt.extxyz"
 
 
 # ---------------------------------------------------------------------------
-# Processors -- the composable computation layer (host-side specs)
-# ---------------------------------------------------------------------------
-class Processor(ABC):
-    """One processing step in the remote pipeline.
-
-    A ``Processor`` contributes *only* its own remote arguments and any files
-    that must be staged for it -- nothing about sharding or transport. Its
-    :attr:`name` keys both the ordered ``steps`` list and the per-step ``args``
-    map in the shard input JSON, and must match a processor in the remote
-    registry (``scripts/trajectory/processors``).
-    """
-
-    #: Registry key; must match a remote processor module name.
-    name: str
-
-    @abstractmethod
-    def build_args(self, savepath: str) -> dict:
-        """Return this step's remote args.
-
-        Args:
-            savepath: Remote working directory, for resolving the paths of any
-                files this processor stages (see :meth:`shared_files`).
-        """
-
-    def shared_files(self) -> list:
-        """Files staged once and shared across all shards (default: none)."""
-        return []
-
-
-class OptimizeProcessor(Processor):
-    """Relax each structure with an NNFF/MACE ensemble or an LJ calculator."""
-
-    name = "optimize"
-
-    def __init__(
-        self,
-        pickle_file: Optional[str] = None,
-        backend: str = "NNFF",
-        fmax: float = 0.1,
-        steps: int = 200,
-        max_neighbors: int = 60,
-        max_neighbors_list: Optional[list[int]] = None,
-        neighbor_offset: int = 0,
-        supercell_diag: tuple[int, int, int] = (1, 1, 1),
-    ):
-        if backend in ("NNFF", "MACE") and pickle_file is None:
-            raise ValueError(
-                f"optimize backend={backend!r} requires a pickle_file "
-                "(the model parameters)."
-            )
-        self.pickle_file = pickle_file
-        self.backend = backend
-        self.fmax = fmax
-        self.steps = steps
-        # The NeuralIL calculator picks a neighbour bucket per structure. Pass a
-        # single cap (max_neighbors) or a ladder (max_neighbors_list) to bound
-        # recompiles; neighbor_offset adds headroom. An optional supercell
-        # replicates small cells so the cutoff sphere fits.
-        self.max_neighbors = max_neighbors
-        self.max_neighbors_list = max_neighbors_list
-        self.neighbor_offset = neighbor_offset
-        self.supercell_diag = supercell_diag
-
-    def build_args(self, savepath: str) -> dict:
-        args = {
-            "backend": self.backend,
-            "fmax": self.fmax,
-            "steps": self.steps,
-        }
-        if self.backend in ("NNFF", "MACE"):
-            remote_pickle = os.path.split(self.pickle_file)[1]
-            args.update(
-                pickle_file=str((Path(savepath) / remote_pickle).resolve()),
-                max_neighbors=self.max_neighbors,
-                neighbor_offset=self.neighbor_offset,
-                supercell_diag=list(self.supercell_diag),
-            )
-            if self.max_neighbors_list is not None:
-                args["max_neighbors_list"] = list(self.max_neighbors_list)
-        return args
-
-    def shared_files(self) -> list:
-        if self.backend in ("NNFF", "MACE"):
-            return [self.pickle_file]
-        return []
-
-
-class RDFProcessor(Processor):
-    """Annotate structures with the radial distribution function."""
-
-    name = "rdf"
-
-    def __init__(self, cutoff: float = 5.0, nbins: int = 200):
-        self.cutoff = cutoff
-        self.nbins = nbins
-
-    def build_args(self, savepath: str) -> dict:
-        return {"cutoff": self.cutoff, "nbins": self.nbins}
-
-
-# ---------------------------------------------------------------------------
 # Handler -- the shared data-movement layer + pipeline wiring
+# (the composable :class:`Processor` specs live in ``workflows.processors``)
 # ---------------------------------------------------------------------------
 class RemoteTrajectoryProcessor(RemoteAtomsHandler):
     """Run an ordered pipeline of :class:`Processor` steps over a trajectory.
@@ -256,6 +172,15 @@ class RemoteTrajectoryProcessor(RemoteAtomsHandler):
             "STUB": self._stub,
             "tag": self.tag,
             "steps": [p.name for p in self.processors],
+            # Modules the driver must import (idempotently) before resolving
+            # steps, so each downstream processor's `register(...)` runs.
+            "registration_modules": sorted(
+                {
+                    p.registration_module
+                    for p in self.processors
+                    if p.registration_module
+                }
+            ),
             "args": {
                 p.name: p.build_args(str(self.savepath))
                 for p in self.processors
@@ -353,71 +278,6 @@ class RemoteOptimizationHandler(RemoteTrajectoryProcessor):
                     supercell_diag=supercell_diag,
                 )
             ],
-            stub=stub,
-            python_script_path=python_script_path,
-            tag=tag,
-            loop_time=loop_time,
-            jobname=jobname,
-            every=every,
-            start=start,
-            end=end,
-            local_savepath=local_savepath,
-            logfile=logfile,
-            collect_only=collect_only,
-        )
-
-
-class RemoteAnalysisHandler(RemoteTrajectoryProcessor):
-    """Compute structural descriptors on a sharded trajectory.
-
-    A thin factory over :class:`RemoteTrajectoryProcessor` for the built-in
-    analyses. Currently that is the RDF; Steinhardt lives in a downstream
-    package (which depends on jaxrens) and registers itself as a processor --
-    see :func:`~remote_handler.scripts.trajectory.processors.register`. For a
-    custom pipeline, use :class:`RemoteTrajectoryProcessor` directly.
-    """
-
-    def __init__(
-        self,
-        traj_files: str,
-        cluster_config: ClusterConfig,
-        remote_fs: file_handler.FileSystemHandlerBase,
-        n_processors: int,
-        shard_size: int,
-        savepath: str,
-        num_parallel: int,
-        do_rdf: bool = True,
-        cutoff: float = 5.0,
-        nbins: int = 200,
-        python_script_path: Optional[os.PathLike] = None,
-        stub: bool = False,
-        loop_time: float = 30,
-        jobname: str = "analysis",
-        every: Optional[int] = None,
-        start: Optional[int] = None,
-        end: Optional[int] = None,
-        local_savepath: Optional[os.PathLike] = None,
-        logfile: str = "analysis.log",
-        collect_only: bool = False,
-        tag: str = "analysis",
-    ):
-        procs: list[Processor] = []
-        if do_rdf:
-            procs.append(RDFProcessor(cutoff=cutoff, nbins=nbins))
-        if not procs:
-            raise ValueError(
-                "RemoteAnalysisHandler has nothing to compute (enable do_rdf, "
-                "or use RemoteTrajectoryProcessor with your own processors)."
-            )
-        super().__init__(
-            traj_files,
-            cluster_config,
-            remote_fs,
-            n_processors,
-            shard_size,
-            savepath,
-            num_parallel,
-            processors=procs,
             stub=stub,
             python_script_path=python_script_path,
             tag=tag,

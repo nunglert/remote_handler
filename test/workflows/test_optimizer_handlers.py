@@ -1,11 +1,12 @@
-"""The optimization and analysis handlers stay disentangled.
+"""The composable trajectory processor + its optimize factory.
 
-``RemoteOptimizationHandler`` and ``RemoteAnalysisHandler`` share the per-shard
-staging/collection plumbing (``_RemoteTrajectoryHandler``) but must each build
-*only* their own input JSON -- no optimization keys leak into an analysis job
-and vice versa. These tests construct each handler against the local
-filesystem (no cluster needed) and inspect the staged per-shard payloads,
-shared resources, and default remote script.
+``RemoteTrajectoryProcessor`` runs an ordered list of ``Processor`` steps over a
+shared sharding/collection base; ``RemoteOptimizationHandler`` is a thin factory
+for the optimize step. Analysis has no dedicated handler -- it is just the core
+with the processors you want (e.g. ``[RDFProcessor(), ...]``). These tests
+construct handlers against the local filesystem (no cluster needed) and inspect
+the staged per-shard payloads, shared resources, and default remote script,
+checking that each processor contributes *only* its own args.
 """
 
 import ase.io
@@ -16,12 +17,35 @@ from ase import Atoms
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import LocalFileSystem
 from remote_handler.workflows.optimizer import (
-    OptimizeProcessor,
-    RDFProcessor,
-    RemoteAnalysisHandler,
     RemoteOptimizationHandler,
     RemoteTrajectoryProcessor,
 )
+from remote_handler.workflows.processors import (
+    OptimizeProcessor,
+    Processor,
+    RDFProcessor,
+)
+
+
+class _DummyDownstreamProcessor(Processor):
+    """Stand-in for a downstream (e.g. jaxrens Steinhardt) processor: declares
+    a registration_module and stages nothing."""
+
+    name = "dummy"
+    registration_module = "some.test.module"
+
+    def build_args(self, savepath: str) -> dict:
+        return {"k": 1}
+
+
+def test_processor_specs_reexported_from_optimizer():
+    """Specs now live in workflows.processors but the old optimizer import
+    path still resolves to the same classes (backward compatibility)."""
+    from remote_handler.workflows import optimizer, processors
+
+    assert optimizer.Processor is processors.Processor
+    assert optimizer.OptimizeProcessor is processors.OptimizeProcessor
+    assert optimizer.RDFProcessor is processors.RDFProcessor
 
 
 def _cfg(tmp_path):
@@ -146,12 +170,10 @@ def test_optimization_forwards_neighbor_bucket_ladder(tmp_path, traj):
         assert opt["neighbor_offset"] == 2
 
 
-# -- analysis factory -------------------------------------------------------
-def test_analysis_builds_rdf_step(tmp_path, traj):
-    h = RemoteAnalysisHandler(
-        do_rdf=True,
-        cutoff=4.5,
-        nbins=150,
+# -- analysis is just the core with an RDF processor ------------------------
+def test_rdf_only_pipeline_builds_rdf_step(tmp_path, traj):
+    h = RemoteTrajectoryProcessor(
+        processors=[RDFProcessor(cutoff=4.5, nbins=150)],
         **_common(tmp_path, traj),
     )
     jsons = _shard_jsons(h)
@@ -161,13 +183,30 @@ def test_analysis_builds_rdf_step(tmp_path, traj):
         assert j["args"]["rdf"] == {"cutoff": 4.5, "nbins": 150}
         # No optimization concern leaks in.
         assert "optimize" not in j["args"]
-    # Analysis needs no model -> no shared resources.
+    # RDF needs no model -> no shared resources.
     assert h.shared_ressources == []
 
 
-def test_analysis_requires_something_to_do(tmp_path, traj):
-    with pytest.raises(ValueError, match="nothing to compute"):
-        RemoteAnalysisHandler(do_rdf=False, **_common(tmp_path, traj))
+def test_analysis_pipeline_composes_rdf_then_downstream(tmp_path, traj):
+    """RDF + a downstream descriptor compose in order, and the downstream
+    processor's registration module rides along for the cluster driver."""
+    h = RemoteTrajectoryProcessor(
+        processors=[RDFProcessor(), _DummyDownstreamProcessor()],
+        **_common(tmp_path, traj),
+    )
+    for j in _shard_jsons(h):
+        assert j["steps"] == ["rdf", "dummy"]
+        assert j["registration_modules"] == ["some.test.module"]
+
+
+# -- registration modules travel in the shard JSON --------------------------
+def test_builtin_only_pipeline_lists_no_registration_modules(tmp_path, traj):
+    h = RemoteTrajectoryProcessor(
+        processors=[OptimizeProcessor(backend="LJ"), RDFProcessor()],
+        **_common(tmp_path, traj),
+    )
+    for j in _shard_jsons(h):
+        assert j["registration_modules"] == []
 
 
 # -- composition: the whole point of the redesign ---------------------------

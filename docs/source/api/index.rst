@@ -74,9 +74,18 @@ Atoms Handler
 Trajectory Processing Handlers
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Optimization and structural analysis are separate sibling handlers
-(``RemoteOptimizationHandler`` / ``RemoteAnalysisHandler``) over a shared
-sharding/collection base.
+A single composable core (``RemoteTrajectoryProcessor``) runs an ordered list
+of ``Processor`` steps over a shared sharding/collection base;
+``RemoteOptimizationHandler`` is a thin factory for the optimize step.
+Structural analysis is just the core with the processors you want (e.g.
+``processors=[RDFProcessor(), SteinhardtProcessor()]``). The composable
+``Processor`` specs live in ``workflows.processors``; the handler that runs
+them lives in ``workflows.optimizer``.
+
+.. automodule:: remote_handler.workflows.processors
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
 .. automodule:: remote_handler.workflows.optimizer
    :members:

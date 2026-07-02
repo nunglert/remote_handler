@@ -8,6 +8,18 @@ in each structure's info. Expected ``args`` keys: ``cutoff`` and ``nbins``.
 import numpy as np
 from ase.neighborlist import neighbor_list
 
+from remote_handler.exceptions import ScriptInputError
+
+
+def validate_args(args):
+    """Enforce the RDF step's arg contract (run at job start)."""
+    cutoff = args.get("cutoff")
+    if not isinstance(cutoff, (int, float)) or cutoff <= 0:
+        raise ScriptInputError("rdf: 'cutoff' must be a positive number")
+    nbins = args.get("nbins")
+    if not isinstance(nbins, int) or nbins <= 0:
+        raise ScriptInputError("rdf: 'nbins' must be a positive int")
+
 
 def _rdf(at, rmax, nbins):
     """Total g(r) for one structure, PBC-aware, normalised to 1 at large r."""

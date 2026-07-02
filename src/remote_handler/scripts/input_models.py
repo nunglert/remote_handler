@@ -454,6 +454,9 @@ class ProcessTrajInput(ScriptInput):
             "rdf"]``); each must exist in the remote processor registry
         args: Map of processor name -> its argument dict
         STUB: If True, the remote payload runs in mock mode
+        registration_modules: Import paths the driver imports (idempotently)
+            before resolving ``steps``, so downstream processors register their
+            ``run`` in the registry. Empty for built-in-only pipelines.
 
     Example:
         >>> config = ProcessTrajInput.from_file(Path("input_process.json"))
@@ -465,9 +468,19 @@ class ProcessTrajInput(ScriptInput):
     steps: list[str]
     args: dict[str, Any]
     STUB: bool = False
+    registration_modules: list[str] = field(default_factory=list)
 
     def validate(self, root: Optional[Path] = None) -> None:
-        """Validate configuration parameters.
+        """Validate the *coarse* shape of a processor pipeline.
+
+        This checks only what a generic schema can: a trajectory is named, at
+        least one step is requested, and ``args`` is a per-step map. It
+        deliberately does **not** validate each step's args -- those contracts
+        belong to the processors (including downstream ones), which a generic
+        input model must not import. The driver (``process_traj.py``) enforces
+        them per step via the registry's ``validate_args`` right after importing
+        the registration modules, so a malformed composed payload fails fast at
+        job start. See ``scripts/trajectory/processors``.
 
         Raises:
             ScriptInputError: If any parameter is invalid

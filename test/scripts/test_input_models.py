@@ -384,6 +384,25 @@ class TestProcessTrajInput:
         assert config.DATABASE == "trajectory.xyz"
         assert config.steps == ["optimize", "rdf"]
         assert config.args["optimize"]["backend"] == "LJ"
+        # Absent in JSON -> defaults to empty (built-in-only pipeline).
+        assert config.registration_modules == []
+
+    def test_registration_modules_round_trip(self, tmp_path):
+        """A downstream pipeline's registration modules survive from_file."""
+        input_file = tmp_path / "input.json"
+        input_data = {
+            "tag": "processed",
+            "DATABASE": "trajectory.xyz",
+            "steps": ["rdf", "steinhardt"],
+            "args": {"rdf": {}, "steinhardt": {}},
+            "registration_modules": ["jaxrens_al.processors.steinhardt"],
+        }
+        input_file.write_text(json.dumps(input_data))
+
+        config = ProcessTrajInput.from_file(input_file)
+        assert config.registration_modules == [
+            "jaxrens_al.processors.steinhardt"
+        ]
 
     def test_validate_empty_steps(self):
         """Validation fails when no steps are requested."""
