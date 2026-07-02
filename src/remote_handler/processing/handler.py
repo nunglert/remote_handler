@@ -1,4 +1,4 @@
-"""Remote per-shard trajectory processing.
+"""Remote per-shard trajectory processing -- the data-movement layer.
 
 A trajectory (set of ``.extxyz`` files) is sharded into batches; each batch is
 processed in its own array-job task on a remote cluster, and the results are
@@ -10,16 +10,10 @@ The design separates the two concerns that pulled against each other:
   collecting/reshaping results -- done once, in :class:`RemoteTrajectoryProcessor`
   (and, beneath it, :class:`~remote_handler.core.atoms_handler.RemoteAtomsHandler`).
 * **Computation** (composable): a *list* of
-  :class:`~remote_handler.workflows.processors.Processor` steps -- the host-side
-  specs, which live in ``workflows.processors`` (and are re-exported here for
-  backward compatibility). Each is a small, single-responsibility unit
-  contributing only its own remote arguments and any files it needs staged. The
-  remote payload (``process_traj.py``) reads a shard once and runs the requested
-  steps in order via a processor registry (``scripts/trajectory/processors``),
-  so a single job can e.g. optimize *then* characterize the relaxed structures,
-  with the trajectory distributed only once. Each processor sources its science
-  upstream (the NNFF calculator from neuralil-jaxrens, Steinhardt from jaxrens);
-  dependency-light glue (LBFGS relaxation, the ASE RDF) is owned here.
+  :class:`~remote_handler.processing.base.Processor` steps. The remote driver
+  (``driver.py``) reads a shard once and runs the requested steps in order via
+  the registry, so a single job can e.g. optimize *then* characterize the
+  relaxed structures, with the trajectory distributed only once.
 
 ``RemoteOptimizationHandler`` is a thin factory over the same core for the one
 common case whose processor has a wide constructor (the optimize step). Analysis
@@ -28,9 +22,10 @@ processors you want, e.g. ``processors=[RDFProcessor(), SteinhardtProcessor()]``
 -- RDF is one processor among many, not a handler feature.
 
 Downstream steps self-register: a :class:`Processor` declares its
-:attr:`~Processor.registration_module`, and the stock ``process_traj.py`` driver
-imports those modules on the cluster before resolving steps -- so a downstream
-processor (e.g. a jaxrens-based Steinhardt) works with no custom driver.
+:attr:`~remote_handler.processing.base.Processor.registration_module`, and the
+stock driver imports those modules on the cluster before resolving steps -- so a
+downstream processor (e.g. a jaxrens-based Steinhardt) works with no custom
+driver.
 """
 
 import logging
@@ -42,20 +37,13 @@ from typing import Optional
 from remote_handler.core import file_handler, tasks
 from remote_handler.core.atoms_handler import RemoteAtomsHandler
 from remote_handler.core.cluster_handler import ClusterConfig
-
-# The composable computation layer lives in ``processors`` now. Re-exported here
-# so existing ``from ...optimizer import Processor, RDFProcessor`` keeps working.
-from remote_handler.workflows.processors import (  # noqa: F401
-    OptimizeProcessor,
-    Processor,
-    RDFProcessor,
-)
+from remote_handler.processing.base import Processor
+from remote_handler.processing.processors.optimize import OptimizeProcessor
 
 logger = logging.getLogger(__name__)
 
-# Remote payloads shipped with the package live under ``scripts/``.
-_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
-_PROCESS_SCRIPT = _SCRIPTS_DIR / "trajectory" / "process_traj.py"
+# The shard driver shipped with the package (ships alongside this module).
+_DRIVER_SCRIPT = Path(__file__).resolve().parent / "driver.py"
 
 # The collector (``AtomsShardManager.collect``) locates each shard's processed
 # output as ``front_tag("opt.extxyz", tag)``, so the per-shard working
@@ -64,10 +52,6 @@ _PROCESS_SCRIPT = _SCRIPTS_DIR / "trajectory" / "process_traj.py"
 _SHARD_ATOMS_NAME = "opt.extxyz"
 
 
-# ---------------------------------------------------------------------------
-# Handler -- the shared data-movement layer + pipeline wiring
-# (the composable :class:`Processor` specs live in ``workflows.processors``)
-# ---------------------------------------------------------------------------
 class RemoteTrajectoryProcessor(RemoteAtomsHandler):
     """Run an ordered pipeline of :class:`Processor` steps over a trajectory.
 
@@ -86,8 +70,7 @@ class RemoteTrajectoryProcessor(RemoteAtomsHandler):
         num_parallel: Maximum array tasks to run concurrently.
         processors: Ordered processing steps to run on each shard.
         stub: If True, the remote payload runs in mock mode.
-        python_script_path: Remote payload; defaults to the shipped
-            ``trajectory/process_traj.py``.
+        python_script_path: Remote payload; defaults to the shipped ``driver.py``.
         tag: Output-file tag (drives collection).
         loop_time: Seconds between completion polls.
         jobname: SLURM job name.
@@ -159,7 +142,7 @@ class RemoteTrajectoryProcessor(RemoteAtomsHandler):
         self.python_script_file = (
             python_script_path
             if python_script_path is not None
-            else _PROCESS_SCRIPT
+            else _DRIVER_SCRIPT
         )
         self.shared_ressources = self._collect_shared_files()
 
@@ -224,7 +207,7 @@ class RemoteTrajectoryProcessor(RemoteAtomsHandler):
 
 
 # ---------------------------------------------------------------------------
-# Thin factories over the composable core
+# Thin factory over the composable core
 # ---------------------------------------------------------------------------
 class RemoteOptimizationHandler(RemoteTrajectoryProcessor):
     """Optimize a sharded trajectory (a one-step :class:`OptimizeProcessor`)."""

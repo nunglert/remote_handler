@@ -16,14 +16,12 @@ from ase import Atoms
 
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import LocalFileSystem
-from remote_handler.workflows.optimizer import (
-    RemoteOptimizationHandler,
-    RemoteTrajectoryProcessor,
-)
-from remote_handler.workflows.processors import (
+from remote_handler.processing import (
     OptimizeProcessor,
     Processor,
     RDFProcessor,
+    RemoteOptimizationHandler,
+    RemoteTrajectoryProcessor,
 )
 
 
@@ -38,14 +36,31 @@ class _DummyDownstreamProcessor(Processor):
         return {"k": 1}
 
 
-def test_processor_specs_reexported_from_optimizer():
-    """Specs now live in workflows.processors but the old optimizer import
-    path still resolves to the same classes (backward compatibility)."""
-    from remote_handler.workflows import optimizer, processors
+def test_processor_subclass_requires_name():
+    """A concrete Processor without a name is rejected at definition time."""
+    with pytest.raises(TypeError, match="must set a class-level 'name'"):
 
-    assert optimizer.Processor is processors.Processor
-    assert optimizer.OptimizeProcessor is processors.OptimizeProcessor
-    assert optimizer.RDFProcessor is processors.RDFProcessor
+        class _NoName(Processor):
+            def build_args(self, savepath):
+                return {}
+
+
+def test_processor_registration_module_defaults_to_own_module():
+    """A downstream-style processor that co-locates its run+register gets its
+    registration_module for free; an explicit value is left untouched."""
+
+    class _Derived(Processor):
+        name = "derived"
+
+        def build_args(self, savepath):
+            return {}
+
+    assert _Derived.registration_module == _Derived.__module__
+    # Explicitly-set value wins (the dummy above sets its own).
+    assert _DummyDownstreamProcessor.registration_module == "some.test.module"
+    # Built-ins opt out (their run is always in the registry).
+    assert OptimizeProcessor.registration_module is None
+    assert RDFProcessor.registration_module is None
 
 
 def _cfg(tmp_path):
@@ -105,7 +120,7 @@ def test_all_handlers_use_the_single_driver(tmp_path, traj):
         optimization_backend="LJ", **_common(tmp_path, traj)
     )
     assert _input_name(h) == "input_process.json"
-    assert str(h.python_script_file).endswith("trajectory/process_traj.py")
+    assert str(h.python_script_file).endswith("processing/driver.py")
 
 
 # -- optimization factory ---------------------------------------------------
@@ -237,7 +252,7 @@ def test_pipeline_composes_optimize_then_analysis(tmp_path, traj):
     # per-shard atoms batch (not a shared resource).
     assert h.shared_ressources == [str(pickle)]
     # Single driver + single per-shard input, regardless of step count.
-    assert str(h.python_script_file).endswith("trajectory/process_traj.py")
+    assert str(h.python_script_file).endswith("processing/driver.py")
     assert _input_name(h) == "input_process.json"
 
 

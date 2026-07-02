@@ -71,23 +71,34 @@ Atoms Handler
    :undoc-members:
    :show-inheritance:
 
-Trajectory Processing Handlers
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Trajectory Processing
+~~~~~~~~~~~~~~~~~~~~~~~
 
-A single composable core (``RemoteTrajectoryProcessor``) runs an ordered list
-of ``Processor`` steps over a shared sharding/collection base;
+``remote_handler.processing`` is a self-contained plugin framework: a single
+composable core (``RemoteTrajectoryProcessor``) runs an ordered list of
+``Processor`` steps over a shared sharding/collection base, and
 ``RemoteOptimizationHandler`` is a thin factory for the optimize step.
 Structural analysis is just the core with the processors you want (e.g.
-``processors=[RDFProcessor(), SteinhardtProcessor()]``). The composable
-``Processor`` specs live in ``workflows.processors``; the handler that runs
-them lives in ``workflows.optimizer``.
+``processors=[RDFProcessor(), SteinhardtProcessor()]``). Each built-in processor
+keeps its arg schema, cluster-side ``run``, and host-side ``Processor`` spec in
+one module under ``processing/processors/``.
 
-.. automodule:: remote_handler.workflows.processors
+.. automodule:: remote_handler.processing
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: remote_handler.workflows.optimizer
+.. automodule:: remote_handler.processing.base
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: remote_handler.processing.handler
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: remote_handler.processing.registry
    :members:
    :undoc-members:
    :show-inheritance:

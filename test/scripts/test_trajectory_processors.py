@@ -13,13 +13,8 @@ import pytest
 from ase import Atoms
 
 from remote_handler.exceptions import ScriptInputError
-from remote_handler.scripts.trajectory.processors import (
-    REGISTRY,
-    optimize,
-    rdf,
-    register,
-    validate_args,
-)
+from remote_handler.processing import REGISTRY, register, validate_args
+from remote_handler.processing.processors import optimize, rdf
 
 
 def _import_registration_modules(modules):
@@ -62,7 +57,7 @@ def test_driver_import_step_registers_downstream(tmp_path):
     module-level register(...), making the step resolvable in REGISTRY."""
     pkg = tmp_path / "dummy_downstream.py"
     pkg.write_text(
-        "from remote_handler.scripts.trajectory.processors import register\n"
+        "from remote_handler.processing import register\n"
         "def run(atoms_list, args, calcpath=None):\n"
         "    return atoms_list\n"
         "register('dummy_step', run)\n"
@@ -88,51 +83,56 @@ def test_driver_import_step_bad_module_raises_clear_error():
         _import_registration_modules(["remote_handler.no_such_module_xyz"])
 
 
-# -- per-step arg validation (the composed-payload contract) ----------------
-def test_optimize_validate_args_accepts_valid():
-    optimize.validate_args({"backend": "LJ", "fmax": 0.1, "steps": 100})
-    optimize.validate_args(
-        {"backend": "NNFF", "fmax": 0.1, "steps": 50, "pickle_file": "m.pkl"}
+# -- per-step arg validation via the shared schema --------------------------
+# The driver validates every step through the registry's ``validate_args``,
+# which round-trips the args through the registered schema. These exercise that
+# path (the same one process_traj.py runs at job start).
+def test_optimize_args_accepts_valid():
+    validate_args("optimize", {"backend": "LJ", "fmax": 0.1, "steps": 100})
+    validate_args(
+        "optimize",
+        {"backend": "NNFF", "fmax": 0.1, "steps": 50, "pickle_file": "m.pkl"},
     )
 
 
 @pytest.mark.parametrize(
     "args, match",
     [
-        ({"fmax": 0.1, "steps": 10}, "backend"),
+        ({"fmax": 0.1, "steps": 10}, "backend"),  # missing -> from_dict
         ({"backend": "nope", "fmax": 0.1, "steps": 10}, "backend"),
-        ({"backend": "LJ", "steps": 10}, "fmax"),
-        ({"backend": "LJ", "fmax": 0.1}, "steps"),
-        ({"backend": "LJ", "fmax": 0.1, "steps": 1.5}, "steps"),
+        ({"backend": "LJ", "steps": 10}, "fmax"),  # missing -> from_dict
+        ({"backend": "LJ", "fmax": 0.1}, "steps"),  # missing -> from_dict
+        ({"backend": "LJ", "fmax": 0.1, "steps": 1.5}, "steps"),  # validate
         # NNFF without a model is the classic mid-run crash -- caught up front.
         ({"backend": "NNFF", "fmax": 0.1, "steps": 10}, "pickle_file"),
     ],
 )
-def test_optimize_validate_args_rejects(args, match):
+def test_optimize_args_rejects(args, match):
     with pytest.raises(ScriptInputError, match=match):
-        optimize.validate_args(args)
+        validate_args("optimize", args)
 
 
-def test_rdf_validate_args_accepts_and_rejects():
-    rdf.validate_args({"cutoff": 5.0, "nbins": 200})
+def test_rdf_args_accepts_and_rejects():
+    validate_args("rdf", {"cutoff": 5.0, "nbins": 200})
     with pytest.raises(ScriptInputError, match="cutoff"):
-        rdf.validate_args({"nbins": 200})
+        validate_args("rdf", {"nbins": 200})
     with pytest.raises(ScriptInputError, match="cutoff"):
-        rdf.validate_args({"cutoff": -1.0, "nbins": 200})
+        validate_args("rdf", {"cutoff": -1.0, "nbins": 200})
     with pytest.raises(ScriptInputError, match="nbins"):
-        rdf.validate_args({"cutoff": 5.0, "nbins": 0})
+        validate_args("rdf", {"cutoff": 5.0, "nbins": 0})
 
 
-def test_validate_args_dispatches_via_registry():
-    """The driver calls validate_args(step, args); it routes to the processor's
-    own validator and stays silent for good input."""
-    validate_args("rdf", {"cutoff": 5.0, "nbins": 200})  # no raise
-    with pytest.raises(ScriptInputError, match="cutoff"):
-        validate_args("rdf", {"cutoff": 0.0, "nbins": 200})
+def test_host_build_args_round_trips_through_schema():
+    """The single-source-of-truth guarantee: what build_args emits is exactly
+    what the driver's schema validation accepts."""
+    from remote_handler.processing import OptimizeProcessor, RDFProcessor
+
+    validate_args("optimize", OptimizeProcessor(backend="LJ").build_args("/s"))
+    validate_args("rdf", RDFProcessor(cutoff=4.0, nbins=80).build_args("/s"))
 
 
-def test_validate_args_permissive_for_processor_without_validator():
-    """A processor registered with run only (no validator) is unchecked --
+def test_validate_args_permissive_for_processor_without_schema():
+    """A processor registered with run only (no schema) is unchecked --
     validate_args is a no-op, never a KeyError."""
     try:
         register("nocheck", lambda a, args, calcpath=None: a)

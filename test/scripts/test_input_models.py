@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from remote_handler.exceptions import ScriptInputError
+from remote_handler.processing import OptimizeArgs, ProcessTrajInput, RdfArgs
 from remote_handler.scripts.input_models import (
     CmaesSamplingInput,
     DftSinglepointInput,
@@ -13,10 +14,39 @@ from remote_handler.scripts.input_models import (
     MaceFinetuningInput,
     MaceTrainingInput,
     OrcaSinglepointInput,
-    ProcessTrajInput,
     ScriptInput,
     TorchSimSamplingInput,
 )
+
+
+class TestProcessorArgSchemas:
+    """The per-step arg schemas: single source of truth for build/validate."""
+
+    def test_optimize_to_dict_drops_none_for_lj(self):
+        # LJ needs no model knobs -> only the three required keys survive.
+        args = OptimizeArgs(backend="LJ", fmax=0.1, steps=100).to_dict()
+        assert args == {"backend": "LJ", "fmax": 0.1, "steps": 100}
+
+    def test_optimize_from_dict_validate_round_trip(self):
+        OptimizeArgs.from_dict(
+            {"backend": "NNFF", "fmax": 0.1, "steps": 5, "pickle_file": "m"}
+        ).validate()
+
+    def test_optimize_missing_required_key_raises(self):
+        # Missing 'backend' is caught by from_dict (construction), not validate.
+        with pytest.raises(ScriptInputError, match="backend"):
+            OptimizeArgs.from_dict({"fmax": 0.1, "steps": 5}).validate()
+
+    def test_optimize_nnff_without_pickle_raises(self):
+        with pytest.raises(ScriptInputError, match="pickle_file"):
+            OptimizeArgs.from_dict(
+                {"backend": "NNFF", "fmax": 0.1, "steps": 5}
+            ).validate()
+
+    def test_rdf_validate(self):
+        RdfArgs.from_dict({"cutoff": 5.0, "nbins": 200}).validate()
+        with pytest.raises(ScriptInputError, match="nbins"):
+            RdfArgs.from_dict({"cutoff": 5.0, "nbins": 0}).validate()
 
 
 class TestMaceTrainingInput:

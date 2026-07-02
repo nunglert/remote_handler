@@ -6,9 +6,9 @@ import os
 import re
 from pathlib import Path
 
+from remote_handler import processing
 from remote_handler.core import file_handler, file_utils, utils
 from remote_handler.core.cluster_handler import ClusterConfig
-from remote_handler.workflows import optimizer, processors
 
 # from jaxnest import file_utils
 # from jaxnest.file_utils import grep, secure_path
@@ -478,8 +478,8 @@ def _shared_handler_kwargs(args):
 
 
 def setup_optimizer(args):
-    """Build a :class:`~remote_handler.workflows.optimizer.RemoteOptimizationHandler`."""
-    return optimizer.RemoteOptimizationHandler(
+    """Build a :class:`~remote_handler.processing.RemoteOptimizationHandler`."""
+    return processing.RemoteOptimizationHandler(
         args.ats_files,
         pickle_file=args.pickle_file,
         optimization_backend=args.optimization_backend,
@@ -497,10 +497,10 @@ def setup_analysis(args):
     Analysis has no dedicated handler -- it is the composable core with the
     processors you want. Add more (e.g. a downstream Steinhardt) to the list.
     """
-    return optimizer.RemoteTrajectoryProcessor(
+    return processing.RemoteTrajectoryProcessor(
         args.ats_files,
         processors=[
-            processors.RDFProcessor(cutoff=args.rmax, nbins=args.nbins)
+            processing.RDFProcessor(cutoff=args.rmax, nbins=args.nbins)
         ],
         tag="analysis",
         **_shared_handler_kwargs(args),

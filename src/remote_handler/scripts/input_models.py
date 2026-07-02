@@ -137,6 +137,18 @@ class ScriptInput:
         """
         pass
 
+    def to_dict(self) -> dict:
+        """Serialise to a plain dict, dropping unset (``None``) fields.
+
+        The inverse of :meth:`from_dict` for the keys that matter: a host-side
+        builder fills the schema and calls this to emit the payload, so the
+        field names are declared once (on the dataclass) rather than hand-listed
+        at every emit site.
+        """
+        return {
+            k: v for k, v in dataclasses.asdict(self).items() if v is not None
+        }
+
 
 @dataclass
 class MaceTrainingInput(ScriptInput):
@@ -433,66 +445,6 @@ class AseSinglepointInput(ScriptInput):
 
         if not isinstance(self.calculator_kwargs, dict):
             raise ScriptInputError("calculator_kwargs must be a dictionary")
-
-        if root is not None:
-            _require_path(root, self.DATABASE, "DATABASE")
-
-
-@dataclass
-class ProcessTrajInput(ScriptInput):
-    """Input configuration for ``trajectory/process_traj.py``.
-
-    Drives a pipeline of processors over a trajectory shard. Rather than a
-    fixed set of ``do_X`` flags, it carries an ordered list of processor
-    ``steps`` and a per-step ``args`` map -- so optimization and any structural
-    analysis compose in one job, and adding a processor needs no schema change.
-
-    Attributes:
-        tag: Tag to prepend to output files
-        DATABASE: Path to input trajectory file
-        steps: Ordered processor names to run (e.g. ``["optimize",
-            "rdf"]``); each must exist in the remote processor registry
-        args: Map of processor name -> its argument dict
-        STUB: If True, the remote payload runs in mock mode
-        registration_modules: Import paths the driver imports (idempotently)
-            before resolving ``steps``, so downstream processors register their
-            ``run`` in the registry. Empty for built-in-only pipelines.
-
-    Example:
-        >>> config = ProcessTrajInput.from_file(Path("input_process.json"))
-        >>> config.validate()
-    """
-
-    tag: str
-    DATABASE: str
-    steps: list[str]
-    args: dict[str, Any]
-    STUB: bool = False
-    registration_modules: list[str] = field(default_factory=list)
-
-    def validate(self, root: Optional[Path] = None) -> None:
-        """Validate the *coarse* shape of a processor pipeline.
-
-        This checks only what a generic schema can: a trajectory is named, at
-        least one step is requested, and ``args`` is a per-step map. It
-        deliberately does **not** validate each step's args -- those contracts
-        belong to the processors (including downstream ones), which a generic
-        input model must not import. The driver (``process_traj.py``) enforces
-        them per step via the registry's ``validate_args`` right after importing
-        the registration modules, so a malformed composed payload fails fast at
-        job start. See ``scripts/trajectory/processors``.
-
-        Raises:
-            ScriptInputError: If any parameter is invalid
-        """
-        if not self.DATABASE:
-            raise ScriptInputError("DATABASE cannot be empty")
-
-        if not self.steps:
-            raise ScriptInputError("steps cannot be empty")
-
-        if not isinstance(self.args, dict):
-            raise ScriptInputError("args must be a dictionary")
 
         if root is not None:
             _require_path(root, self.DATABASE, "DATABASE")
