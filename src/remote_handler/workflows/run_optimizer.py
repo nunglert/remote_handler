@@ -22,12 +22,10 @@ Usage:
 
     Without a config file:
 
-        python /home/nunglert/code/jaxns/scripts/utility/run_optimizer.py \
+        python -m remote_handler.workflows.run_optimizer \
             --path output_data \
             --local_machine lugus \
             --remote_machine lugus \
-            --python_script_path /home/nunglert/code/jaxns/scripts/utility/optimize_traj.py \
-            --do_steinhardt \
             --do_optimization \
             --optimization_backend LJ \
             --do_traj \
@@ -194,8 +192,8 @@ def get_parser():
         "--python_script_path",
         type=str,
         default=None,
-        help="Remote payload to run. Defaults to the shipped script for the "
-        "selected mode (optimize_traj.py / analyze_traj.py).",
+        help="Remote payload to run. Defaults to the shipped "
+        "process_traj.py driver.",
     )
     parser.add_argument(
         "--pickle_file",
@@ -207,32 +205,21 @@ def get_parser():
     parser.add_argument(
         "--supercell_trafo",
         type=str,
-        default="[3, 3, 3]",
-        help="Transformation for the supercell as a list of integers (e.g., '[3, 3, 3]').",
+        default="[1, 1, 1]",
+        help="Diagonal supercell replication for the descriptor generator, "
+        "as a list of integers (e.g., '[3, 3, 3]' for small cells).",
     )
     parser.add_argument(
-        "--max_neighbors_list",
-        type=str,
-        default="[15, 20, 25, 30, 35, 40, 45, 50, 60]",
-        help="List of maximum neighbors as a string (e.g., '[15, 20, 25]').",
-    )
-    parser.add_argument(
-        "--max_neighbors_offset",
+        "--max_neighbors",
         type=int,
-        default=3,
-        help="Offset for max neighbors.",
+        default=60,
+        help="Neighbour-buffer cap for the NNFF descriptor generator.",
     )
     parser.add_argument(
         "--optimization_backend",
         type=str,
         default="NNFF",
         help="Backend for optimization. Also supports ASE LJ.",
-    )
-    parser.add_argument(
-        "--steinhardt_l_values",
-        type=str,
-        default="[4, 6]",
-        help="L values for which to compute Steinhardt Q and W",
     )
     parser.add_argument(
         "--loop_time",
@@ -263,11 +250,6 @@ def get_parser():
     )
     parser.add_argument(
         "--every", type=int, default=1, help="Frequency of saving results."
-    )
-    parser.add_argument(
-        "--do_steinhardt",
-        action="store_true",
-        help="Enable Steinhardt parameter calculation.",
     )
     parser.add_argument(
         "--do_optimization", action="store_true", help="Enable optimization."
@@ -389,10 +371,6 @@ def process_args(args, parser):
     # Convert stringified lists to Python lists
     if isinstance(args.supercell_trafo, str):
         args.supercell_trafo = ast.literal_eval(args.supercell_trafo)
-    if isinstance(args.max_neighbors_list, str):
-        args.max_neighbors_list = ast.literal_eval(args.max_neighbors_list)
-    if isinstance(args.steinhardt_l_values, str):
-        args.steinhardt_l_values = ast.literal_eval(args.steinhardt_l_values)
 
     if args.log_mode == "file":
         if args.logfile is None:
@@ -505,9 +483,8 @@ def setup_optimizer(args):
         args.ats_files,
         pickle_file=args.pickle_file,
         optimization_backend=args.optimization_backend,
-        supercell_trafo=args.supercell_trafo,
-        max_neighbors_list=args.max_neighbors_list,
-        max_neighbors_offset=args.max_neighbors_offset,
+        max_neighbors=args.max_neighbors,
+        supercell_diag=tuple(args.supercell_trafo),
         steps=args.steps,
         fmax=args.fmax,
         **_shared_handler_kwargs(args),
@@ -516,14 +493,9 @@ def setup_optimizer(args):
 
 def setup_analysis(args):
     """Build a :class:`~remote_handler.workflows.optimizer.RemoteAnalysisHandler`."""
-    l_values = args.steinhardt_l_values
     return optimizer.RemoteAnalysisHandler(
         args.ats_files,
-        do_steinhardt=args.do_steinhardt,
         do_rdf=args.do_rdf,
-        steinhardt_l_value=(
-            l_values[0] if isinstance(l_values, list) else l_values
-        ),
         cutoff=args.rmax,
         nbins=args.nbins,
         **_shared_handler_kwargs(args),
@@ -533,16 +505,15 @@ def setup_analysis(args):
 def setup_handler(args):
     """Pick the handler for the requested mode.
 
-    Optimization and analysis are now separate concerns -- one invocation does
-    one of them. Optimization takes precedence if both are somehow requested.
+    Optimization and analysis are separate concerns -- one invocation does one
+    of them. Optimization takes precedence if both are somehow requested.
     """
     if args.do_optimization:
         return setup_optimizer(args)
-    if args.do_steinhardt or args.do_rdf:
+    if args.do_rdf:
         return setup_analysis(args)
     raise ValueError(
-        "Nothing to do: enable --do_optimization, or --do_steinhardt / "
-        "--do_rdf for analysis."
+        "Nothing to do: enable --do_optimization, or --do_rdf for analysis."
     )
 
 

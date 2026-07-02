@@ -439,83 +439,31 @@ class AseSinglepointInput(ScriptInput):
 
 
 @dataclass
-class OptimizeTrajInput(ScriptInput):
-    """Input configuration for ``jaxnest/optimize_traj.py`` (optimization only).
+class ProcessTrajInput(ScriptInput):
+    """Input configuration for ``trajectory/process_traj.py``.
 
-    Structural analysis (Steinhardt/RDF) lives in :class:`AnalyzeTrajInput`
-    and ``jaxnest/analyze_traj.py`` -- this schema carries optimization
-    parameters only.
+    Drives a pipeline of processors over a trajectory shard. Rather than a
+    fixed set of ``do_X`` flags, it carries an ordered list of processor
+    ``steps`` and a per-step ``args`` map -- so optimization and any structural
+    analysis compose in one job, and adding a processor needs no schema change.
 
     Attributes:
         tag: Tag to prepend to output files
         DATABASE: Path to input trajectory file
-        calculator_args: Calculator configuration (backend, supercell, ...)
-        optimization_args: Optimization parameters (fmax, steps)
+        steps: Ordered processor names to run (e.g. ``["optimize",
+            "rdf"]``); each must exist in the remote processor registry
+        args: Map of processor name -> its argument dict
         STUB: If True, the remote payload runs in mock mode
-        do_optimization: Retained for the remote payload's branch; the handler
-            always sets it True.
 
     Example:
-        >>> config = OptimizeTrajInput.from_file(Path("input_opt.json"))
+        >>> config = ProcessTrajInput.from_file(Path("input_process.json"))
         >>> config.validate()
     """
 
     tag: str
     DATABASE: str
-    calculator_args: dict[str, Any]
-    optimization_args: dict[str, Any]
-    STUB: bool = False
-    do_optimization: bool = True
-
-    def validate(self, root: Optional[Path] = None) -> None:
-        """Validate configuration parameters.
-
-        Raises:
-            ScriptInputError: If any parameter is invalid
-        """
-        if not self.DATABASE:
-            raise ScriptInputError("DATABASE cannot be empty")
-
-        if not self.calculator_args:
-            raise ScriptInputError("calculator_args required for optimization")
-
-        if not self.optimization_args:
-            raise ScriptInputError(
-                "optimization_args required for optimization"
-            )
-
-        if root is not None:
-            _require_path(root, self.DATABASE, "DATABASE")
-
-
-@dataclass
-class AnalyzeTrajInput(ScriptInput):
-    """Input configuration for ``jaxnest/analyze_traj.py`` (analysis only).
-
-    Drives structural-descriptor computation (Steinhardt order parameters via
-    QUIP, and/or the radial distribution function) on a trajectory shard. No
-    force-field model is involved -- contrast :class:`OptimizeTrajInput`.
-
-    Attributes:
-        tag: Tag to prepend to output files
-        DATABASE: Path to input trajectory file
-        do_steinhardt: Whether to compute Steinhardt parameters
-        do_rdf: Whether to compute the radial distribution function
-        general_args: General parameters (cutoff, nbins)
-        steinhardt_args: Steinhardt parameters (required if do_steinhardt=True)
-        STUB: If True, the remote payload runs in mock mode
-
-    Example:
-        >>> config = AnalyzeTrajInput.from_file(Path("input_analysis.json"))
-        >>> config.validate()
-    """
-
-    tag: str
-    DATABASE: str
-    do_steinhardt: bool
-    do_rdf: bool
-    general_args: dict[str, Any]
-    steinhardt_args: Optional[dict[str, Any]] = None
+    steps: list[str]
+    args: dict[str, Any]
     STUB: bool = False
 
     def validate(self, root: Optional[Path] = None) -> None:
@@ -527,18 +475,11 @@ class AnalyzeTrajInput(ScriptInput):
         if not self.DATABASE:
             raise ScriptInputError("DATABASE cannot be empty")
 
-        if not isinstance(self.general_args, dict):
-            raise ScriptInputError("general_args must be a dictionary")
+        if not self.steps:
+            raise ScriptInputError("steps cannot be empty")
 
-        if not (self.do_steinhardt or self.do_rdf):
-            raise ScriptInputError(
-                "at least one of do_steinhardt / do_rdf must be enabled"
-            )
-
-        if self.do_steinhardt and not self.steinhardt_args:
-            raise ScriptInputError(
-                "steinhardt_args required when do_steinhardt=True"
-            )
+        if not isinstance(self.args, dict):
+            raise ScriptInputError("args must be a dictionary")
 
         if root is not None:
             _require_path(root, self.DATABASE, "DATABASE")

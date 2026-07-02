@@ -16,8 +16,11 @@ from ase import Atoms
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import LocalFileSystem
 from remote_handler.workflows.optimizer import (
+    OptimizeProcessor,
+    RDFProcessor,
     RemoteAnalysisHandler,
     RemoteOptimizationHandler,
+    RemoteTrajectoryProcessor,
 )
 
 
@@ -72,8 +75,17 @@ def _input_name(handler):
     return handler.individual_ressources[0][0].filename
 
 
-# -- optimization -----------------------------------------------------------
-def test_optimization_json_is_optimization_only(tmp_path, traj):
+# Every handler ships one driver + a per-shard steps/args JSON.
+def test_all_handlers_use_the_single_driver(tmp_path, traj):
+    h = RemoteOptimizationHandler(
+        optimization_backend="LJ", **_common(tmp_path, traj)
+    )
+    assert _input_name(h) == "input_process.json"
+    assert str(h.python_script_file).endswith("trajectory/process_traj.py")
+
+
+# -- optimization factory ---------------------------------------------------
+def test_optimization_builds_single_optimize_step(tmp_path, traj):
     h = RemoteOptimizationHandler(
         optimization_backend="LJ",
         fmax=0.05,
@@ -83,17 +95,14 @@ def test_optimization_json_is_optimization_only(tmp_path, traj):
     jsons = _shard_jsons(h)
     assert len(jsons) == 2
     for j in jsons:
-        assert j["do_optimization"] is True
-        assert "calculator_args" in j and "optimization_args" in j
-        assert j["optimization_args"] == {"fmax": 0.05, "steps": 123}
-        # No analysis concerns leak in.
-        assert "do_steinhardt" not in j
-        assert "do_rdf" not in j
-        assert "steinhardt_args" not in j
-        assert "general_args" not in j
-
-    assert _input_name(h) == "input_opt.json"
-    assert str(h.python_script_file).endswith("jaxnest/optimize_traj.py")
+        # A single ordered step, with only its own args.
+        assert j["steps"] == ["optimize"]
+        assert set(j["args"]) == {"optimize"}
+        assert j["args"]["optimize"] == {
+            "backend": "LJ",
+            "fmax": 0.05,
+            "steps": 123,
+        }
     # LJ needs no model, so nothing is staged as a shared resource.
     assert h.shared_ressources == []
 
@@ -110,7 +119,7 @@ def test_optimization_nnff_stages_pickle(tmp_path, traj):
     assert h.shared_ressources == [str(pickle)]
     # ...and each shard points its calculator at the resolved remote path.
     for j in _shard_jsons(h):
-        assert j["calculator_args"]["pickle_file"].endswith("model.pkl")
+        assert j["args"]["optimize"]["pickle_file"].endswith("model.pkl")
 
 
 def test_optimization_nnff_requires_pickle(tmp_path, traj):
@@ -120,12 +129,27 @@ def test_optimization_nnff_requires_pickle(tmp_path, traj):
         )
 
 
-# -- analysis ---------------------------------------------------------------
-def test_analysis_json_is_analysis_only(tmp_path, traj):
+def test_optimization_forwards_neighbor_bucket_ladder(tmp_path, traj):
+    """A neighbour-bucket ladder + offset reach the remote calculator args."""
+    pickle = tmp_path / "model.pkl"
+    pickle.write_bytes(b"")
+    h = RemoteOptimizationHandler(
+        optimization_backend="NNFF",
+        pickle_file=str(pickle),
+        max_neighbors_list=[20, 30, 40],
+        neighbor_offset=2,
+        **_common(tmp_path, traj),
+    )
+    for j in _shard_jsons(h):
+        opt = j["args"]["optimize"]
+        assert opt["max_neighbors_list"] == [20, 30, 40]
+        assert opt["neighbor_offset"] == 2
+
+
+# -- analysis factory -------------------------------------------------------
+def test_analysis_builds_rdf_step(tmp_path, traj):
     h = RemoteAnalysisHandler(
-        do_steinhardt=True,
         do_rdf=True,
-        steinhardt_l_value=6,
         cutoff=4.5,
         nbins=150,
         **_common(tmp_path, traj),
@@ -133,20 +157,54 @@ def test_analysis_json_is_analysis_only(tmp_path, traj):
     jsons = _shard_jsons(h)
     assert len(jsons) == 2
     for j in jsons:
-        assert j["do_steinhardt"] is True and j["do_rdf"] is True
-        assert j["steinhardt_args"] == {"steinhardt_l_value": 6}
-        assert j["general_args"] == {"nbins": 150, "cutoff": 4.5}
-        # No optimization concerns leak in.
-        assert "do_optimization" not in j
-        assert "calculator_args" not in j
-        assert "optimization_args" not in j
-
-    assert _input_name(h) == "input_analysis.json"
-    assert str(h.python_script_file).endswith("jaxnest/analyze_traj.py")
+        assert j["steps"] == ["rdf"]
+        assert j["args"]["rdf"] == {"cutoff": 4.5, "nbins": 150}
+        # No optimization concern leaks in.
+        assert "optimize" not in j["args"]
     # Analysis needs no model -> no shared resources.
     assert h.shared_ressources == []
 
 
 def test_analysis_requires_something_to_do(tmp_path, traj):
-    with pytest.raises(ValueError, match="do_steinhardt / do_rdf"):
-        RemoteAnalysisHandler(**_common(tmp_path, traj))
+    with pytest.raises(ValueError, match="nothing to compute"):
+        RemoteAnalysisHandler(do_rdf=False, **_common(tmp_path, traj))
+
+
+# -- composition: the whole point of the redesign ---------------------------
+def test_pipeline_composes_optimize_then_analysis(tmp_path, traj):
+    """One job, one trajectory upload: relax then characterize the results.
+
+    The trajectory is distributed once; the ordered steps run in-sequence on
+    each shard, and the optimizer's model is the only shared resource. (Uses a
+    custom downstream-style step name to show the registry is open-ended.)
+    """
+    pickle = tmp_path / "model.pkl"
+    pickle.write_bytes(b"")
+    h = RemoteTrajectoryProcessor(
+        processors=[
+            OptimizeProcessor(pickle_file=str(pickle), backend="NNFF"),
+            RDFProcessor(cutoff=5.0, nbins=100),
+        ],
+        **_common(tmp_path, traj),
+    )
+    for j in _shard_jsons(h):
+        # Order preserved -> optimize before analysis.
+        assert j["steps"] == ["optimize", "rdf"]
+        assert set(j["args"]) == {"optimize", "rdf"}
+        # New calculator design: a single max_neighbors, no compiled-set list.
+        assert "max_neighbors" in j["args"]["optimize"]
+        assert "max_neighbors_list" not in j["args"]["optimize"]
+    # Only the model is shared; the trajectory itself is staged once as the
+    # per-shard atoms batch (not a shared resource).
+    assert h.shared_ressources == [str(pickle)]
+    # Single driver + single per-shard input, regardless of step count.
+    assert str(h.python_script_file).endswith("trajectory/process_traj.py")
+    assert _input_name(h) == "input_process.json"
+
+
+def test_duplicate_processor_names_rejected(tmp_path, traj):
+    with pytest.raises(ValueError, match="duplicate processor names"):
+        RemoteTrajectoryProcessor(
+            processors=[RDFProcessor(), RDFProcessor()],
+            **_common(tmp_path, traj),
+        )

@@ -7,14 +7,13 @@ import pytest
 
 from remote_handler.exceptions import ScriptInputError
 from remote_handler.scripts.input_models import (
-    AnalyzeTrajInput,
     CmaesSamplingInput,
     DftSinglepointInput,
     LammpsSamplingInput,
     MaceFinetuningInput,
     MaceTrainingInput,
-    OptimizeTrajInput,
     OrcaSinglepointInput,
+    ProcessTrajInput,
     ScriptInput,
     TorchSimSamplingInput,
 )
@@ -362,107 +361,57 @@ class TestOrcaSinglepointInput:
         assert "orcablocks cannot be empty" in str(exc_info.value)
 
 
-class TestOptimizeTrajInput:
-    """Tests for OptimizeTrajInput (optimization-only schema)."""
+class TestProcessTrajInput:
+    """Tests for ProcessTrajInput (the processor-pipeline schema)."""
 
     def test_from_file_valid(self, tmp_path):
         """Test loading from valid JSON file."""
         input_file = tmp_path / "input.json"
         input_data = {
-            "tag": "optimized",
+            "tag": "processed",
             "DATABASE": "trajectory.xyz",
-            "calculator_args": {"optimization_backend": "LJ"},
-            "optimization_args": {"fmax": 0.01},
+            "steps": ["optimize", "rdf"],
+            "args": {
+                "optimize": {"backend": "LJ", "fmax": 0.01, "steps": 100},
+                "rdf": {"cutoff": 5.0, "nbins": 100},
+            },
         }
         input_file.write_text(json.dumps(input_data))
 
-        config = OptimizeTrajInput.from_file(input_file)
+        config = ProcessTrajInput.from_file(input_file)
 
-        assert config.tag == "optimized"
+        assert config.tag == "processed"
         assert config.DATABASE == "trajectory.xyz"
-        assert config.do_optimization is True  # always-true default
-        assert config.calculator_args["optimization_backend"] == "LJ"
+        assert config.steps == ["optimize", "rdf"]
+        assert config.args["optimize"]["backend"] == "LJ"
 
-    def test_validate_without_calculator_args(self):
-        """Validation fails when calculator_args is missing."""
-        config = OptimizeTrajInput(
+    def test_validate_empty_steps(self):
+        """Validation fails when no steps are requested."""
+        config = ProcessTrajInput(
             tag="test",
             DATABASE="data.xyz",
-            calculator_args=None,  # Missing!
-            optimization_args={"fmax": 0.1},
+            steps=[],  # nothing to run
+            args={},
         )
 
         with pytest.raises(ScriptInputError) as exc_info:
             config.validate()
 
-        assert "calculator_args required" in str(exc_info.value)
+        assert "steps cannot be empty" in str(exc_info.value)
 
-    def test_validate_without_optimization_args(self):
-        """Validation fails when optimization_args is missing."""
-        config = OptimizeTrajInput(
+    def test_validate_empty_database(self):
+        """Validation fails when DATABASE is empty."""
+        config = ProcessTrajInput(
             tag="test",
-            DATABASE="data.xyz",
-            calculator_args={"optimization_backend": "LJ"},
-            optimization_args=None,  # Missing!
+            DATABASE="",  # Missing!
+            steps=["rdf"],
+            args={"rdf": {"cutoff": 5.0, "nbins": 100}},
         )
 
         with pytest.raises(ScriptInputError) as exc_info:
             config.validate()
 
-        assert "optimization_args required" in str(exc_info.value)
-
-
-class TestAnalyzeTrajInput:
-    """Tests for AnalyzeTrajInput (analysis-only schema)."""
-
-    def test_from_file_valid(self, tmp_path):
-        input_file = tmp_path / "input.json"
-        input_data = {
-            "tag": "analysis",
-            "DATABASE": "trajectory.xyz",
-            "do_steinhardt": True,
-            "do_rdf": True,
-            "general_args": {"cutoff": 5.0, "nbins": 100},
-            "steinhardt_args": {"steinhardt_l_value": 6},
-        }
-        input_file.write_text(json.dumps(input_data))
-
-        config = AnalyzeTrajInput.from_file(input_file)
-
-        assert config.do_steinhardt is True
-        assert config.general_args["cutoff"] == 5.0
-        assert config.steinhardt_args["steinhardt_l_value"] == 6
-
-    def test_validate_nothing_to_compute(self):
-        """Validation fails when neither descriptor is enabled."""
-        config = AnalyzeTrajInput(
-            tag="test",
-            DATABASE="data.xyz",
-            do_steinhardt=False,
-            do_rdf=False,
-            general_args={"cutoff": 5.0, "nbins": 100},
-        )
-
-        with pytest.raises(ScriptInputError) as exc_info:
-            config.validate()
-
-        assert "do_steinhardt / do_rdf" in str(exc_info.value)
-
-    def test_validate_steinhardt_without_args(self):
-        """Validation fails when do_steinhardt=True but no steinhardt_args."""
-        config = AnalyzeTrajInput(
-            tag="test",
-            DATABASE="data.xyz",
-            do_steinhardt=True,
-            do_rdf=False,
-            general_args={"cutoff": 5.0, "nbins": 100},
-            steinhardt_args=None,  # Missing!
-        )
-
-        with pytest.raises(ScriptInputError) as exc_info:
-            config.validate()
-
-        assert "steinhardt_args required" in str(exc_info.value)
+        assert "DATABASE cannot be empty" in str(exc_info.value)
 
 
 class TestCmaesSamplingInput:
