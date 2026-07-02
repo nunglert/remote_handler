@@ -9,12 +9,12 @@ The ``select`` method accepts either:
     list per trajectory/replica)
 
 Selectors that care about grouping (e.g., ``LastFrameSelector``) use
-the nested structure. Selectors that don't (e.g., ``UniformSelector``)
+the nested structure. Selectors that don't (e.g., ``StrideSelector``)
 flatten it automatically.
 
 Example:
-    >>> from remote_handler.workflows.selectors import UniformSelector
-    >>> selector = UniformSelector(n_configs=20)
+    >>> from remote_handler.workflows.selectors import StrideSelector
+    >>> selector = StrideSelector(n_configs=20)
     >>> sampler = TorchSimSampler(..., selector=selector)
 
     >>> from remote_handler.workflows.selectors import QUESTSSelector
@@ -25,6 +25,7 @@ Example:
 
 import json
 import logging
+import warnings
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Union
@@ -60,13 +61,20 @@ class ConfigSelector(ABC):
     """
 
     @abstractmethod
-    def select(self, configs: Configs) -> list[Atoms]:
+    def select(
+        self, configs: Configs, reference: list[Atoms] | None = None
+    ) -> list[Atoms]:
         """Select configurations from a pool of candidates.
 
         Args:
             configs: Pool of candidate configurations, either as a flat
                 ``list[Atoms]`` or grouped ``list[list[Atoms]]`` (e.g.,
                 one inner list per trajectory).
+            reference: Optional auxiliary set this selection scores against
+                (e.g. the already-labelled data, for novelty). Selectors that
+                don't use a reference ignore it. Passed as an argument -- not
+                set via a mutator -- so it composes cleanly (PipelineSelector
+                forwards it to its members).
 
         Returns:
             Flat list of selected configurations.
@@ -85,7 +93,9 @@ class LastFrameSelector(ConfigSelector):
     is already a "last frame").
     """
 
-    def select(self, configs: Configs) -> list[Atoms]:
+    def select(
+        self, configs: Configs, reference: list[Atoms] | None = None
+    ) -> list[Atoms]:
         if not configs:
             return []
 
@@ -104,12 +114,13 @@ class LastFrameSelector(ConfigSelector):
         return configs
 
 
-class UniformSelector(ConfigSelector):
-    """Select configurations at uniform intervals.
+class StrideSelector(ConfigSelector):
+    """Select configurations at evenly spaced (strided) intervals.
 
-    Picks ``n_configs`` evenly spaced configurations from the
-    (flattened) input. Useful for subsampling long trajectories
-    without bias.
+    Picks ``n_configs`` evenly spaced configurations from the (flattened)
+    input -- i.e. every *stride*-th frame, with the stride chosen so the
+    selection spans the whole pool. This is deterministic, *not* random
+    subsampling; useful for thinning long trajectories without bias.
 
     Args:
         n_configs: Number of configurations to select.
@@ -118,11 +129,13 @@ class UniformSelector(ConfigSelector):
     def __init__(self, n_configs: int):
         self.n_configs = n_configs
 
-    def select(self, configs: Configs) -> list[Atoms]:
+    def select(
+        self, configs: Configs, reference: list[Atoms] | None = None
+    ) -> list[Atoms]:
         flat = _flatten(configs)
         n_total = len(flat)
         if n_total == 0:
-            logger.warning("UniformSelector: received empty config list")
+            logger.warning("StrideSelector: received empty config list")
             return []
 
         n_select = min(self.n_configs, n_total)
@@ -132,10 +145,29 @@ class UniformSelector(ConfigSelector):
 
         selected = [flat[i] for i in indices]
         logger.info(
-            f"UniformSelector: selected {len(selected)} from "
+            f"StrideSelector: selected {len(selected)} from "
             f"{n_total} configs"
         )
         return selected
+
+
+class UniformSelector(StrideSelector):
+    """Deprecated alias for :class:`StrideSelector`.
+
+    The old name read as *uniform-random* sampling, but the behaviour is
+    deterministic evenly-spaced (strided) selection. Kept for backward
+    compatibility; instantiating it emits a :class:`DeprecationWarning`.
+    """
+
+    def __init__(self, n_configs: int):
+        warnings.warn(
+            "UniformSelector is deprecated and will be removed in a future "
+            "release; use StrideSelector instead (same behaviour, clearer "
+            "name -- it selects evenly-spaced frames, not a random sample).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(n_configs)
 
 
 class UncertaintySelector(ConfigSelector):
@@ -193,7 +225,9 @@ class UncertaintySelector(ConfigSelector):
         self.forces_weight = forces_weight
         self.threshold = threshold
 
-    def select(self, configs: Configs) -> list[Atoms]:
+    def select(
+        self, configs: Configs, reference: list[Atoms] | None = None
+    ) -> list[Atoms]:
         flat = _flatten(configs)
         n_total = len(flat)
         if n_total == 0:
@@ -294,9 +328,10 @@ class QUESTSSelector(ConfigSelector):
             (Maximum Structure Coverage, recommended), ``"fps"``
             (Farthest Point Sampling), ``"random"``, ``"k_means"``.
             Ignored in novelty mode.
-        reference: Reference dataset for novelty mode. When provided,
-            candidates are scored by delta entropy relative to this
-            set. Updated via ``set_reference()`` between AL iterations.
+        reference: Default reference dataset for novelty mode. Usually
+            supplied per-call via ``select(configs, reference=...)`` instead
+            (which takes precedence), so a stage can pass the accumulated
+            labelled data each iteration without mutating the selector.
         k: Number of nearest neighbors for QUESTS descriptor.
         cutoff: Cutoff radius in Angstroms for descriptor.
         bandwidth: Kernel bandwidth for entropy estimation. If None,
@@ -323,14 +358,6 @@ class QUESTSSelector(ConfigSelector):
         self.cutoff = cutoff
         self.bandwidth = bandwidth
         self.pca_output = Path(pca_output) if pca_output is not None else None
-
-    def set_reference(self, reference: list[Atoms]) -> None:
-        """Update the reference dataset for novelty scoring.
-
-        Call this between AL iterations to update with accumulated
-        training data.
-        """
-        self.reference = reference
 
     def _get_bandwidth(self, atoms_list: list[Atoms]) -> float:
         """Estimate bandwidth from volume per atom if not set explicitly."""
@@ -409,7 +436,9 @@ class QUESTSSelector(ConfigSelector):
             json.dump(data, f, indent=2)
         logger.info(f"QUESTSSelector: saved PCA data to {self.pca_output}")
 
-    def select(self, configs: Configs) -> list[Atoms]:
+    def select(
+        self, configs: Configs, reference: list[Atoms] | None = None
+    ) -> list[Atoms]:
         flat = _flatten(configs)
         n_total = len(flat)
         if n_total == 0:
@@ -419,8 +448,11 @@ class QUESTSSelector(ConfigSelector):
         n_select = min(self.n_configs, n_total)
         h = self._get_bandwidth(flat)
 
-        if self.reference is not None:
-            selected = self._select_by_novelty(flat, n_select, h)
+        # Per-call reference (e.g. accumulated labelled data) wins; the
+        # constructor default is the fallback. No mutable state involved.
+        ref = reference if reference is not None else self.reference
+        if ref is not None:
+            selected = self._select_by_novelty(flat, n_select, h, ref)
         else:
             selected = self._select_by_diversity(flat, n_select, h)
 
@@ -430,7 +462,7 @@ class QUESTSSelector(ConfigSelector):
         logger.info(
             f"QUESTSSelector: selected {len(selected)} from "
             f"{n_total} configs "
-            f"(mode={'novelty' if self.reference else 'diversity'}, "
+            f"(mode={'novelty' if ref is not None else 'diversity'}, "
             f"method={self.method}, bandwidth={h:.4f})"
         )
         return selected
@@ -456,12 +488,16 @@ class QUESTSSelector(ConfigSelector):
         return selected
 
     def _select_by_novelty(
-        self, flat: list[Atoms], n_select: int, h: float
+        self,
+        flat: list[Atoms],
+        n_select: int,
+        h: float,
+        reference: list[Atoms],
     ) -> list[Atoms]:
         """Select configs most novel relative to reference dataset."""
         from quests.entropy import delta_entropy
 
-        ref_desc = self._compute_descriptors(self.reference)
+        ref_desc = self._compute_descriptors(reference)
         cand_desc = self._compute_descriptors(flat)
 
         # Per-atom novelty scores
@@ -508,10 +544,16 @@ class PipelineSelector(ConfigSelector):
             raise ValueError("PipelineSelector requires at least one selector")
         self.selectors = selectors
 
-    def select(self, configs: Configs) -> list[Atoms]:
+    def select(
+        self, configs: Configs, reference: list[Atoms] | None = None
+    ) -> list[Atoms]:
         result = configs
         for selector in self.selectors:
-            result = selector.select(result)
+            # Forward the reference to every member; non-novelty selectors
+            # (e.g. StrideSelector) simply ignore it. This is what makes a
+            # composed "stride then QUESTS-novelty" pipeline work -- no
+            # per-member set_reference plumbing.
+            result = selector.select(result, reference=reference)
             if not result:
                 break
         return result

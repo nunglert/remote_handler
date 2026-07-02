@@ -53,6 +53,9 @@ def _calledproc(stderr):
         _calledproc("Permission denied (publickey)."),
         _calledproc("ssh: connect to host x port 22: Connection refused"),
         _calledproc("kex_exchange_identification: Connection closed"),
+        # A hung ssh (e.g. parked on an interactive QR/MFA prompt) that we
+        # timed out and killed must be retried, not propagated.
+        subprocess.TimeoutExpired(cmd="ssh host '...'", timeout=120),
     ],
 )
 def test_connection_errors_are_classified_transient(exc):
@@ -132,6 +135,29 @@ def test_enabled_retries_until_success():
     assert clock.sleeps == [10, 10, 10]  # paused 3 times
     assert len(pend) == 1  # announced exactly once
     assert len(restore) == 1  # restored exactly once
+
+
+def test_enabled_retries_a_hung_ssh_timeout():
+    """A ``TimeoutExpired`` (the shape a hung ssh takes once we bound it with a
+    subprocess timeout) pauses and retries until the credential is refreshed --
+    the exact real-world failure the pass-through loop previously missed."""
+    clock = FakeClock()
+    policy = ConnectionPolicy(
+        enabled=True,
+        poll_interval=10,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+    state = {"n": 0}
+
+    def fn():
+        if state["n"] < 2:
+            state["n"] += 1
+            raise subprocess.TimeoutExpired(cmd="ssh host '...'", timeout=120)
+        return "done"
+
+    assert run_resilient(fn, policy) == "done"
+    assert clock.sleeps == [10, 10]  # paused on each hang, then recovered
 
 
 def test_enabled_non_connection_error_propagates_without_pausing():

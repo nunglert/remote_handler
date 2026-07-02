@@ -6,17 +6,47 @@ from pathlib import Path
 import pytest
 
 from remote_handler.exceptions import ScriptInputError
+from remote_handler.processing import OptimizeArgs, ProcessTrajInput, RdfArgs
 from remote_handler.scripts.input_models import (
     CmaesSamplingInput,
     DftSinglepointInput,
     LammpsSamplingInput,
     MaceFinetuningInput,
     MaceTrainingInput,
-    OptimizeTrajInput,
     OrcaSinglepointInput,
     ScriptInput,
     TorchSimSamplingInput,
 )
+
+
+class TestProcessorArgSchemas:
+    """The per-step arg schemas: single source of truth for build/validate."""
+
+    def test_optimize_to_dict_drops_none_for_lj(self):
+        # LJ needs no model knobs -> only the three required keys survive.
+        args = OptimizeArgs(backend="LJ", fmax=0.1, steps=100).to_dict()
+        assert args == {"backend": "LJ", "fmax": 0.1, "steps": 100}
+
+    def test_optimize_from_dict_validate_round_trip(self):
+        OptimizeArgs.from_dict(
+            {"backend": "NNFF", "fmax": 0.1, "steps": 5, "pickle_file": "m"}
+        ).validate()
+
+    def test_optimize_missing_required_key_raises(self):
+        # Missing 'backend' is caught by from_dict (construction), not validate.
+        with pytest.raises(ScriptInputError, match="backend"):
+            OptimizeArgs.from_dict({"fmax": 0.1, "steps": 5}).validate()
+
+    def test_optimize_nnff_without_pickle_raises(self):
+        with pytest.raises(ScriptInputError, match="pickle_file"):
+            OptimizeArgs.from_dict(
+                {"backend": "NNFF", "fmax": 0.1, "steps": 5}
+            ).validate()
+
+    def test_rdf_validate(self):
+        RdfArgs.from_dict({"cutoff": 5.0, "nbins": 200}).validate()
+        with pytest.raises(ScriptInputError, match="nbins"):
+            RdfArgs.from_dict({"cutoff": 5.0, "nbins": 0}).validate()
 
 
 class TestMaceTrainingInput:
@@ -361,64 +391,76 @@ class TestOrcaSinglepointInput:
         assert "orcablocks cannot be empty" in str(exc_info.value)
 
 
-class TestOptimizeTrajInput:
-    """Tests for OptimizeTrajInput."""
+class TestProcessTrajInput:
+    """Tests for ProcessTrajInput (the processor-pipeline schema)."""
 
     def test_from_file_valid(self, tmp_path):
         """Test loading from valid JSON file."""
         input_file = tmp_path / "input.json"
         input_data = {
-            "tag": "optimized",
+            "tag": "processed",
             "DATABASE": "trajectory.xyz",
-            "do_optimization": True,
-            "do_steinhardt": False,
-            "do_rdf": True,
-            "general_args": {"cutoff": 5.0, "nbins": 100},
-            "calculator_args": {"optimization_backend": "LJ"},
-            "optimization_args": {"fmax": 0.01},
+            "steps": ["optimize", "rdf"],
+            "args": {
+                "optimize": {"backend": "LJ", "fmax": 0.01, "steps": 100},
+                "rdf": {"cutoff": 5.0, "nbins": 100},
+            },
         }
         input_file.write_text(json.dumps(input_data))
 
-        config = OptimizeTrajInput.from_file(input_file)
+        config = ProcessTrajInput.from_file(input_file)
 
-        assert config.tag == "optimized"
+        assert config.tag == "processed"
         assert config.DATABASE == "trajectory.xyz"
-        assert config.do_optimization is True
-        assert config.general_args["cutoff"] == 5.0
+        assert config.steps == ["optimize", "rdf"]
+        assert config.args["optimize"]["backend"] == "LJ"
+        # Absent in JSON -> defaults to empty (built-in-only pipeline).
+        assert config.registration_modules == []
 
-    def test_validate_optimization_without_calculator_args(self):
-        """Test validation when do_optimization=True but no calculator_args."""
-        config = OptimizeTrajInput(
+    def test_registration_modules_round_trip(self, tmp_path):
+        """A downstream pipeline's registration modules survive from_file."""
+        input_file = tmp_path / "input.json"
+        input_data = {
+            "tag": "processed",
+            "DATABASE": "trajectory.xyz",
+            "steps": ["rdf", "steinhardt"],
+            "args": {"rdf": {}, "steinhardt": {}},
+            "registration_modules": ["jaxrens_al.processors.steinhardt"],
+        }
+        input_file.write_text(json.dumps(input_data))
+
+        config = ProcessTrajInput.from_file(input_file)
+        assert config.registration_modules == [
+            "jaxrens_al.processors.steinhardt"
+        ]
+
+    def test_validate_empty_steps(self):
+        """Validation fails when no steps are requested."""
+        config = ProcessTrajInput(
             tag="test",
             DATABASE="data.xyz",
-            do_optimization=True,
-            do_steinhardt=False,
-            do_rdf=False,
-            general_args={},
-            calculator_args=None,  # Missing!
+            steps=[],  # nothing to run
+            args={},
         )
 
         with pytest.raises(ScriptInputError) as exc_info:
             config.validate()
 
-        assert "calculator_args required" in str(exc_info.value)
+        assert "steps cannot be empty" in str(exc_info.value)
 
-    def test_validate_steinhardt_without_args(self):
-        """Test validation when do_steinhardt=True but no steinhardt_args."""
-        config = OptimizeTrajInput(
+    def test_validate_empty_database(self):
+        """Validation fails when DATABASE is empty."""
+        config = ProcessTrajInput(
             tag="test",
-            DATABASE="data.xyz",
-            do_optimization=False,
-            do_steinhardt=True,
-            do_rdf=False,
-            general_args={},
-            steinhardt_args=None,  # Missing!
+            DATABASE="",  # Missing!
+            steps=["rdf"],
+            args={"rdf": {"cutoff": 5.0, "nbins": 100}},
         )
 
         with pytest.raises(ScriptInputError) as exc_info:
             config.validate()
 
-        assert "steinhardt_args required" in str(exc_info.value)
+        assert "DATABASE cannot be empty" in str(exc_info.value)
 
 
 class TestCmaesSamplingInput:

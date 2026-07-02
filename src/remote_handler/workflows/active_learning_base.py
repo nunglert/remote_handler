@@ -104,6 +104,49 @@ class ModelTrainer(ABC):
         pass
 
 
+class Selector(ABC):
+    """A first-class configuration selector actor.
+
+    Peer to `Sampler`, `GroundTruthEvaluator` and `ModelTrainer`: it picks
+    which of a pool of candidate configurations are passed forward to the
+    ground-truth evaluation step, as its own element of the active learning
+    loop rather than a sub-step of sampling. The legacy
+    `ActiveLearningHandler` does not use this actor; it is consumed by the
+    stage-based `StagedActiveLearningHandler`.
+
+    For the common case of a pure, host-side selection *strategy*, wrap a
+    `ConfigSelector` (see `selectors.py`) in `SelectorActor` instead of
+    implementing this ABC directly. Implement `Selector` when selection
+    needs its own execution (e.g. running a heavy descriptor computation
+    as a remote job).
+    """
+
+    @abstractmethod
+    def update(
+        self, calcdir: Path, selector_input: Path | list[Path], **kwargs
+    ) -> None:
+        """Run the selection logic for the current iteration.
+
+        Args:
+            calcdir: The directory in `calchome` (see `ActiveLearningHandler`)
+                of the current iteration. This is passed here such that the
+                `Selector` can eventually write into it.
+            selector_input: Path or list of Paths to files holding the pool
+                of candidate configurations to choose from. For example one
+                or more .extxyz files produced by the `Sampler`.
+            **kwargs: Optional parameters returned from a schedule to modify
+                the selection logic (see also `Schedule`), e.g. the number
+                of configurations to select per iteration.
+        """
+        pass
+
+    @abstractmethod
+    def get_selected_configs(self) -> Path | list[Path]:
+        """Function returns the path(s) to the selected configurations for
+        the upcoming `GroundTruthEvaluator` step."""
+        pass
+
+
 def append_or_extend(item, append_list):
     """Appends item to append_list if item is not a list. If item is a list,
     appends each individual entry of item to append_list instead.
@@ -747,7 +790,15 @@ class ActiveLearningHandler(ABC):
                 self.sampler_output_dir
                 / f"sampler_it{self.iteration_idx}_{i}.{self.sampler_output_extension}"
             )
-            shutil.copy(p, self.calchome / path)
+            # Artifacts may be a directory bundle (e.g. a mace-jax model:
+            # config.json + params.msgpack), not just a single file -- copy
+            # the whole tree in that case (mirrors move_file_to_home above).
+            src_artifact = Path(p)
+            dst_artifact = self.calchome / path
+            if src_artifact.is_dir():
+                shutil.copytree(src_artifact, dst_artifact, dirs_exist_ok=True)
+            else:
+                shutil.copy(src_artifact, dst_artifact)
             new_paths.append(path)
 
         if self.combine_sampler_outputs:
@@ -790,7 +841,15 @@ class ActiveLearningHandler(ABC):
                 self.evaluator_output_dir
                 / f"evaluator_it{self.iteration_idx}_{i}.{self.evaluator_output_extension}"
             )
-            shutil.copy(p, self.calchome / path)
+            # Artifacts may be a directory bundle (e.g. a mace-jax model:
+            # config.json + params.msgpack), not just a single file -- copy
+            # the whole tree in that case (mirrors move_file_to_home above).
+            src_artifact = Path(p)
+            dst_artifact = self.calchome / path
+            if src_artifact.is_dir():
+                shutil.copytree(src_artifact, dst_artifact, dirs_exist_ok=True)
+            else:
+                shutil.copy(src_artifact, dst_artifact)
             new_paths.append(path)
 
         if self.combine_evaluator_outputs:
@@ -836,7 +895,15 @@ class ActiveLearningHandler(ABC):
                 self.trainer_output_dir
                 / f"trainer_it{self.iteration_idx}_{i}.{self.trainer_output_extension}"
             )
-            shutil.copy(p, self.calchome / path)
+            # Artifacts may be a directory bundle (e.g. a mace-jax model:
+            # config.json + params.msgpack), not just a single file -- copy
+            # the whole tree in that case (mirrors move_file_to_home above).
+            src_artifact = Path(p)
+            dst_artifact = self.calchome / path
+            if src_artifact.is_dir():
+                shutil.copytree(src_artifact, dst_artifact, dirs_exist_ok=True)
+            else:
+                shutil.copy(src_artifact, dst_artifact)
             new_paths.append(path)
 
         if self.combine_trainer_outputs:

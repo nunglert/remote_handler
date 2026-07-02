@@ -45,6 +45,11 @@ class ClusterConfig:
         connection_retry_interval: Seconds between retries while paused.
         connection_max_wait: Give up after this many seconds paused; ``None``
             (default) waits indefinitely until the credential is refreshed.
+        connection_command_timeout: Hard timeout (seconds) on each subprocess
+            ``ssh`` call, so a hung ssh (e.g. blocked on an interactive QR/MFA
+            prompt after the credential expired) fails with ``TimeoutExpired``
+            instead of parking the driver forever. Applies regardless of
+            ``resilient_connection``; ``None`` disables it. Defaults to 120s.
         executor: Which execution backend to run jobs through. ``"slurm"``
             (default) submits via sbatch; other backends are selected by the
             executor factory. Unset in a config JSON means ``"slurm"``.
@@ -73,6 +78,7 @@ class ClusterConfig:
     resilient_connection: bool = False
     connection_retry_interval: float = 60.0
     connection_max_wait: Optional[float] = None
+    connection_command_timeout: Optional[float] = 120.0
     executor: str = "slurm"
     environment: dict = field(default_factory=dict)
 
@@ -94,6 +100,7 @@ class ClusterConfig:
             enabled=self.resilient_connection,
             poll_interval=self.connection_retry_interval,
             max_wait=self.connection_max_wait,
+            command_timeout=self.connection_command_timeout,
         )
 
     @classmethod

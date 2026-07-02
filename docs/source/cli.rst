@@ -259,12 +259,18 @@ extras from :doc:`installation`) are usable in the current environment:
 .. code-block:: bash
 
    $ remote_handler show extras
+   remote_handler 0.4.0 (local, env: rh_dev)
+
    Probing optional extras (imports torch / jax / ...; may be slow):
 
      [x] dev
      [ ] mace_jax  (missing: mace_jax)
      [x] mace
      ...
+
+The first line reports the installed ``remote_handler`` version and the active
+conda env it was read from — handy for catching a **stale install** (e.g. a
+cluster conda env running an older copy than your checkout).
 
 Unlike the other ``show`` commands, this does not just inspect metadata — it
 **actually imports** each extra's key modules and reports what genuinely works.
@@ -286,6 +292,11 @@ checked on ``PATH`` after their setup runs:
 .. code-block:: bash
 
    $ remote_handler show extras local lugus musica
+   remote_handler version
+     local   0.4.0  (env: rh_dev)
+     lugus   0.0.0  (env: jaxrens_al)
+     musica  0.4.0  (env: jaxrens_al)
+
    extra        local  lugus  musica
    ---------------------------------
    mace           ✓      ✓      ✓
@@ -293,6 +304,15 @@ checked on ``PATH`` after their setup runs:
    torch_sim      ✓      ✓      ✓
    ---------------------------------
    vasp           ✗      ✓      —
+
+The version block above the grid shows the installed ``remote_handler`` on each
+machine (``?`` if unreachable) **and the conda env it was read from** — each
+cluster is probed inside the env named in its config (``conda_env``), which may
+differ from the one on your interactive ``PATH``. A cluster lagging behind your
+checkout is then obvious at a glance. A version of ``0.0.0`` (as ``lugus`` shows
+above) is the ``setuptools-scm`` fallback: that env was installed from a source
+tree without git tags/history, so its real version is unknowable — reinstall it
+from a proper ``git`` clone.
 
 ``✓`` available, ``✗`` not available, ``?`` machine unreachable, ``—`` the
 binary is not configured on that cluster (no ``environment`` entry, so the tool

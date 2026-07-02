@@ -21,6 +21,14 @@ from remote_handler.exceptions import DependencyError, FileSystemError
 
 logger = logging.getLogger(__name__)
 
+# Non-interactive ssh options for every subprocess ``ssh <alias> '...'`` this
+# module issues. ``BatchMode=yes`` disables ssh's own password/passphrase/
+# host-key prompts (so an auth failure returns immediately instead of
+# prompting), and ``ConnectTimeout`` bounds the TCP connect. Together with the
+# closed stdin + subprocess timeout applied at the call sites, this stops an
+# expired credential from parking the driver at an interactive prompt.
+_SSH_NONINTERACTIVE_OPTS = "-o BatchMode=yes -o ConnectTimeout=15"
+
 
 class SlurmHandlerBase(ABC):
     """
@@ -77,7 +85,10 @@ class SlurmHandlerBase(ABC):
         if isinstance(remote_fs, file_handler.LocalFileSystem):
             self.ssh_command = None
         else:
-            self.ssh_command = f"ssh {cluster_config.remote_machine}"
+            self.ssh_command = (
+                f"ssh {_SSH_NONINTERACTIVE_OPTS} "
+                f"{cluster_config.remote_machine}"
+            )
 
         # Get template file for the slurm scripts
         self.template_file = cluster_config.template
@@ -96,19 +107,33 @@ class SlurmHandlerBase(ABC):
         cmd = "which sbatch"
         if self.ssh_command is not None:
             cmd = f"{self.ssh_command} '{cmd}'"
+        target = (
+            "local machine"
+            if self.ssh_command is None
+            else self.cluster_config.remote_machine
+        )
         try:
             subprocess.run(
-                cmd, shell=True, capture_output=True, text=True, check=True
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                check=True,
+                # Close stdin + bound the probe so an expired credential can't
+                # park construction at an interactive ssh/step prompt.
+                stdin=subprocess.DEVNULL,
+                timeout=self.cluster_config.connection_policy.command_timeout,
             )
         except subprocess.CalledProcessError:
-            target = (
-                "local machine"
-                if self.ssh_command is None
-                else self.cluster_config.remote_machine
-            )
             raise DependencyError(
                 f"SLURM is not available on {target}: 'sbatch' not found.\n"
                 "Ensure SLURM is installed and accessible in PATH."
+            )
+        except subprocess.TimeoutExpired:
+            raise DependencyError(
+                f"Timed out probing SLURM on {target}: the ssh connection did "
+                "not respond. The credential may have expired -- refresh it "
+                "(e.g. run `step ssh login` on the driver host) and retry."
             )
 
     def _validate_savepath(self):

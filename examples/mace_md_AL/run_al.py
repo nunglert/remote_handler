@@ -5,10 +5,11 @@ from pathlib import Path
 
 import cu_co_active_learning
 
+from remote_handler import configure_logging
 from remote_handler.core.file_handler import RemoteFileSystem
 from remote_handler.workflows.active_learning_base import ActiveLearningHandler
 
-logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+configure_logging()  # timestamped logs (level=INFO -> stdout)
 
 example_dir = Path(__file__).parent.resolve()
 input_dir = example_dir / "inputs"

@@ -137,6 +137,18 @@ class ScriptInput:
         """
         pass
 
+    def to_dict(self) -> dict:
+        """Serialise to a plain dict, dropping unset (``None``) fields.
+
+        The inverse of :meth:`from_dict` for the keys that matter: a host-side
+        builder fills the schema and calls this to emit the payload, so the
+        field names are declared once (on the dataclass) rather than hand-listed
+        at every emit site.
+        """
+        return {
+            k: v for k, v in dataclasses.asdict(self).items() if v is not None
+        }
+
 
 @dataclass
 class MaceTrainingInput(ScriptInput):
@@ -433,67 +445,6 @@ class AseSinglepointInput(ScriptInput):
 
         if not isinstance(self.calculator_kwargs, dict):
             raise ScriptInputError("calculator_kwargs must be a dictionary")
-
-        if root is not None:
-            _require_path(root, self.DATABASE, "DATABASE")
-
-
-@dataclass
-class OptimizeTrajInput(ScriptInput):
-    """Input configuration for jaxnest/optimize_traj.py script.
-
-    Attributes:
-        tag: Tag to prepend to output files
-        DATABASE: Path to input trajectory file
-        do_optimization: Whether to perform structure optimization
-        do_steinhardt: Whether to compute Steinhardt parameters
-        do_rdf: Whether to compute radial distribution function
-        general_args: General parameters (cutoff, nbins, etc.)
-        calculator_args: Calculator configuration (optional, required if do_optimization=True)
-        optimization_args: Optimization parameters (optional, required if do_optimization=True)
-        steinhardt_args: Steinhardt parameters (optional, required if do_steinhardt=True)
-
-    Example:
-        >>> config = OptimizeTrajInput.from_file(Path("input_opt.json"))
-        >>> config.validate()
-    """
-
-    tag: str
-    DATABASE: str
-    do_optimization: bool
-    do_steinhardt: bool
-    do_rdf: bool
-    general_args: dict[str, Any]
-    calculator_args: Optional[dict[str, Any]] = None
-    optimization_args: Optional[dict[str, Any]] = None
-    steinhardt_args: Optional[dict[str, Any]] = None
-
-    def validate(self, root: Optional[Path] = None) -> None:
-        """Validate configuration parameters.
-
-        Raises:
-            ScriptInputError: If any parameter is invalid
-        """
-        if not self.DATABASE:
-            raise ScriptInputError("DATABASE cannot be empty")
-
-        if not isinstance(self.general_args, dict):
-            raise ScriptInputError("general_args must be a dictionary")
-
-        if self.do_optimization and not self.calculator_args:
-            raise ScriptInputError(
-                "calculator_args required when do_optimization=True"
-            )
-
-        if self.do_optimization and not self.optimization_args:
-            raise ScriptInputError(
-                "optimization_args required when do_optimization=True"
-            )
-
-        if self.do_steinhardt and not self.steinhardt_args:
-            raise ScriptInputError(
-                "steinhardt_args required when do_steinhardt=True"
-            )
 
         if root is not None:
             _require_path(root, self.DATABASE, "DATABASE")

@@ -95,6 +95,13 @@ def is_connection_error(exc: BaseException) -> bool:
     ):
         return True
 
+    # subprocess ``ssh ...`` that never returned -- a timeout means the ssh
+    # (or its ProxyCommand/step helper) blocked, e.g. on an interactive
+    # QR/MFA prompt after the credential expired. Treat as transient so the
+    # loop pauses and retries once the credential is refreshed.
+    if isinstance(exc, subprocess.TimeoutExpired):
+        return True
+
     # subprocess ``ssh ...`` -- inspect stderr for ssh-level markers.
     if isinstance(exc, subprocess.CalledProcessError):
         stderr = exc.stderr or ""
@@ -123,12 +130,18 @@ class ConnectionPolicy:
         poll_interval: Seconds to wait between retries while paused.
         max_wait: Give up (re-raise) after this many seconds of being paused.
             ``None`` means wait indefinitely until the credential is refreshed.
+        command_timeout: Hard timeout (seconds) applied to each subprocess
+            ``ssh`` invocation so a hung ssh (e.g. blocked on an interactive
+            QR/MFA prompt) surfaces as ``TimeoutExpired`` -- which is classified
+            transient -- instead of blocking forever. Applies even when
+            ``enabled`` is False (a hang is never wanted). ``None`` disables it.
         sleep / monotonic: Injectable clock, for tests.
     """
 
     enabled: bool = False
     poll_interval: float = 60.0
     max_wait: Optional[float] = None
+    command_timeout: Optional[float] = 120.0
     sleep: Callable[[float], None] = time.sleep
     monotonic: Callable[[], float] = time.monotonic
 

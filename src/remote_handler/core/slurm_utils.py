@@ -18,13 +18,27 @@ logger = logging.getLogger(__name__)
 def _run_ssh(cmd: str, policy: resilience.ConnectionPolicy):
     """Run a (possibly ssh-wrapped) shell command under a connection policy.
 
-    With a disabled policy this is exactly ``subprocess.run(..., check=True)``;
-    with an enabled one it pauses-and-retries on ssh-level auth/connection
-    failures (but still raises on a real non-zero exit, e.g. a bad sbatch).
+    Hardened against interactive-prompt hangs three ways: ``stdin`` is closed
+    (``DEVNULL``); the child runs in its own session (``start_new_session``) so
+    it has no controlling terminal and a helper like ``step`` cannot grab
+    ``/dev/tty`` to draw a QR/MFA prompt (it fails fast instead); and a
+    ``policy.command_timeout`` bounds the whole call so anything that still
+    blocks surfaces as ``TimeoutExpired``. That timeout is classified transient,
+    so with an enabled policy the call pauses and retries until the credential
+    is refreshed; with a disabled policy it simply raises (still far better than
+    an indefinite hang). A real non-zero exit (e.g. a bad sbatch) propagates as
+    before.
     """
     return resilience.run_resilient(
         lambda: subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, check=True
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            check=True,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            timeout=policy.command_timeout,
         ),
         policy,
         label=f"ssh command ({cmd[:60]}...)",
@@ -179,6 +193,15 @@ def check_job_status_squeue(
     returns and output for the given job id. If not, it considers the job as
     being finished.
 
+    Once a job leaves the queue, ``squeue -j <id>`` may either return just its
+    header (exit 0, no rows) *or*, on some SLURM builds, exit non-zero with
+    ``slurm_load_jobs error: Invalid job id specified`` -- the controller has
+    already purged the completed job. Both mean the same thing: finished. The
+    non-zero-exit form is handled explicitly so a job that completes while the
+    connection is briefly down (e.g. during a credential refresh) is reported
+    as finished rather than crashing the driver. A genuine ssh/connection
+    failure still propagates through ``_run_ssh``'s resilience handling.
+
     Args:
         job_id (str): The job ID to check.
         ssh_command (str, optional): SSH command to be used for remote checking.
@@ -191,7 +214,16 @@ def check_job_status_squeue(
         status_cmd = f"squeue -j {pid_str}"
     else:
         status_cmd = f"{ssh_command} 'squeue -j {pid_str}'"
-    result = _run_ssh(status_cmd, connection_policy)
+    try:
+        result = _run_ssh(status_cmd, connection_policy)
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr or ""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", "replace")
+        # Job no longer known to the controller -> it has left the queue.
+        if "invalid job id" in stderr.lower():
+            return True
+        raise
     res = result.stdout.split("\n")
     if len(res) > 2:
         return False

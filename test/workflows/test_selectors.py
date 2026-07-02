@@ -15,6 +15,7 @@ from remote_handler.workflows.selectors import (
     LastFrameSelector,
     PipelineSelector,
     QUESTSSelector,
+    StrideSelector,
     UncertaintySelector,
     UniformSelector,
 )
@@ -108,55 +109,74 @@ class TestLastFrameSelector:
 
 
 # ---------------------------------------------------------------------------
-# UniformSelector
+# StrideSelector
 # ---------------------------------------------------------------------------
-class TestUniformSelector:
+class TestStrideSelector:
     def test_selects_correct_count(self):
         configs = _make_config_pool(100)
-        selector = UniformSelector(n_configs=10)
+        selector = StrideSelector(n_configs=10)
         result = selector.select(configs)
         assert len(result) == 10
 
     def test_selects_first_and_last(self):
         configs = _make_config_pool(50)
-        selector = UniformSelector(n_configs=5)
+        selector = StrideSelector(n_configs=5)
         result = selector.select(configs)
         assert result[0].info["index"] == 0
         assert result[-1].info["index"] == 49
 
     def test_evenly_spaced(self):
         configs = _make_config_pool(100)
-        selector = UniformSelector(n_configs=5)
+        selector = StrideSelector(n_configs=5)
         result = selector.select(configs)
         indices = [at.info["index"] for at in result]
         assert indices == [0, 24, 49, 74, 99]
 
     def test_n_configs_larger_than_pool(self):
         configs = _make_config_pool(3)
-        selector = UniformSelector(n_configs=10)
+        selector = StrideSelector(n_configs=10)
         result = selector.select(configs)
         assert len(result) == 3
 
     def test_single_config(self):
         configs = _make_config_pool(1)
-        selector = UniformSelector(n_configs=5)
+        selector = StrideSelector(n_configs=5)
         result = selector.select(configs)
         assert len(result) == 1
 
     def test_empty_input(self):
-        selector = UniformSelector(n_configs=10)
+        selector = StrideSelector(n_configs=10)
         assert selector.select([]) == []
 
     def test_grouped_input_flattens(self):
-        """Grouped input should be flattened before uniform selection."""
+        """Grouped input should be flattened before strided selection."""
         grouped = _make_grouped_configs([5, 5])  # 10 total
-        selector = UniformSelector(n_configs=3)
+        selector = StrideSelector(n_configs=3)
         result = selector.select(grouped)
         assert len(result) == 3
         # Should span across both groups
         indices = [at.info["index"] for at in result]
         assert indices[0] == 0
         assert indices[-1] == 9
+
+
+class TestUniformSelectorDeprecation:
+    """UniformSelector is a deprecated alias for StrideSelector."""
+
+    def test_warns_but_behaves_identically(self):
+        configs = _make_config_pool(100)
+        with pytest.warns(DeprecationWarning, match="StrideSelector"):
+            old = UniformSelector(n_configs=5)
+        # Same selection as the new name (deterministic evenly-spaced).
+        new = StrideSelector(n_configs=5)
+        assert [a.info["index"] for a in old.select(configs)] == [
+            a.info["index"] for a in new.select(configs)
+        ]
+
+    def test_is_a_strideselector(self):
+        with pytest.warns(DeprecationWarning):
+            sel = UniformSelector(n_configs=3)
+        assert isinstance(sel, StrideSelector)
 
 
 # ---------------------------------------------------------------------------
@@ -492,20 +512,28 @@ class TestQUESTSSelector:
         scores = [at.info["quests_novelty_score"] for at in result]
         assert scores == sorted(scores, reverse=True)
 
-    def test_set_reference(self):
-        """set_reference updates the reference dataset."""
+    def test_reference_arg_enables_novelty(self):
+        """A per-call reference= switches select() to novelty mode.
+
+        The reference is now an argument (the ``set_reference`` mutator was
+        removed), so passing it per call -- without mutating the selector --
+        flips diversity to novelty mode.
+        """
         configs = _make_varied_configs(10, rng_seed=42)
         selector = QUESTSSelector(n_configs=3)
 
-        # Initially no reference → diversity mode
+        # No reference → diversity mode
         result1 = selector.select(configs)
         assert result1[0].info["quests_mode"] == "diversity"
 
-        # Set reference → novelty mode
+        # Reference passed as a call argument → novelty mode
         ref = _make_varied_configs(5, rng_seed=0)
-        selector.set_reference(ref)
-        result2 = selector.select(configs)
+        result2 = selector.select(configs, reference=ref)
         assert result2[0].info["quests_mode"] == "novelty"
+
+        # It was not stored on the selector: the next call is diversity again.
+        result3 = selector.select(configs)
+        assert result3[0].info["quests_mode"] == "diversity"
 
     def test_empty_input(self):
         selector = QUESTSSelector(n_configs=5, method="msc")
@@ -598,7 +626,7 @@ class TestPipelineSelector:
                     energy_key="energy_uncertainty",
                     forces_key=None,
                 ),
-                UniformSelector(n_configs=3),
+                StrideSelector(n_configs=3),
             ]
         )
         result = pipeline.select(configs)
@@ -631,10 +659,35 @@ class TestPipelineSelector:
             assert "uncertainty_score" in at.info
             assert at.info["quests_mode"] == "diversity"
 
+    def test_forwards_reference_to_members(self):
+        """A reference passed to the pipeline reaches a QUESTS member.
+
+        This is the fix's headline: composing "stride then QUESTS-novelty"
+        must run QUESTS in *novelty* mode. The pipeline forwards ``reference``
+        to every member, while a non-novelty member (StrideSelector) ignores
+        it -- so no per-member ``set_reference`` plumbing is needed.
+        """
+        pytest.importorskip("quests")
+        configs = _make_varied_configs(20, rng_seed=42)
+        reference = _make_varied_configs(5, rng_seed=0)
+
+        pipeline = PipelineSelector(
+            [StrideSelector(n_configs=10), QUESTSSelector(n_configs=3)]
+        )
+
+        # No reference -> the QUESTS member runs in diversity mode.
+        diversity = pipeline.select(configs)
+        assert all(at.info["quests_mode"] == "diversity" for at in diversity)
+
+        # Reference forwarded -> the QUESTS member runs in novelty mode.
+        novelty = pipeline.select(configs, reference=reference)
+        assert all(at.info["quests_mode"] == "novelty" for at in novelty)
+        assert all("quests_novelty_score" in at.info for at in novelty)
+
     def test_single_selector(self):
         """Pipeline with one selector behaves like the selector alone."""
         configs = _make_config_pool(10)
-        selector = UniformSelector(n_configs=3)
+        selector = StrideSelector(n_configs=3)
         pipeline = PipelineSelector([selector])
 
         direct = selector.select(configs)
@@ -656,14 +709,14 @@ class TestPipelineSelector:
                     energy_key="energy_uncertainty",
                     forces_key=None,
                 ),
-                UniformSelector(n_configs=5),
+                StrideSelector(n_configs=5),
             ]
         )
         result = pipeline.select(configs)
         assert result == []
 
     def test_empty_input(self):
-        pipeline = PipelineSelector([UniformSelector(n_configs=5)])
+        pipeline = PipelineSelector([StrideSelector(n_configs=5)])
         assert pipeline.select([]) == []
 
     def test_grouped_input_first_stage(self):
@@ -673,7 +726,7 @@ class TestPipelineSelector:
         pipeline = PipelineSelector(
             [
                 LastFrameSelector(),  # picks last from each group → 3 configs
-                UniformSelector(n_configs=2),  # picks 2 from those 3
+                StrideSelector(n_configs=2),  # picks 2 from those 3
             ]
         )
         result = pipeline.select(grouped)

@@ -274,7 +274,15 @@ class _MaceArrayTrainer(ModelTrainer):
         artifact = self._artifact_name()
         model_paths = []
         for calcpath in grep(str(self.results_dir / "calcdirs"), ""):
-            model_path = Path(calcpath) / "models" / artifact
+            models_dir = Path(calcpath) / "models"
+            # calcdirs/ also holds non-job entries (logs/, .jax_cache/,
+            # hlo_dumps/, ...); only entries with a models/ subdir are real
+            # array-task dirs. Skip the rest silently -- warning for them is
+            # noise -- but still warn for a genuine job dir missing its
+            # artifact.
+            if not models_dir.is_dir():
+                continue
+            model_path = models_dir / artifact
             if model_path.exists():
                 model_paths.append(model_path)
             else:
