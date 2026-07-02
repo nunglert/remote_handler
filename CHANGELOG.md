@@ -9,6 +9,79 @@ The version is derived from git tags by `setuptools-scm` (tag `v0.2.0` →
 version `0.2.0`). To cut a release: add a dated section below, merge to `main`,
 then `git tag -a vX.Y.Z`.
 
+## [0.4.0] — 2026-07-02
+
+A feature release on top of `0.3.0`. The headline is a rewrite of trajectory
+post-processing into a self-contained plugin framework
+(`remote_handler.processing`), plus a mace-jax ASE calculator, a staged
+active-learning handler, and connection resilience for the subprocess-ssh path.
+Breaking: the old optimizer entry points are gone, replaced by
+`remote_handler.processing` (no compatibility shims).
+
+### Added
+- **`remote_handler.processing`** — a self-contained, extensible trajectory-
+  processing framework, organized by feature rather than by layer. A
+  `RemoteTrajectoryProcessor` shards a trajectory and runs an ordered list of
+  `Processor` steps over each shard (via `processing/driver.py` on the cluster);
+  `RemoteOptimizationHandler` is a thin factory for the optimize step.
+  Structural analysis is just the core with the processors you want, e.g.
+  `processors=[RDFProcessor(), SteinhardtProcessor()]`.
+- **Processor plugin contract** — each processor keeps its whole trio in one
+  module: an `Args` schema (single source of truth), a cluster-side `run`, and
+  a host-side `Processor` spec, wired via `register(name, run, schema=...)`.
+  Downstream packages self-register the same way; the driver imports each
+  processor's `registration_module` before resolving steps, so a downstream
+  processor works with no custom driver. Built-ins: `optimize`, `rdf`.
+- **Per-processor argument validation** — the driver validates every step's
+  args against its schema at job start (`schema.from_dict(args).validate()`),
+  so a malformed composed payload fails fast instead of deep inside an array
+  task. The host `build_args` fills the same schema, so emit and check can't
+  drift.
+- **mace-jax ASE calculator** (`scripts/mace/mace_jax_ase.py`,
+  `MaceJaxEnsembleCalculator`) — single model or stacked-params ensemble, with
+  a `max_neighbors` bucket ladder to bound JIT recompiles and per-structure
+  energy/force uncertainty from the ensemble spread.
+- **`StagedActiveLearningHandler`** (+ `Stage`, `InputSource`, `SelectorActor`)
+  — a staged active-learning loop with explicit per-stage inputs and selection.
+- **Selector as an actor** — `SelectorActor` plus novelty/uncertainty-based
+  selection wired through the loop; selectors take an explicit `reference`
+  argument rather than mutating shared state.
+- **Connection resilience** — an opt-in `ConnectionPolicy` (per-cluster
+  `resilient_connection`) that pauses-and-retries SSH operations when a
+  credential expires instead of crashing, resuming once it is refreshed.
+- **`configure_logging`** — a utility for timestamped logging.
+- `remote_handler show extras` now also reports the installed `remote_handler`
+  version and conda env, per configured machine.
+
+### Changed
+- `UniformSelector` → **`StrideSelector`**. The old name remains as a subclass
+  alias that emits a `DeprecationWarning`; it will be removed in a future
+  release.
+- Every subprocess `ssh` invocation is now non-interactive by construction
+  (`stdin` closed, `-o BatchMode=yes -o ConnectTimeout=…`, detached session)
+  and bounded by `ConnectionPolicy.command_timeout` (default 120s, applies even
+  when resilience is off), so a stalled connection surfaces as an error rather
+  than an indefinite hang.
+
+### Fixed
+- Subprocess `ssh` no longer **hangs on an interactive QR/MFA prompt** when a
+  `step` certificate expires: the prompt can't grab the terminal, and a bounded
+  timeout turns the stall into a `TimeoutExpired` that is classified transient
+  and retried under an enabled policy.
+- `squeue` status polling treats a **purged (completed) job** — `squeue -j`
+  exiting with "Invalid job id specified" — as finished, instead of crashing
+  the driver (the failure seen when a job completes while the connection is
+  briefly down).
+- Collection of finetuned MACE models.
+- `lock.sh` now includes `torch-sim`; the uv lock was refreshed.
+
+### Removed
+- The old optimizer entry points, replaced by `remote_handler.processing` with
+  **no compatibility shims**: `workflows/optimizer.py`,
+  `workflows/processors.py`, `workflows/run_optimizer.py`, and the deprecated
+  `scripts/jaxnest/optimize_traj.py`. Import handlers and processors from
+  `remote_handler.processing` instead.
+
 ## [0.3.0] — 2026-06-22
 
 A feature release on top of `0.2.0`: optional-dependency ergonomics, YAML
