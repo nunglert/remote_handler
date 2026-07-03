@@ -7,7 +7,6 @@ compatibility (``from ...cluster_handler import ClusterConfig`` still works).
 
 import logging
 import os
-import subprocess
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -17,7 +16,7 @@ from remote_handler.core import file_handler, remote_env, slurm_utils
 from remote_handler.core.cluster_config import ClusterConfig
 from remote_handler.core.executors import ArrayExecutor, SingleExecutor
 from remote_handler.core.file_handler import FileSystemHandlerBase
-from remote_handler.exceptions import DependencyError, FileSystemError
+from remote_handler.exceptions import FileSystemError
 
 logger = logging.getLogger(__name__)
 
@@ -104,37 +103,16 @@ class SlurmHandlerBase(ABC):
 
     def _validate_slurm(self):
         """Check that slurm (sbatch) is available on the target system."""
-        cmd = "which sbatch"
-        if self.ssh_command is not None:
-            cmd = f"{self.ssh_command} '{cmd}'"
         target = (
             "local machine"
             if self.ssh_command is None
             else self.cluster_config.remote_machine
         )
-        try:
-            subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                check=True,
-                # Close stdin + bound the probe so an expired credential can't
-                # park construction at an interactive ssh/step prompt.
-                stdin=subprocess.DEVNULL,
-                timeout=self.cluster_config.connection_policy.command_timeout,
-            )
-        except subprocess.CalledProcessError:
-            raise DependencyError(
-                f"SLURM is not available on {target}: 'sbatch' not found.\n"
-                "Ensure SLURM is installed and accessible in PATH."
-            )
-        except subprocess.TimeoutExpired:
-            raise DependencyError(
-                f"Timed out probing SLURM on {target}: the ssh connection did "
-                "not respond. The credential may have expired -- refresh it "
-                "(e.g. run `step ssh login` on the driver host) and retry."
-            )
+        slurm_utils.validate_slurm_available(
+            self.ssh_command,
+            target,
+            self.cluster_config.connection_policy,
+        )
 
     def _validate_savepath(self):
         remote_env.validate_savepath(
