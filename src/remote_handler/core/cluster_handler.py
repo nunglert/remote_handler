@@ -130,6 +130,7 @@ class SlurmHandlerBase(ABC):
             self.conda_env,
             self.remote_fs,
             remote_machine=self.cluster_config.remote_machine,
+            conda_env_dir=self.cluster_config.conda_env_dir,
         )
 
     @abstractmethod

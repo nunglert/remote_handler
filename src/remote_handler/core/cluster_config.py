@@ -36,6 +36,11 @@ class ClusterConfig:
         remote_machine: SSH alias or hostname of the remote machine
         partition: SLURM partition name to submit jobs to (SLURM backend only)
         conda_env: Name of the conda environment to activate on the remote
+        conda_env_dir: Directory on the remote where the named environments
+            live, for setups that store envs outside the conda install's
+            ``envs/`` and ``~/.conda/envs``. ``None`` (default) means only
+            those two standard locations are searched. A leading ``~`` is
+            expanded against the remote home. Used by env-existence validation.
         savepath: Default path on the remote where computations are saved
         template: Jinja2 template file for SLURM job headers (SLURM backend only)
         resilient_connection: Opt-in. When True, SSH operations to this cluster
@@ -75,6 +80,7 @@ class ClusterConfig:
     conda_source: str
     savepath: str
     template: str
+    conda_env_dir: Optional[str] = None
     resilient_connection: bool = False
     connection_retry_interval: float = 60.0
     connection_max_wait: Optional[float] = None
