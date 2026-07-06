@@ -29,6 +29,15 @@ logger = logging.getLogger(__name__)
 _SSH_NONINTERACTIVE_OPTS = "-o BatchMode=yes -o ConnectTimeout=15"
 
 
+def _combine_headers(*parts: str) -> str:
+    """Join non-empty SLURM header fragments with newlines, in order.
+
+    Empty/whitespace-only parts are dropped so a missing cluster header (the
+    common case) leaves the per-call header untouched, and vice versa.
+    """
+    return "\n".join(p.strip() for p in parts if p and p.strip())
+
+
 class SlurmHandlerBase(ABC):
     """
     Class to handle file transfers and computations via slurm on a remote
@@ -73,7 +82,14 @@ class SlurmHandlerBase(ABC):
         self.savepath = savepath
         self.conda_env = cluster_config.conda_env
         self.n_processors = n_processors
-        self.slurm_header_add = slurm_header_add
+        # Cluster-intrinsic header lines (from the config) apply to every job
+        # on this cluster and come first; the per-call slurm_header_add an actor
+        # passes is appended after them. This is how a machine-wide setup (e.g.
+        # datalab's TMPDIR redirect, its /tmp being permission-denied) reaches
+        # every job without each actor having to know about it.
+        self.slurm_header_add = _combine_headers(
+            cluster_config.slurm_header_add, slurm_header_add
+        )
         # SLURM ``--time`` value (e.g. "0-02:00:00"); None -> no directive, so
         # the job runs to the partition/cluster maximum.
         self.time_limit = time_limit

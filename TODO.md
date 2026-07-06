@@ -11,3 +11,4 @@
 - [ ] Think about reworking all config files from JSON to yaml, could probably be done backwards-compatible
 - [ ] Option to pass VASPHandler INCAR kwargs also via a yaml file
 - [x] Give the RemoteTask derived objects the possibility to finish_check, BEFORE submitting, to prevent redoing calculations that were already finished (for crash scenarios)
+- [ ] In RemoteTrajectoryProcessor allow shard_size to be passed as -1 or None, which means that the entire set of atoms is processed without sharding

@@ -141,6 +141,11 @@ def cmd_configure_cluster(args: argparse.Namespace) -> int:
         _list_header_templates(),
         default=existing.get("template"),
     )
+    slurm_header_add = prompt_text(
+        "Cluster-wide SLURM header lines (optional, e.g. "
+        "'export TMPDIR=$HOME/tmp'; blank for none)",
+        default=existing.get("slurm_header_add", ""),
+    )
 
     data = {
         "remote_machine": remote_machine,
@@ -150,6 +155,8 @@ def cmd_configure_cluster(args: argparse.Namespace) -> int:
         "savepath": savepath,
         "template": template,
     }
+    if str(slurm_header_add).strip():
+        data["slurm_header_add"] = slurm_header_add
 
     empty = [key for key, value in data.items() if not str(value).strip()]
     if empty:

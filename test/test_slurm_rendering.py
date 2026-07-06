@@ -126,6 +126,29 @@ def test_header_template_accepts_explicit_path(tmp_path):
     assert "python /remote/script.py /remote/input.json" in script
 
 
+def test_slurm_header_add_is_rendered_into_header():
+    """The combined ``slurm_header_add`` lines land in the header verbatim.
+
+    Guards the template boundary for the cluster-wide header: whatever
+    ``SlurmHandlerBase`` combines (cluster config + per-call) must appear in
+    the rendered script -- e.g. datalab's TMPDIR redirect.
+    """
+    script = get_slurm_str(
+        input_file="/remote/input.json",
+        python_script_path="/remote/script.py",
+        jobname="charjob",
+        partition="charpart",
+        n_cores=4,
+        conda_env="charenv",
+        conda_source="/home/u/miniconda3",
+        header_template=HEADER,
+        job_type_template="body_single.sh.j2",
+        slurm_header_add="export TMPDIR=$HOME/tmp\nmodule load vasp",
+    )
+    assert "export TMPDIR=$HOME/tmp" in script
+    assert "module load vasp" in script
+
+
 def test_header_template_missing_path_errors():
     """An explicit template path that does not exist fails clearly."""
     with pytest.raises(TaskError, match="not found at the given path"):

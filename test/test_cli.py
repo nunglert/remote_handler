@@ -42,7 +42,7 @@ class _FakeSSH:
 
 
 # Cluster prompt order: remote_machine, partition, conda_env, conda_source,
-# savepath, template.
+# savepath, template, slurm_header_add (optional; blank -> not written).
 _CLUSTER_ANSWERS = [
     "lugus",
     "normal",
@@ -50,6 +50,7 @@ _CLUSTER_ANSWERS = [
     "~/miniconda3/bin/activate",
     "/home/u/dump",
     "dirona.sh.j2",
+    "",
 ]
 
 
@@ -76,6 +77,19 @@ def test_configure_cluster_writes_all_six_fields(monkeypatch):
     cc = ClusterConfig.from_file("lugus.json")
     assert cc.remote_machine == "lugus"
     assert cc.conda_source == "~/miniconda3/bin/activate"
+
+
+def test_configure_cluster_writes_slurm_header_add_when_given(monkeypatch):
+    answers = list(_CLUSTER_ANSWERS)
+    answers[6] = "export TMPDIR=$HOME/tmp"  # cluster-wide header line
+    _script_prompts(monkeypatch, answers)
+    monkeypatch.setattr(cli, "SSHConfigParser", _FakeSSH)
+
+    rc = cli.main(["configure", "cluster", "lugus"])
+    assert rc == 0
+
+    data = json.loads((get_persistent_config_dir() / "lugus.json").read_text())
+    assert data["slurm_header_add"] == "export TMPDIR=$HOME/tmp"
 
 
 def test_configure_cluster_rejects_empty_field(monkeypatch):

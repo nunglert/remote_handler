@@ -58,6 +58,12 @@ class ClusterConfig:
         executor: Which execution backend to run jobs through. ``"slurm"``
             (default) submits via sbatch; other backends are selected by the
             executor factory. Unset in a config JSON means ``"slurm"``.
+        slurm_header_add: Cluster-intrinsic SLURM header lines prepended to the
+            header of *every* job on this cluster, before any per-call
+            ``slurm_header_add`` an actor passes. Use it for setup that is a
+            property of the machine rather than of the job -- e.g. datalab's
+            ``export TMPDIR=$HOME/tmp`` (its ``/tmp`` is permission-denied, so
+            any job writing there fails). SLURM backend only; empty by default.
         environment: Per-application shell setup for *this* cluster, keyed by
             application name (e.g. ``"vasp"``, ``"orca"``). Each value is shell
             lines injected into the SLURM header for jobs of that application
@@ -86,6 +92,7 @@ class ClusterConfig:
     connection_max_wait: Optional[float] = None
     connection_command_timeout: Optional[float] = 120.0
     executor: str = "slurm"
+    slurm_header_add: str = ""
     environment: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
