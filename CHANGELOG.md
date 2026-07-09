@@ -9,6 +9,37 @@ The version is derived from git tags by `setuptools-scm` (tag `v0.2.0` →
 version `0.2.0`). To cut a release: add a dated section below, merge to `main`,
 then `git tag -a vX.Y.Z`.
 
+## [0.4.1] — 2026-07-09
+
+A patch/minor increment on top of `0.4.0`: two optional per-cluster config
+knobs, a bug fix in trajectory sharding, and the SLURM-availability probe moved
+behind the connection-resilience wrapper. No breaking changes.
+
+### Added
+- **`conda_env_dir`** — an optional `ClusterConfig` field naming the directory
+  on the remote that holds the named conda environments, so activation no
+  longer assumes a default install location. Prompted for by
+  `remote_handler configure cluster` and threaded through `remote_env`.
+- **`slurm_header_add`** — reintroduced as an optional `ClusterConfig` field for
+  extra lines injected verbatim into the generated SLURM job header (e.g.
+  account/partition/QoS directives). Exposed via the CLI and rendered by the
+  SLURM handler.
+
+### Changed
+- `validate_slurm_available` moved from `cluster_handler` to `slurm_utils` and
+  now runs through the same resilient wrapper as other remote commands, so a
+  transient credential/connection failure while probing `sbatch` pauses and
+  retries instead of crashing.
+
+### Fixed
+- **`AtomsShardManager` crash on a default slice.** When `every`/`start`/`end`
+  were left at their `None` defaults (as `VASPHandler` and the other DFT
+  handlers do), `combine_trajs` computed `iteration_idx * indices.step` —
+  `int * None` — and raised `TypeError` before any job was submitted. The
+  slice fields are now normalized (`step→1`, `start→0`) and `iteration_index`
+  is computed as `start + iteration_idx * step`, which also fixes a latent
+  offset bug where a non-`None` `start` was ignored. Regression tests added.
+
 ## [0.4.0] — 2026-07-02
 
 A feature release on top of `0.3.0`. The headline is a rewrite of trajectory

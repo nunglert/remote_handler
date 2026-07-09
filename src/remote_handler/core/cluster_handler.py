@@ -7,7 +7,6 @@ compatibility (``from ...cluster_handler import ClusterConfig`` still works).
 
 import logging
 import os
-import subprocess
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -17,7 +16,7 @@ from remote_handler.core import file_handler, remote_env, slurm_utils
 from remote_handler.core.cluster_config import ClusterConfig
 from remote_handler.core.executors import ArrayExecutor, SingleExecutor
 from remote_handler.core.file_handler import FileSystemHandlerBase
-from remote_handler.exceptions import DependencyError, FileSystemError
+from remote_handler.exceptions import FileSystemError
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +27,15 @@ logger = logging.getLogger(__name__)
 # closed stdin + subprocess timeout applied at the call sites, this stops an
 # expired credential from parking the driver at an interactive prompt.
 _SSH_NONINTERACTIVE_OPTS = "-o BatchMode=yes -o ConnectTimeout=15"
+
+
+def _combine_headers(*parts: str) -> str:
+    """Join non-empty SLURM header fragments with newlines, in order.
+
+    Empty/whitespace-only parts are dropped so a missing cluster header (the
+    common case) leaves the per-call header untouched, and vice versa.
+    """
+    return "\n".join(p.strip() for p in parts if p and p.strip())
 
 
 class SlurmHandlerBase(ABC):
@@ -74,7 +82,14 @@ class SlurmHandlerBase(ABC):
         self.savepath = savepath
         self.conda_env = cluster_config.conda_env
         self.n_processors = n_processors
-        self.slurm_header_add = slurm_header_add
+        # Cluster-intrinsic header lines (from the config) apply to every job
+        # on this cluster and come first; the per-call slurm_header_add an actor
+        # passes is appended after them. This is how a machine-wide setup (e.g.
+        # datalab's TMPDIR redirect, its /tmp being permission-denied) reaches
+        # every job without each actor having to know about it.
+        self.slurm_header_add = _combine_headers(
+            cluster_config.slurm_header_add, slurm_header_add
+        )
         # SLURM ``--time`` value (e.g. "0-02:00:00"); None -> no directive, so
         # the job runs to the partition/cluster maximum.
         self.time_limit = time_limit
@@ -104,37 +119,16 @@ class SlurmHandlerBase(ABC):
 
     def _validate_slurm(self):
         """Check that slurm (sbatch) is available on the target system."""
-        cmd = "which sbatch"
-        if self.ssh_command is not None:
-            cmd = f"{self.ssh_command} '{cmd}'"
         target = (
             "local machine"
             if self.ssh_command is None
             else self.cluster_config.remote_machine
         )
-        try:
-            subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                check=True,
-                # Close stdin + bound the probe so an expired credential can't
-                # park construction at an interactive ssh/step prompt.
-                stdin=subprocess.DEVNULL,
-                timeout=self.cluster_config.connection_policy.command_timeout,
-            )
-        except subprocess.CalledProcessError:
-            raise DependencyError(
-                f"SLURM is not available on {target}: 'sbatch' not found.\n"
-                "Ensure SLURM is installed and accessible in PATH."
-            )
-        except subprocess.TimeoutExpired:
-            raise DependencyError(
-                f"Timed out probing SLURM on {target}: the ssh connection did "
-                "not respond. The credential may have expired -- refresh it "
-                "(e.g. run `step ssh login` on the driver host) and retry."
-            )
+        slurm_utils.validate_slurm_available(
+            self.ssh_command,
+            target,
+            self.cluster_config.connection_policy,
+        )
 
     def _validate_savepath(self):
         remote_env.validate_savepath(
@@ -152,6 +146,7 @@ class SlurmHandlerBase(ABC):
             self.conda_env,
             self.remote_fs,
             remote_machine=self.cluster_config.remote_machine,
+            conda_env_dir=self.cluster_config.conda_env_dir,
         )
 
     @abstractmethod

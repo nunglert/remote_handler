@@ -162,6 +162,11 @@ class AtomsShardManager:
             - ``iteration_index``: The index of the configuration in its
               original file.
         """
+        # A bare slice (e.g. slice(None, None, None)) leaves start/step as
+        # None; normalize so iteration_index maps back to the original frame.
+        step = indices.step if indices.step is not None else 1
+        start = indices.start if indices.start is not None else 0
+
         all_atoms = []
         for file_idx, file in enumerate(traj_files):
             # Read the configurations from the trajectory file
@@ -170,7 +175,7 @@ class AtomsShardManager:
             for iteration_idx, at in enumerate(ats):
                 at.info["file_index"] = file_idx  # Save run index
                 at.info["iteration_index"] = (
-                    iteration_idx * indices.step
+                    start + iteration_idx * step
                 )  # Save sample index
 
             all_atoms.extend(ats)

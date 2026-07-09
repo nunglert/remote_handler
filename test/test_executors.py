@@ -14,6 +14,7 @@ from remote_handler.core.cluster_handler import (
     ClusterConfig,
     SlurmArrayHandler,
     SlurmJobHandler,
+    _combine_headers,
 )
 from remote_handler.core.executors import ArrayExecutor, SingleExecutor
 from remote_handler.exceptions import ConfigurationError
@@ -59,3 +60,40 @@ def test_unknown_backend_is_rejected():
     cfg = _config(executor="bogus")
     with pytest.raises(ConfigurationError, match="Unknown executor backend"):
         executors._select_backend(cfg)
+
+
+def test_cluster_slurm_header_add_defaults_empty():
+    """Absent in the JSON, the cluster-wide header is the empty string."""
+    assert _config().slurm_header_add == ""
+
+
+def test_cluster_slurm_header_add_round_trips_from_dict():
+    cfg = ClusterConfig.from_dict(
+        {
+            "remote_machine": "m",
+            "partition": "p",
+            "conda_env": "e",
+            "conda_source": "/x",
+            "savepath": "/s",
+            "template": "t.j2",
+            "slurm_header_add": "export TMPDIR=$HOME/tmp",
+        }
+    )
+    assert cfg.slurm_header_add == "export TMPDIR=$HOME/tmp"
+
+
+def test_combine_headers_prepends_cluster_then_per_call():
+    """Cluster-wide lines come first; the per-call header follows."""
+    assert (
+        _combine_headers("export TMPDIR=$HOME/tmp", "module load vasp")
+        == "export TMPDIR=$HOME/tmp\nmodule load vasp"
+    )
+
+
+def test_combine_headers_drops_empty_parts():
+    """A missing cluster (or per-call) header leaves the other untouched."""
+    assert _combine_headers("", "module load vasp") == "module load vasp"
+    assert _combine_headers("export TMPDIR=$HOME/tmp", "") == (
+        "export TMPDIR=$HOME/tmp"
+    )
+    assert _combine_headers("  ", "\n") == ""

@@ -135,7 +135,7 @@ def resolve_remote_module_file(remote_fs, conda_source, conda_env, module):
 
 
 def validate_conda_on_fs(
-    conda_source, conda_env, remote_fs, *, remote_machine
+    conda_source, conda_env, remote_fs, *, remote_machine, conda_env_dir=None
 ):
     """Resolve ``conda_source`` and check the env exists on ``remote_fs``.
 
@@ -144,10 +144,15 @@ def validate_conda_on_fs(
     (the hook needs no on-disk path), everything else must point at a real
     activation script and a real environment.
 
+    The environment is looked for under the conda install's ``envs/`` and
+    ``~/.conda/envs``. Some setups store their environments elsewhere and have
+    neither of those directories; pass ``conda_env_dir`` (the cluster config
+    field) to add that directory to the search.
+
     A leading ``~`` is supported: it is expanded against the remote home for
     the existence checks (the shell expands it at runtime when the rendered
     job script ``source``s the path), so ``~/miniconda3`` is a valid
-    ``conda_source``.
+    ``conda_source`` (and a valid ``conda_env_dir``).
     """
     spec = resolve_conda(conda_source)
     if spec.kind == "micromamba":
@@ -162,16 +167,33 @@ def validate_conda_on_fs(
             f"Conda activation script not found at: {activate_source}\n"
             f"Remote machine: {remote_machine}"
         )
-    conda_env_path = Path(env_home) / "envs" / conda_env
-    dot_conda_env_path = Path(home) / ".conda/envs" / conda_env
-    if not remote_fs.exists(conda_env_path) and not remote_fs.exists(
-        dot_conda_env_path
-    ):
+
+    # Standard locations, plus an explicit override for setups that keep their
+    # environments outside both (so neither 'envs/' nor '~/.conda/envs' exists).
+    candidates = [
+        Path(env_home) / "envs" / conda_env,
+        Path(home) / ".conda/envs" / conda_env,
+    ]
+    if conda_env_dir:
+        candidates.insert(
+            0, Path(_expand_user(conda_env_dir, home)) / conda_env
+        )
+
+    if not any(remote_fs.exists(path) for path in candidates):
+        searched = "\n".join(f"  - {path}" for path in candidates)
+        hint = (
+            ""
+            if conda_env_dir
+            else (
+                "\nIf your environments are stored outside the conda install's "
+                "'envs/' and '~/.conda/envs' (e.g. a shared/project envs dir), "
+                "set the cluster config 'conda_env_dir' to that directory."
+            )
+        )
         raise ConfigurationError(
             f"Conda environment '{conda_env}' not found on "
-            f"{remote_machine}\n"
-            f"Expected path: {conda_env_path} or "
-            f"{dot_conda_env_path}"
+            f"{remote_machine}.\n"
+            f"Searched:\n{searched}{hint}"
         )
     return spec.activate_source
 

@@ -79,6 +79,54 @@ def test_validate_conda_missing_env_raises(monkeypatch, tmp_path):
         )
 
 
+def test_validate_conda_custom_env_dir(monkeypatch, tmp_path):
+    """An env under ``conda_env_dir`` validates though 'envs/' is absent."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / "miniconda3"
+    (root / "bin").mkdir(parents=True)
+    (root / "bin" / "activate").write_text("# activate\n")  # no envs/<env>
+    envs_elsewhere = tmp_path / "shared" / "conda-envs"
+    (envs_elsewhere / "myenv").mkdir(parents=True)
+
+    activate = remote_env.validate_conda_on_fs(
+        "~/miniconda3",
+        "myenv",
+        LocalFileSystem(),
+        remote_machine="local",
+        conda_env_dir=str(envs_elsewhere),
+    )
+    assert activate == str(Path("~/miniconda3") / "bin/activate")
+
+
+def test_validate_conda_env_dir_expands_tilde(monkeypatch, tmp_path):
+    """``conda_env_dir`` may itself use ``~`` (expanded against home)."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / "miniconda3"
+    (root / "bin").mkdir(parents=True)
+    (root / "bin" / "activate").write_text("# activate\n")
+    (tmp_path / "conda-envs" / "myenv").mkdir(parents=True)
+
+    remote_env.validate_conda_on_fs(
+        "~/miniconda3",
+        "myenv",
+        LocalFileSystem(),
+        remote_machine="local",
+        conda_env_dir="~/conda-envs",
+    )
+
+
+def test_validate_conda_missing_env_hints_env_dir(monkeypatch, tmp_path):
+    """Without ``conda_env_dir``, the error suggests setting it."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / "miniconda3"
+    (root / "bin").mkdir(parents=True)
+    (root / "bin" / "activate").write_text("# activate\n")
+    with pytest.raises(ConfigurationError, match="conda_env_dir"):
+        remote_env.validate_conda_on_fs(
+            "~/miniconda3", "absent", LocalFileSystem(), remote_machine="local"
+        )
+
+
 def test_expand_user_helper():
     assert remote_env._expand_user("~", "/home/u") == "/home/u"
     assert remote_env._expand_user("~/x/y", "/home/u") == "/home/u/x/y"

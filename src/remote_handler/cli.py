@@ -141,6 +141,11 @@ def cmd_configure_cluster(args: argparse.Namespace) -> int:
         _list_header_templates(),
         default=existing.get("template"),
     )
+    slurm_header_add = prompt_text(
+        "Cluster-wide SLURM header lines (optional, e.g. "
+        "'export TMPDIR=$HOME/tmp'; blank for none)",
+        default=existing.get("slurm_header_add", ""),
+    )
 
     data = {
         "remote_machine": remote_machine,
@@ -150,6 +155,8 @@ def cmd_configure_cluster(args: argparse.Namespace) -> int:
         "savepath": savepath,
         "template": template,
     }
+    if str(slurm_header_add).strip():
+        data["slurm_header_add"] = slurm_header_add
 
     empty = [key for key, value in data.items() if not str(value).strip()]
     if empty:
@@ -309,9 +316,16 @@ def _check_connect(cc: ClusterConfig, name: str, report: Reporter) -> None:
             if src.endswith("/bin/activate")
             else src
         )
-        if root.startswith("~"):
-            root = "$HOME" + root[1:]
-        probe = f"test -d {root}/envs/{cc.conda_env} && echo OK"
+
+        def _sh(path: str) -> str:
+            return "$HOME" + path[1:] if path.startswith("~") else path
+
+        root = _sh(root)
+        env_dirs = [f"{root}/envs", "$HOME/.conda/envs"]
+        if cc.conda_env_dir:
+            env_dirs.insert(0, _sh(cc.conda_env_dir.rstrip("/")))
+        tests = " || ".join(f"test -d {d}/{cc.conda_env}" for d in env_dirs)
+        probe = f"{{ {tests}; }} && echo OK"
         _in2, out2, _err2 = ssh.exec_command(probe)
         if out2.read().decode().strip() == "OK":
             report("PASS", f"{name}: conda env '{cc.conda_env}' present")
@@ -319,7 +333,7 @@ def _check_connect(cc: ClusterConfig, name: str, report: Reporter) -> None:
             report(
                 "WARN",
                 f"{name}: conda env '{cc.conda_env}' not found under "
-                f"{root}/envs",
+                + ", ".join(env_dirs),
             )
     finally:
         try:

@@ -3,6 +3,77 @@ import subprocess
 import pytest
 
 from remote_handler.core import resilience, slurm_utils
+from remote_handler.exceptions import DependencyError, RemoteConnectionError
+
+
+def test_validate_slurm_missing_sbatch_raises_dependency(monkeypatch):
+    """`which sbatch` truly absent runs on the remote and exits 1; that is a
+    genuine missing-dependency, not a connection failure."""
+
+    def fake_run(cmd, **kwargs):
+        raise subprocess.CalledProcessError(returncode=1, cmd=cmd, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(DependencyError, match="not found"):
+        slurm_utils.validate_slurm_available(
+            "ssh musica", "musica", resilience.DISABLED
+        )
+
+
+def test_validate_slurm_ssh_255_raises_connection_error(monkeypatch):
+    """ssh's own connect/auth failure exits 255 -- an expired credential, not
+    a missing sbatch. It must surface as RemoteConnectionError."""
+
+    def fake_run(cmd, **kwargs):
+        raise subprocess.CalledProcessError(
+            returncode=255, cmd=cmd, stderr="Permission denied (publickey).\n"
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(RemoteConnectionError, match="expired"):
+        slurm_utils.validate_slurm_available(
+            "ssh musica", "musica", resilience.DISABLED
+        )
+
+
+def test_validate_slurm_timeout_raises_dependency(monkeypatch):
+    """A hung ssh probe (killed by command_timeout) reports as a timed-out
+    probe with a refresh hint, under a disabled policy."""
+
+    def fake_run(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(DependencyError, match="Timed out"):
+        slurm_utils.validate_slurm_available(
+            "ssh musica", "musica", resilience.DISABLED
+        )
+
+
+def test_validate_slurm_pauses_and_retries_under_enabled_policy(monkeypatch):
+    """With resilient_connection on, an expired-credential 255 pauses-and-
+    retries here (same as submit/status) instead of crashing; once the
+    credential is refreshed the probe succeeds and construction proceeds."""
+    calls = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise subprocess.CalledProcessError(
+                returncode=255,
+                cmd=cmd,
+                stderr="Permission denied (publickey).\n",
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    slept = []
+    policy = resilience.ConnectionPolicy(
+        enabled=True, poll_interval=1, sleep=slept.append
+    )
+    slurm_utils.validate_slurm_available("ssh musica", "musica", policy)
+    assert calls["n"] == 3  # failed twice, then succeeded
+    assert slept  # it paused between attempts
 
 
 def test_run_ssh_closes_stdin_and_bounds_the_call(monkeypatch):
