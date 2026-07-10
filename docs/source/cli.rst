@@ -330,16 +330,24 @@ non-zero if any requested machine could not be reached.
 Detach a job, collect it later
 ------------------------------
 
-Long remote jobs no longer need the launching process to stay alive. A task
-can **detach** right after submission: it starts the remote job, writes a small
-``task_manifest.json`` (both locally, as ``<local_savepath>.manifest.json``,
-and inside the remote job directory), and returns immediately — so submitting
-feels like a local, backgrounded command.
+Long remote jobs no longer need the launching process to stay alive. **By
+default**, every task ``submit``/``run`` writes a small ``task_manifest.json``
+(both locally, as ``<local_savepath>.manifest.json``, and inside the remote job
+directory) right after submission and *before* the blocking wait — so even a
+plain blocking run that dies mid-wait (SSH drop, laptop sleep, ``Ctrl-C``)
+leaves a resume handle on disk and the running job is not orphaned. The write
+is best-effort and never aborts the job; opt out with
+``write_manifest_on_submit=False``.
+
+A task can also **detach**: start the remote job, write the manifest, and
+return immediately without waiting — so submitting feels like a local,
+backgrounded command.
 
 .. code-block:: python
 
    task = VASPEvaluator(...).build_task(...)   # any SingleScriptTask/ArrayScriptTask
    manifest_path = task.detach()               # fires the job, returns at once
+   # ...or just run it blocking; the manifest is written either way.
 
 The manifest is a self-contained resume handle: it embeds the full cluster
 config and the resolved remote directory, so collecting later needs neither the

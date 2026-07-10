@@ -274,15 +274,42 @@ class RemoteTask(ABC):
 
         The local copy defaults to ``<local_savepath>.manifest.json`` so it
         sits beside where results will land and stays unique per task.
+
+        The local copy is the resume contract and is written first (its failure
+        propagates); the remote copy is redundancy for resume-from-anywhere and
+        is best-effort -- a failure there only warns, so an unreachable or
+        read-only remote never defeats the local handle.
         """
         manifest = self._build_manifest(task_type, num_array_tasks)
         if local_path is None:
             local_path = Path(str(self.local_savepath) + ".manifest.json")
         manifest.save_local(local_path)
-        if write_remote:
-            manifest.save_remote(self.remote_fs)
         self.manifest_path = Path(local_path)
+        if write_remote:
+            try:
+                manifest.save_remote(self.remote_fs)
+            except Exception as exc:  # noqa: BLE001 - bonus copy, never fatal
+                logger.warning("Could not write remote manifest copy: %s", exc)
         return self.manifest_path
+
+    def _maybe_write_manifest(
+        self, task_type: str, num_array_tasks: Optional[int] = None
+    ) -> None:
+        """Best-effort manifest write from inside ``submit`` (default path).
+
+        Called right after submission and *before* the wait, so the durable
+        handle exists on disk while the job runs -- if the driver then dies in
+        the wait loop, the job is recoverable. Fully best-effort: any failure
+        (including the local write) only warns, so persisting the safety net
+        can never take down the job it is protecting. Disabled per-task via
+        ``write_manifest_on_submit=False``.
+        """
+        if not getattr(self, "write_manifest_on_submit", True):
+            return
+        try:
+            self._save_manifest(task_type, num_array_tasks, None, True)
+        except Exception as exc:  # noqa: BLE001 - safety net, never fatal
+            logger.warning("Could not persist task manifest: %s", exc)
 
 
 class SingleScriptTask(RemoteTask):
@@ -317,6 +344,10 @@ class SingleScriptTask(RemoteTask):
         job_type_template: The template that is used to create the slurm job
             script. This needs to be present in one of the `TEMPLATE_DIRS` of
             `remote_handler.core.slurm_utils`.
+        write_manifest_on_submit: If True (default), ``submit`` persists a
+            resume manifest right after submission (best-effort), so a driver
+            crash during the wait does not orphan the running job. Set False
+            to opt out.
     """
 
     def __init__(
@@ -337,6 +368,7 @@ class SingleScriptTask(RemoteTask):
         job_type_template: os.PathLike = "body_single.sh.j2",
         time_limit: Optional[str] = None,
         memory: Optional[str] = None,
+        write_manifest_on_submit: bool = True,
     ):
         # If no remote_savepath is provided, fall back to the savepath from
         # the cluster_config
@@ -370,6 +402,7 @@ class SingleScriptTask(RemoteTask):
             self.additional_files = [self.additional_files]
         self.loop_time = loop_time
         self.local_savepath = local_savepath
+        self.write_manifest_on_submit = write_manifest_on_submit
 
         self.executor = executors.make_single_executor(
             cluster_config,
@@ -451,8 +484,14 @@ class SingleScriptTask(RemoteTask):
         )
 
     def submit(self, only_start=False):
-        """Submit the job and wait until it is finished."""
+        """Submit the job and wait until it is finished.
+
+        Persists a resume manifest right after submission and before the wait
+        (best-effort; disable with ``write_manifest_on_submit=False``), so a
+        driver crash during the wait does not orphan the running job.
+        """
         self.executor.submit()
+        self._maybe_write_manifest(TASK_SINGLE)
         if only_start:
             return
         self.executor.wait_until_finished()
@@ -539,9 +578,18 @@ class SingleScriptTask(RemoteTask):
         The detach-on-submit path: fire the remote job and hand back the
         local manifest path without waiting, so submission feels like a local
         backgrounded command. Resume with ``TaskHandle.from_file``.
+
+        Suppresses ``submit``'s own manifest write and writes exactly once here
+        instead, so the ``local_path`` / ``write_remote`` arguments are honored
+        (and the remote copy is not written twice).
         """
         self.allocate_data()
-        self.submit(only_start=True)
+        prev = self.write_manifest_on_submit
+        self.write_manifest_on_submit = False
+        try:
+            self.submit(only_start=True)
+        finally:
+            self.write_manifest_on_submit = prev
         return self.write_manifest(
             local_path=local_path, write_remote=write_remote
         )
@@ -807,6 +855,10 @@ class ArrayScriptTask(RemoteTask):
         jobfile_name: Name of the slurm job script that is created to submit the job.
         slurm_header_add: Additional lines that are added to the header of the
             slurm job script.
+        write_manifest_on_submit: If True (default), ``submit`` persists a
+            resume manifest right after submission (best-effort), so a driver
+            crash during the wait does not orphan the running array. Set False
+            to opt out.
     """
 
     def __init__(
@@ -828,7 +880,9 @@ class ArrayScriptTask(RemoteTask):
         slurm_header_add: str = "",
         time_limit: Optional[str] = None,
         memory: Optional[str] = None,
+        write_manifest_on_submit: bool = True,
     ):
+        self.write_manifest_on_submit = write_manifest_on_submit
         if individual_ressources:
             # Save the number of individual jobs in the array
             self.num_array_tasks = len(individual_ressources[0])
@@ -1052,11 +1106,18 @@ class ArrayScriptTask(RemoteTask):
     def submit(self, only_start=False):
         """Submit the array job.
 
+        Persists a resume manifest right after submission and before the wait
+        (best-effort; disable with ``write_manifest_on_submit=False``), so a
+        driver crash during the wait does not orphan the running array.
+
         Args:
             only_start: If True, return right after submission instead of
                 blocking until the array finishes -- used by ``detach``.
         """
         self.executor.submit()
+        self._maybe_write_manifest(
+            TASK_ARRAY, getattr(self, "num_array_tasks", None)
+        )
         if only_start:
             return
         self.executor.wait_until_finished()
@@ -1087,7 +1148,12 @@ class ArrayScriptTask(RemoteTask):
         See :meth:`SingleScriptTask.detach`.
         """
         self.allocate_data()
-        self.submit(only_start=True)
+        prev = self.write_manifest_on_submit
+        self.write_manifest_on_submit = False
+        try:
+            self.submit(only_start=True)
+        finally:
+            self.write_manifest_on_submit = prev
         return self.write_manifest(
             local_path=local_path, write_remote=write_remote
         )

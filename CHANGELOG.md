@@ -12,17 +12,21 @@ then `git tag -a vX.Y.Z`.
 ## [Unreleased]
 
 ### Added
-- **Durable task handles (detach-on-submit + crash resume).** A submitted
-  `SingleScriptTask` / `ArrayScriptTask` can now persist everything needed to
-  await and collect its job to a small JSON `TaskManifest`
-  (`core/manifest.py`), written both locally and into the remote job
-  directory. `task.detach()` allocates, starts the job, writes the manifest,
-  and returns immediately — so submitting a remote job feels like a local
-  backgrounded command. `TaskHandle.from_file(<manifest>)` rebuilds the
-  filesystem + execution backend in a *different* process (re-binding to the
-  running job via the new `Executor.attach`) to poll (`is_finished`), `wait`,
-  and `collect` the results. Recovers work that was previously lost if the
-  driver crashed while a job was in flight.
+- **Durable task handles (crash resume + detach-on-submit).** A submitted
+  `SingleScriptTask` / `ArrayScriptTask` now persists everything needed to
+  await and collect its job to a small JSON `TaskManifest` (`core/manifest.py`),
+  written both locally (`<local_savepath>.manifest.json`) and into the remote
+  job directory. **This happens by default** on every `submit`/`run` — right
+  after submission and *before* the blocking wait — so if the driver process
+  dies mid-wait the running job is no longer orphaned (the original motivation).
+  Opt out per task with `write_manifest_on_submit=False`. The write is
+  best-effort (the local copy is the contract; a remote-copy failure only
+  warns) so persisting the safety net can never take down the job it protects.
+  `task.detach()` additionally *returns without waiting*, so submitting a
+  remote job feels like a local backgrounded command.
+  `TaskHandle.from_file(<manifest>)` rebuilds the filesystem + execution backend
+  in a *different* process (re-binding to the running job via the new
+  `Executor.attach`) to poll (`is_finished`), `wait`, and `collect` the results.
 - `ClusterConfig.to_dict()` — JSON-round-trippable snapshot, embedded in the
   manifest so a resume does not depend on the original cluster JSON.
 - `Executor.is_finished()` — non-blocking completion poll (SLURM `squeue`;
@@ -34,6 +38,20 @@ then `git tag -a vX.Y.Z`.
   results. `PATH` is the manifest file or a directory containing one (defaults
   to the cwd) — so the workflow is: launch, walk away, and the next day `cd`
   back and run `remote_handler collect --wait`.
+
+### Fixed
+- **Conda env no longer shadowed by module-loaded interpreters.** The generated
+  activation now appends `[ -n "$CONDA_PREFIX" ] && export
+  PATH="$CONDA_PREFIX/bin:$PATH"` after `conda activate`. On clusters where a
+  job's `environment`/`slurm_header_add` runs `module load` (e.g. EESSI/Lmod,
+  which prepend a compat-layer `python` to `PATH`), conda would re-insert the
+  env's `bin` *behind* that entry, so a bare `python` ran the module's
+  interpreter and the env's packages (`ase`, …) were invisible —
+  `ModuleNotFoundError` despite a correct `conda_env`. Forcing the env's `bin`
+  to the front fixes it centrally, so users never have to hardcode the env path
+  in their header (it is already declared once, in the cluster config). Applies
+  to both the SLURM and `direct` backends; guarded so a blank activation is a
+  no-op.
 
 ## [0.4.1] — 2026-07-09
 

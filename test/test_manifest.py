@@ -196,6 +196,92 @@ def test_array_detach_resume_collect(tmp_path):
         assert json.loads(shard_result.read_text())["sum"] == 10 + i
 
 
+def test_blocking_submit_writes_manifest_by_default(tmp_path):
+    """A plain blocking run persists a resume handle -- covering the original
+    crash case (driver dies while waiting on a job it submitted)."""
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    script = tmp_path / "single.py"
+    script.write_text(SINGLE_SCRIPT)
+    input_file = tmp_path / "input.json"
+    input_file.write_text(json.dumps({"A": 1, "B": 2}))
+
+    task = tasks.SingleScriptTask(
+        script_file=script,
+        input_file=input_file,
+        local_savepath=tmp_path / "results",
+        cluster_config=_direct_config(remote),
+        remote_fs=file_handler.LocalFileSystem(),
+        logfile="single.log",
+        loop_time=0.2,
+        remote_savepath=str(remote / "calc"),
+    )
+    task.run()  # blocking, no detach
+
+    local_manifest = tmp_path / "results.manifest.json"
+    assert local_manifest.exists()
+    # The persisted handle round-trips and points at this job.
+    handle = TaskHandle.from_file(local_manifest)
+    assert handle.manifest.task_type == "single"
+    assert handle.is_finished()
+
+
+def test_write_manifest_on_submit_can_be_disabled(tmp_path):
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    script = tmp_path / "single.py"
+    script.write_text(SINGLE_SCRIPT)
+    input_file = tmp_path / "input.json"
+    input_file.write_text(json.dumps({"A": 1, "B": 2}))
+
+    task = tasks.SingleScriptTask(
+        script_file=script,
+        input_file=input_file,
+        local_savepath=tmp_path / "results",
+        cluster_config=_direct_config(remote),
+        remote_fs=file_handler.LocalFileSystem(),
+        logfile="single.log",
+        loop_time=0.2,
+        remote_savepath=str(remote / "calc"),
+        write_manifest_on_submit=False,
+    )
+    task.run()
+
+    assert not (tmp_path / "results.manifest.json").exists()
+
+
+def test_manifest_write_failure_never_breaks_submit(tmp_path, monkeypatch):
+    """The safety net must not take down the job it protects: a failing
+    manifest write only warns, the run still completes."""
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    script = tmp_path / "single.py"
+    script.write_text(SINGLE_SCRIPT)
+    input_file = tmp_path / "input.json"
+    input_file.write_text(json.dumps({"A": 3, "B": 4}))
+
+    task = tasks.SingleScriptTask(
+        script_file=script,
+        input_file=input_file,
+        local_savepath=tmp_path / "results",
+        cluster_config=_direct_config(remote),
+        remote_fs=file_handler.LocalFileSystem(),
+        logfile="single.log",
+        loop_time=0.2,
+        remote_savepath=str(remote / "calc"),
+    )
+    # Force every manifest write to blow up.
+    monkeypatch.setattr(
+        task,
+        "_save_manifest",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    task.run()  # must still finish and collect
+
+    result = json.loads((tmp_path / "results" / "result.json").read_text())
+    assert result["sum"] == 7
+
+
 def test_detach_can_skip_remote_manifest(tmp_path):
     remote = tmp_path / "remote"
     remote.mkdir()
