@@ -105,6 +105,7 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
         n_processors: int = 2,
         slurm_header_add: str = "",
         time_limit: Optional[str] = None,
+        memory: Optional[str] = None,
     ):
         super().__init__(
             local_savepath,
@@ -122,6 +123,7 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
             jobfile_name="run_slurm.sh",
             slurm_header_add=slurm_header_add,
             time_limit=time_limit,
+            memory=memory,
         )
 
         # Initialize instance variables

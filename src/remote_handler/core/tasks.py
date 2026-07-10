@@ -280,6 +280,7 @@ class SingleScriptTask(RemoteTask):
         jobfile_name: str = "run_slurm.sh",
         job_type_template: os.PathLike = "body_single.sh.j2",
         time_limit: Optional[str] = None,
+        memory: Optional[str] = None,
     ):
         # If no remote_savepath is provided, fall back to the savepath from
         # the cluster_config
@@ -325,6 +326,7 @@ class SingleScriptTask(RemoteTask):
             loop_time=loop_time,
             job_type_template=job_type_template,
             time_limit=time_limit,
+            memory=memory,
         )
         # Back-compat alias: external callers (e.g. RemoteAtomsHandler) still
         # reference ``.slurm_handler``. Same object as ``.executor``.
@@ -747,6 +749,7 @@ class ArrayScriptTask(RemoteTask):
         jobfile_name: str = "run_slurm.sh",
         slurm_header_add: str = "",
         time_limit: Optional[str] = None,
+        memory: Optional[str] = None,
     ):
         if individual_ressources:
             # Save the number of individual jobs in the array
@@ -793,6 +796,7 @@ class ArrayScriptTask(RemoteTask):
             num_parallel=num_parallel,
             job_type_template="body_array.sh.j2",
             time_limit=time_limit,
+            memory=memory,
         )
         # Back-compat alias (see SingleScriptTask). Same object as ``.executor``.
         self.slurm_handler = self.executor

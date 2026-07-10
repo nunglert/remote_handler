@@ -4,6 +4,7 @@
 #SBATCH --gres=gpu:{{ n_cores }}
 #SBATCH --qos={{ partition }}
 {% if time_limit %}#SBATCH --time={{ time_limit }}{% endif %}
+{% if memory %}#SBATCH --mem={{ memory }}{% endif %}
 {{ slurm_header_add }}
 
 ulimit -u 40000
