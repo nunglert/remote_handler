@@ -198,11 +198,28 @@ def validate_conda_on_fs(
     return spec.activate_source
 
 
+# Appended after activation so the env's interpreter wins the PATH race.
+# Loading environment modules (e.g. EESSI/Lmod, which prepend a compat-layer
+# ``python`` to PATH) before activating can leave the env's ``bin`` *behind*
+# that entry: conda re-inserts it where the previous env sat rather than at the
+# front, so a bare ``python`` resolves to the module's interpreter and the
+# env's packages are invisible. Forcing ``$CONDA_PREFIX/bin`` first fixes this
+# centrally -- the user need not hardcode the env path in their
+# ``environment``/header (the env is already declared once, in the cluster
+# config). Guarded on ``$CONDA_PREFIX`` so a blank activation is a no-op.
+_PATH_HARDENING = (
+    '[ -n "$CONDA_PREFIX" ] && export PATH="$CONDA_PREFIX/bin:$PATH"\n'
+)
+
+
 def conda_activation_script(conda_source, conda_env) -> str:
     """Best-effort shell lines to activate ``conda_env`` (for direct execution).
 
     Empty or unrecognised config yields ``""`` (no activation -> ambient
     ``python``), so a local or dummy config just runs whatever is on PATH.
+
+    After activating, prepends the env's ``bin`` to ``PATH`` (see
+    :data:`_PATH_HARDENING`) so a module-loaded interpreter cannot shadow it.
     """
     source = (conda_source or "").strip()
     env = (conda_env or "").strip()
@@ -217,5 +234,7 @@ def conda_activation_script(conda_source, conda_env) -> str:
         )
         return ""
     if spec.kind == "micromamba":
-        return f"{spec.activate_source}\nmicromamba activate {env}\n"
-    return f"source {spec.activate_source}\nconda activate {env}\n"
+        activate = f"{spec.activate_source}\nmicromamba activate {env}\n"
+    else:
+        activate = f"source {spec.activate_source}\nconda activate {env}\n"
+    return activate + _PATH_HARDENING
