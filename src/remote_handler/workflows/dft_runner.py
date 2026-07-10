@@ -165,6 +165,9 @@ class SinglePointHandler(RemoteAtomsHandler):
         time_limit: SLURM ``--time`` value (e.g. ``"0-02:00:00"``) to cap each
             job -- useful to kill hanging DFT runs. ``None`` (default) emits no
             ``--time`` directive, so the job runs to the partition maximum.
+        memory: SLURM ``--mem`` value (e.g. ``"16G"``, ``"2000M"``, or MB as a
+            bare number) requested per job. ``None`` (default) emits no
+            ``--mem`` directive, so the job gets the partition default.
     """
 
     def __init__(
@@ -189,6 +192,7 @@ class SinglePointHandler(RemoteAtomsHandler):
         slurm_header_add: str = "",
         environment_key: Optional[str] = None,
         time_limit: Optional[str] = None,
+        memory: Optional[str] = None,
     ):
         slurm_header_add = _resolve_environment_header(
             cluster_config, environment_key, slurm_header_add
@@ -212,6 +216,7 @@ class SinglePointHandler(RemoteAtomsHandler):
             n_processors,
             slurm_header_add=slurm_header_add,
             time_limit=time_limit,
+            memory=memory,
         )
 
         self.logger = tasks.SimpleLogger(logfile)
@@ -333,6 +338,7 @@ class VASPHandler(SinglePointHandler):
         incar_kwargs: Optional[dict] = None,
         incar_config_file: Optional[os.PathLike] = None,
         time_limit: Optional[str] = None,
+        memory: Optional[str] = None,
     ):
         incar_kwargs = resolve_incar_kwargs(incar_kwargs, incar_config_file)
         if python_script_path is None:
@@ -364,6 +370,7 @@ class VASPHandler(SinglePointHandler):
             slurm_header_add=slurm_header_add,
             environment_key="vasp",
             time_limit=time_limit,
+            memory=memory,
         )
 
 
@@ -421,6 +428,7 @@ class ORCAHandler(SinglePointHandler):
         n_processors: int = 8,
         orcasimpleinput: str = "wB97X 6-31G(d) ENGRAD",
         time_limit: Optional[str] = None,
+        memory: Optional[str] = None,
     ):
         if python_script_path is None:
             python_script_path = str(_SCRIPTS_DIR / "orca_singlepoint.py")
@@ -452,4 +460,5 @@ class ORCAHandler(SinglePointHandler):
             slurm_header_add=slurm_header_add,
             environment_key="orca",
             time_limit=time_limit,
+            memory=memory,
         )

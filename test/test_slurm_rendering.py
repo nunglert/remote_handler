@@ -165,7 +165,7 @@ def test_header_template_missing_path_errors():
         )
 
 
-def _single(time_limit, header=HEADER):
+def _single(time_limit, header=HEADER, memory=None):
     return get_slurm_str(
         input_file="i.json",
         python_script_path="s.py",
@@ -177,10 +177,11 @@ def _single(time_limit, header=HEADER):
         header_template=header,
         job_type_template="body_single.sh.j2",
         time_limit=time_limit,
+        memory=memory,
     )
 
 
-def _array(time_limit, header=HEADER):
+def _array(time_limit, header=HEADER, memory=None):
     return get_array_slurm_str(
         calcdir="/remote/calc",
         python_script_path="/remote/script.py",
@@ -190,6 +191,7 @@ def _array(time_limit, header=HEADER):
         header_template=header,
         job_type_template="body_array.sh.j2",
         time_limit=time_limit,
+        memory=memory,
     )
 
 
@@ -212,3 +214,24 @@ def test_time_limit_uniform_across_templates(header):
     # the parameter, consistently across all of them.
     assert "--time" not in _array(None, header=header)
     assert "#SBATCH --time=1-00:00:00" in _array("1-00:00:00", header=header)
+
+
+def test_memory_renders_directive_when_set():
+    assert "#SBATCH --mem=16G" in _single(None, memory="16G")
+    assert "#SBATCH --mem=16G" in _array(None, memory="16G")
+
+
+def test_no_memory_emits_no_directive():
+    # The default: no --mem line, so the job gets the partition's default.
+    assert "--mem" not in _single(None)
+    assert "--mem" not in _array(None)
+
+
+@pytest.mark.parametrize(
+    "header", ["dirona.sh.j2", "datalab.sh.j2", "musica.sh.j2"]
+)
+def test_memory_uniform_across_templates(header):
+    # No shipped template hardcodes a --mem; it is driven solely by the
+    # parameter, consistently across all of them.
+    assert "--mem" not in _array(None, header=header)
+    assert "#SBATCH --mem=8000M" in _array(None, header=header, memory="8000M")

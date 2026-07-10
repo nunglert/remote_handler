@@ -75,6 +75,7 @@ class SlurmHandlerBase(ABC):
         remote_fs: file_handler.FileSystemHandlerBase,
         loop_time: float = 30.0,
         time_limit: Optional[str] = None,
+        memory: Optional[str] = None,
     ):
         self.jobname = jobname
         self.cluster_config = cluster_config
@@ -93,6 +94,9 @@ class SlurmHandlerBase(ABC):
         # SLURM ``--time`` value (e.g. "0-02:00:00"); None -> no directive, so
         # the job runs to the partition/cluster maximum.
         self.time_limit = time_limit
+        # SLURM ``--mem`` value (e.g. "16G", "2000M", or MB as a bare number);
+        # None -> no directive, so the job gets the partition's default memory.
+        self.memory = memory
         self.remote_fs = remote_fs
         self.loop_time = loop_time
 
@@ -199,6 +203,7 @@ class SlurmJobHandler(SlurmHandlerBase, SingleExecutor):
         loop_time: float = 10.0,
         job_type_template: str = "body_single.sh.j2",
         time_limit: Optional[str] = None,
+        memory: Optional[str] = None,
     ):
         # Name of the jobfile that will be created
         self.jobfile_name = jobfile_name
@@ -227,6 +232,7 @@ class SlurmJobHandler(SlurmHandlerBase, SingleExecutor):
             remote_fs,
             loop_time,
             time_limit=time_limit,
+            memory=memory,
         )
 
     def write_jobfile(
@@ -253,6 +259,7 @@ class SlurmJobHandler(SlurmHandlerBase, SingleExecutor):
             self.slurm_header_add,
             exclude_nodes,
             time_limit=self.time_limit,
+            memory=self.memory,
         )
 
         self.remote_fs.write_str_to_file(
@@ -335,6 +342,7 @@ class SlurmArrayHandler(SlurmHandlerBase, ArrayExecutor):
         num_parallel: int = 10,
         map_indices: Optional[list[int]] = None,
         time_limit: Optional[str] = None,
+        memory: Optional[str] = None,
     ):
         self.jobfile_name = jobfile_name
         self.job_type_template = job_type_template
@@ -364,6 +372,7 @@ class SlurmArrayHandler(SlurmHandlerBase, ArrayExecutor):
             remote_fs,
             loop_time,
             time_limit=time_limit,
+            memory=memory,
         )
 
     def write_jobfile(self, python_script_path, num_array_tasks):
@@ -392,6 +401,7 @@ class SlurmArrayHandler(SlurmHandlerBase, ArrayExecutor):
             job_type_template=self.job_type_template,
             slurm_header_add=self.slurm_header_add,
             time_limit=self.time_limit,
+            memory=self.memory,
         )
         self.remote_fs.write_str_to_file(
             self.slurm_str, self.slurm_script_path
