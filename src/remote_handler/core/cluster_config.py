@@ -10,7 +10,7 @@ from any single backend's handler code.
 import json
 import logging
 import os
-from dataclasses import dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Optional
 
@@ -215,6 +215,16 @@ class ClusterConfig:
             for p in Path(config_dir).glob("*.json")
             if p.name != "config.json"
         )
+
+    def to_dict(self) -> dict:
+        """Serialise this config to a plain ``dict`` (JSON-round-trippable).
+
+        The inverse of :meth:`from_dict`: ``from_dict(cfg.to_dict())`` yields
+        an equal config. Used to embed a self-contained snapshot of the
+        cluster in a task manifest, so a job can be resumed later without the
+        original cluster JSON still being present in the config dir.
+        """
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, config_dict: dict) -> "ClusterConfig":

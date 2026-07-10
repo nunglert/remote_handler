@@ -9,6 +9,32 @@ The version is derived from git tags by `setuptools-scm` (tag `v0.2.0` →
 version `0.2.0`). To cut a release: add a dated section below, merge to `main`,
 then `git tag -a vX.Y.Z`.
 
+## [Unreleased]
+
+### Added
+- **Durable task handles (detach-on-submit + crash resume).** A submitted
+  `SingleScriptTask` / `ArrayScriptTask` can now persist everything needed to
+  await and collect its job to a small JSON `TaskManifest`
+  (`core/manifest.py`), written both locally and into the remote job
+  directory. `task.detach()` allocates, starts the job, writes the manifest,
+  and returns immediately — so submitting a remote job feels like a local
+  backgrounded command. `TaskHandle.from_file(<manifest>)` rebuilds the
+  filesystem + execution backend in a *different* process (re-binding to the
+  running job via the new `Executor.attach`) to poll (`is_finished`), `wait`,
+  and `collect` the results. Recovers work that was previously lost if the
+  driver crashed while a job was in flight.
+- `ClusterConfig.to_dict()` — JSON-round-trippable snapshot, embedded in the
+  manifest so a resume does not depend on the original cluster JSON.
+- `Executor.is_finished()` — non-blocking completion poll (SLURM `squeue`;
+  `direct` sentinel file); `ArrayScriptTask.submit(only_start=…)` for parity
+  with `SingleScriptTask`.
+- **CLI `status` / `collect`.** `remote_handler status [PATH]` reports whether
+  a detached task has finished (exit `0` finished / `2` running, for shell
+  loops); `remote_handler collect [PATH] [--wait] [--force]` fetches its
+  results. `PATH` is the manifest file or a directory containing one (defaults
+  to the cwd) — so the workflow is: launch, walk away, and the next day `cd`
+  back and run `remote_handler collect --wait`.
+
 ## [0.4.1] — 2026-07-09
 
 A patch/minor increment on top of `0.4.0`: two optional per-cluster config

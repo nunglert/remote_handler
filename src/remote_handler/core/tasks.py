@@ -14,6 +14,7 @@ from remote_handler.core.file_handler import (
     LocalFileSystem,
 )
 from remote_handler.core.file_utils import tag_path
+from remote_handler.core.manifest import TASK_ARRAY, TASK_SINGLE, TaskManifest
 from remote_handler.core.utils import SimpleLogger
 from remote_handler.exceptions import FileSystemError, TaskError
 
@@ -227,6 +228,61 @@ class RemoteTask(ABC):
             with the characteristic lines, etc.
         """
         pass
+
+    def _build_manifest(
+        self, task_type: str, num_array_tasks: Optional[int] = None
+    ) -> TaskManifest:
+        """Snapshot the state needed to await/collect this task later.
+
+        Reads the durable handle straight off the (already-submitted)
+        executor -- job id, resolved remote dir, cluster config -- so a fresh
+        process can rebuild it via
+        :class:`~remote_handler.core.manifest.TaskHandle`. Subclasses expose
+        this through :meth:`write_manifest`.
+        """
+        executor = self.executor
+        cluster_config = executor.cluster_config
+        backend = getattr(cluster_config, "executor", "slurm") or "slurm"
+        job_id = getattr(executor, "pid", None)
+        return TaskManifest(
+            task_type=task_type,
+            backend=backend,
+            job_id=None if job_id is None else str(job_id),
+            remote_savepath=str(self.savepath),
+            local_savepath=str(self.local_savepath),
+            jobname=executor.jobname,
+            cluster_config=cluster_config.to_dict(),
+            fs_type=(
+                "local"
+                if isinstance(self.remote_fs, LocalFileSystem)
+                else "remote"
+            ),
+            n_processors=executor.n_processors,
+            loop_time=self.loop_time,
+            num_parallel=getattr(executor, "num_parallel", 10),
+            num_array_tasks=num_array_tasks,
+        )
+
+    def _save_manifest(
+        self,
+        task_type: str,
+        num_array_tasks: Optional[int],
+        local_path: Optional[os.PathLike],
+        write_remote: bool,
+    ) -> Path:
+        """Persist a manifest locally and (by default) in the remote job dir.
+
+        The local copy defaults to ``<local_savepath>.manifest.json`` so it
+        sits beside where results will land and stays unique per task.
+        """
+        manifest = self._build_manifest(task_type, num_array_tasks)
+        if local_path is None:
+            local_path = Path(str(self.local_savepath) + ".manifest.json")
+        manifest.save_local(local_path)
+        if write_remote:
+            manifest.save_remote(self.remote_fs)
+        self.manifest_path = Path(local_path)
+        return self.manifest_path
 
 
 class SingleScriptTask(RemoteTask):
@@ -467,6 +523,28 @@ class SingleScriptTask(RemoteTask):
             return
 
         self.collect_results()
+
+    def write_manifest(self, local_path=None, write_remote=True) -> Path:
+        """Persist a resume handle for this (submitted) task.
+
+        Call after ``submit``/``run(only_start=True)``. Reload it later with
+        ``TaskHandle.from_file`` to poll and collect the job from another
+        process.
+        """
+        return self._save_manifest(TASK_SINGLE, None, local_path, write_remote)
+
+    def detach(self, local_path=None, write_remote=True) -> Path:
+        """Allocate, start the job, persist a manifest, and return at once.
+
+        The detach-on-submit path: fire the remote job and hand back the
+        local manifest path without waiting, so submission feels like a local
+        backgrounded command. Resume with ``TaskHandle.from_file``.
+        """
+        self.allocate_data()
+        self.submit(only_start=True)
+        return self.write_manifest(
+            local_path=local_path, write_remote=write_remote
+        )
 
 
 @dataclass
@@ -971,9 +1049,16 @@ class ArrayScriptTask(RemoteTask):
                 )
             )
 
-    def submit(self):
-        # Submit the job and wait until it is finished.
+    def submit(self, only_start=False):
+        """Submit the array job.
+
+        Args:
+            only_start: If True, return right after submission instead of
+                blocking until the array finishes -- used by ``detach``.
+        """
         self.executor.submit()
+        if only_start:
+            return
         self.executor.wait_until_finished()
 
     def collect_results(self):
@@ -981,6 +1066,30 @@ class ArrayScriptTask(RemoteTask):
         the local machine using ResultCollector."""
         self.result_collector.collect_directory(
             self.rootpath, self.local_savepath, move=True
+        )
+
+    def write_manifest(self, local_path=None, write_remote=True) -> Path:
+        """Persist a resume handle for this (submitted) array task.
+
+        See :meth:`SingleScriptTask.write_manifest`; records
+        ``num_array_tasks`` so the array executor is rebuilt correctly.
+        """
+        return self._save_manifest(
+            TASK_ARRAY,
+            getattr(self, "num_array_tasks", None),
+            local_path,
+            write_remote,
+        )
+
+    def detach(self, local_path=None, write_remote=True) -> Path:
+        """Allocate, start the array job, persist manifest, return at once.
+
+        See :meth:`SingleScriptTask.detach`.
+        """
+        self.allocate_data()
+        self.submit(only_start=True)
+        return self.write_manifest(
+            local_path=local_path, write_remote=write_remote
         )
 
     def finish_check(self):

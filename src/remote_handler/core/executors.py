@@ -53,6 +53,28 @@ class Executor(ABC):
     def wait_until_finished(self):
         """Block until the job(s) complete."""
 
+    @abstractmethod
+    def is_finished(self) -> bool:
+        """Return whether the job(s) have finished, without blocking.
+
+        The non-blocking counterpart of :meth:`wait_until_finished`, used to
+        poll a job that a *different* process submitted (see
+        :meth:`attach`): a resumed handle checks this instead of waiting.
+        """
+
+    def attach(self, job_id) -> "Executor":
+        """Re-bind this executor to an already-submitted job.
+
+        Instead of submitting, mark the executor as running ``job_id`` so
+        :meth:`is_finished` / :meth:`wait_until_finished` operate on a job
+        started by an earlier (possibly since-crashed) process. ``job_id``
+        is the scheduler handle (SLURM job id); backends that need no handle
+        (``direct`` polls a sentinel file) accept and ignore it.
+        """
+        self.pid = job_id
+        self.is_submitted = True
+        return self
+
 
 class SingleExecutor(Executor):
     """Runs one script against one input file."""
