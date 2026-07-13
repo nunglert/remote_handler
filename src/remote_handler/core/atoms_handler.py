@@ -41,7 +41,8 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
         cluster_config: ClusterConfig instance containing cluster-specific settings.
         remote_fs: Instance of a RemoteFileSystem or LocalFileSystem
             (in case of running on a local machine with SLURM).
-        shard_size: Number of configurations per task.
+        shard_size: Number of configurations per task. ``None`` or a
+            negative value (e.g. ``-1``) processes all configs in one shard.
         savepath: Remote path where the temporary calculation directories
             are created and where the final results are written to.
         num_parallel: Number of parallel jobs to submit to the cluster, i.e.
@@ -90,7 +91,7 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
         traj_files: list[str],
         cluster_config: ClusterConfig,
         remote_fs: file_handler.FileSystemHandlerBase,
-        shard_size: int,
+        shard_size: Optional[int],
         remote_savepath: str,
         num_parallel: int,
         loop_time: float = 30,

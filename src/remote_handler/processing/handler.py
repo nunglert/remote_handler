@@ -65,7 +65,8 @@ class RemoteTrajectoryProcessor(RemoteAtomsHandler):
         cluster_config: Target cluster configuration.
         remote_fs: Filesystem handler for the machine where jobs run.
         n_processors: Processors (or GPUs) requested per array task.
-        shard_size: Number of configurations per shard.
+        shard_size: Number of configurations per shard. ``None`` or a
+            negative value (e.g. ``-1``) processes all configs in one shard.
         savepath: Remote working directory for the array job.
         num_parallel: Maximum array tasks to run concurrently.
         processors: Ordered processing steps to run on each shard.
@@ -90,7 +91,7 @@ class RemoteTrajectoryProcessor(RemoteAtomsHandler):
         cluster_config: ClusterConfig,
         remote_fs: file_handler.FileSystemHandlerBase,
         n_processors: int,
-        shard_size: int,
+        shard_size: Optional[int],
         savepath: str,
         num_parallel: int,
         processors: list[Processor],
@@ -218,7 +219,7 @@ class RemoteOptimizationHandler(RemoteTrajectoryProcessor):
         cluster_config: ClusterConfig,
         remote_fs: file_handler.FileSystemHandlerBase,
         n_processors: int,
-        shard_size: int,
+        shard_size: Optional[int],
         savepath: str,
         num_parallel: int,
         pickle_file: Optional[str] = None,
