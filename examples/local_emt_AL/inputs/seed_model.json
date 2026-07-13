@@ -1,0 +1,4 @@
+{
+  "type": "emt",
+  "comment": "Bootstrap model for iteration 0: sample under EMT itself, then hand the loop over to the fitted Morse potential."
+}
