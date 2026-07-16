@@ -992,12 +992,14 @@ class SSPDSampler(Sampler):
             "sampling_threshold": 0,
             "sampling_frequency": 50,
             "N": 100,
-            "model_file": Path(self.model_files).name,
+            "model_file": str(Path(self.model_files).name), # TODO: fix for multiple models
             "seed": np.random.randint(1e6),
             "num_iterations_OL": None,
             "hessian_method": "hessian",
         }
         return script_input
+    
+
 
     def update(
         self, calcdir: Path, sampler_input: list[Path], **kwargs
@@ -1012,7 +1014,8 @@ class SSPDSampler(Sampler):
         if "struct" in kwargs.keys():
             self.data_path = kwargs["struct"]
         script_input = self._load_default_settings()
-
+        for key in kwargs.keys():
+            script_input[key] = kwargs[key]
         self.script_input_file = (
             self.results_dir / "input_sample.json"
         )  # script input file
