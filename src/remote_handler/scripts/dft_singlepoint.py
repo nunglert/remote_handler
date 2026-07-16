@@ -41,9 +41,9 @@ print(f"Using PAW potentials from: {paw_path}")
 Vasp.xc_defaults["r2scan"] = {"metagga": "R2SCAN"}
 atoms.calc = Vasp(directory=calcpath, **VASP_config)
 
-atoms.calc = SinglePointCalculator(
-    atoms, energy=atoms.get_potential_energy(), forces=atoms.get_forces()
-)
+energy = atoms.get_potential_energy()
+forces = atoms.calc.results["forces"]
+atoms.calc = SinglePointCalculator(atoms, energy=energy, forces=forces)
 
 ase.io.write(calcpath / ("dft_" + input_config.DATABASE), atoms)
 

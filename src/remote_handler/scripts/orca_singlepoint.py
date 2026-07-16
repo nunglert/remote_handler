@@ -28,9 +28,9 @@ atoms.calc = ORCA(
     orcasimpleinput=input_config.orcasimpleinput,
     orcablocks=input_config.orcablocks,
 )
-atoms.calc = SinglePointCalculator(
-    atoms, energy=atoms.get_potential_energy(), forces=atoms.get_forces()
-)
+energy = atoms.get_potential_energy()
+forces = atoms.calc.results["forces"]
+atoms.calc = SinglePointCalculator(atoms, energy=energy, forces=forces)
 
 atoms.info["is_finished"] = True
 ase.io.write(calcpath / ("dft_" + input_config.DATABASE), atoms)
