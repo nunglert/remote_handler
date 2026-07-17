@@ -1016,6 +1016,9 @@ class SSPDSampler(Sampler):
         script_input = self._load_default_settings()
         for key in kwargs.keys():
             script_input[key] = kwargs[key]
+        for key in script_input.keys():
+            if isinstance(script_input[key], Path):
+                script_input[key] = str(script_input[key].name)
         self.script_input_file = (
             self.results_dir / "input_sample.json"
         )  # script input file
@@ -1086,7 +1089,6 @@ class SSPDSampler(Sampler):
                 os.makedirs(results_path, exist_ok=True)
                 output_path = results_path / "samples.extxyz"
                 ase.io.write(output_path, selected)
-                self.selector.reference.extend(selected)
             else:
                 logger.warning(
                     "No output trajectory files found in %s, "
