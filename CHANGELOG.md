@@ -9,7 +9,7 @@ The version is derived from git tags by `setuptools-scm` (tag `v0.2.0` →
 version `0.2.0`). To cut a release: add a dated section below, merge to `main`,
 then `git tag -a vX.Y.Z`.
 
-## [0.4.2] — 2026-07-26
+## [0.5.0] — 2026-07-26
 
 ### Added
 - **Durable task handles (crash resume + detach-on-submit).** A submitted
