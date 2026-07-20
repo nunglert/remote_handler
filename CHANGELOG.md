@@ -9,7 +9,7 @@ The version is derived from git tags by `setuptools-scm` (tag `v0.2.0` →
 version `0.2.0`). To cut a release: add a dated section below, merge to `main`,
 then `git tag -a vX.Y.Z`.
 
-## [Unreleased]
+## [0.4.2] — 2026-07-26
 
 ### Added
 - **Durable task handles (crash resume + detach-on-submit).** A submitted
@@ -38,6 +38,22 @@ then `git tag -a vX.Y.Z`.
   results. `PATH` is the manifest file or a directory containing one (defaults
   to the cwd) — so the workflow is: launch, walk away, and the next day `cd`
   back and run `remote_handler collect --wait`.
+- **`[all]` install extra** — `pip install ".[all]"` pulls the full stack in
+  one shot (`dev,mace_freeze,torch_sim,clinamen,quests,neuralil,mace_jax`).
+  It deliberately uses the `mace_freeze` fork as the sole `mace-torch` source
+  (not `[mace]`), so it stays internally consistent. CI's install step now
+  uses it, so every optional test tier un-skips.
+- **Runnable local MD→EMT→Morse AL example** (`examples/local_emt_AL/`) — a
+  self-contained active-learning loop (MD sampling → EMT ground truth → Morse
+  MLFF) that runs locally with no cluster or licensed software, plus the
+  accompanying docs.
+
+### Changed
+- **`shard_size` is now optional.** `AtomsShardManager`,
+  `RemoteTrajectoryProcessor`, and `RemoteOptimizationHandler` accept
+  `shard_size=None` (or a negative value such as `-1`), meaning "no sharding":
+  the entire configuration set is processed as a single shard, resolved once
+  the total count is known. Previously a shard size was mandatory.
 
 ### Fixed
 - **Conda env no longer shadowed by module-loaded interpreters.** The generated
