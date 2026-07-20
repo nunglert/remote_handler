@@ -116,14 +116,16 @@ class AtomsShardManager:
 
     Args:
         traj_files: List of extxyz files containing atomic configurations.
-        shard_size: Number of configurations per shard.
+        shard_size: Number of configurations per shard. ``None`` or a
+            negative value (e.g. ``-1``) means "no sharding": the entire set
+            of configurations is processed as a single shard.
         indices: Slice object specifying which configurations to read (start:end:step).
     """
 
     def __init__(
         self,
         traj_files: list[str],
-        shard_size: int,
+        shard_size: Optional[int],
         indices: slice,
     ):
         self.traj_files = traj_files
@@ -186,7 +188,8 @@ class AtomsShardManager:
     ) -> list[list[Atoms]]:
         """
         Reads all configurations from the provided trajectory files and
-        shards them into batches of size `shard_size`.
+        shards them into batches of size `shard_size`. A `shard_size` of
+        ``None`` or a negative value processes the whole set as one shard.
 
         Args:
             local_fs: Filesystem handler for reading trajectory files.
@@ -199,6 +202,15 @@ class AtomsShardManager:
 
         # Determine the total number of configurations and the number of batches
         self.num_configs_total = len(all_atoms)
+
+        # A shard_size of None or a negative value (e.g. -1) means "no
+        # sharding": process the entire set of configs as a single shard.
+        # Resolve it here, where the total count is known, and store it back
+        # so downstream consumers (all_shard_sizes, the handler's copies) see
+        # the effective size.
+        if self.shard_size is None or self.shard_size < 0:
+            self.shard_size = max(self.num_configs_total, 1)
+
         self.num_array_tasks = math.ceil(
             self.num_configs_total / self.shard_size
         )

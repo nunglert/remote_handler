@@ -9,9 +9,12 @@ Subcommands:
   show templates         list registered SLURM templates + paths
   show clusters          list registered cluster configs + paths
   show extras [M ...]    probe extras locally, or per-machine (local/clusters)
+  status [PATH]          report whether a detached task has finished
+  collect [PATH]         retrieve a detached task's results from its manifest
 
 Light imports only at module load; ``show extras`` imports the ML stacks
-(local probe) or paramiko (remote probe) lazily, inside the command.
+(local probe) or paramiko (remote probe) lazily, and ``status`` / ``collect``
+import the task/manifest layer (paramiko) lazily -- all inside the command.
 Interactive prompts live in ``cli_prompts``.
 """
 
@@ -857,6 +860,127 @@ def cmd_show_clusters(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+# status / collect  (resume a detached task from its manifest)
+# --------------------------------------------------------------------------
+def _resolve_manifest_path(path_arg: Optional[str]) -> Path:
+    """Resolve the CLI ``PATH`` argument to a single manifest file.
+
+    ``PATH`` may be the manifest JSON itself, a directory that contains one
+    (the common case: ``cd`` back into where you launched and run the command),
+    or omitted -- in which case the current directory is searched. A directory
+    is matched against both the local ``*.manifest.json`` naming and the
+    ``task_manifest.json`` copy dropped inside a remote job dir. Ambiguity is
+    an error rather than a guess.
+    """
+    from remote_handler.core.manifest import MANIFEST_NAME
+
+    base = Path(path_arg) if path_arg else Path.cwd()
+    if base.is_file():
+        return base
+    if base.is_dir():
+        candidates = sorted(
+            set(base.glob("*.manifest.json")) | set(base.glob(MANIFEST_NAME))
+        )
+        if not candidates:
+            raise ConfigurationError(
+                f"No task manifest found in {base}. Point at the manifest "
+                "file explicitly, or run from the directory it was written to."
+            )
+        if len(candidates) > 1:
+            names = ", ".join(p.name for p in candidates)
+            raise ConfigurationError(
+                f"Multiple manifests in {base}: {names}. Specify one."
+            )
+        return candidates[0]
+    raise ConfigurationError(f"No such path: {base}")
+
+
+def _load_handle(path_arg: Optional[str]):
+    """Resolve + load a manifest into a ``TaskHandle`` (imports lazily)."""
+    from remote_handler.core.manifest import TaskHandle
+
+    path = _resolve_manifest_path(path_arg)
+    return path, TaskHandle.from_file(path)
+
+
+def _print_manifest_header(manifest) -> None:
+    print(
+        f"task '{manifest.jobname}'  "
+        f"[{manifest.task_type}/{manifest.backend}"
+        + (f", job {manifest.job_id}" if manifest.job_id else "")
+        + "]"
+    )
+    print(f"  remote: {manifest.remote_savepath}")
+    print(f"  local:  {manifest.local_savepath}")
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    """Report whether the detached task recorded by a manifest has finished.
+
+    Exit code: 0 finished, 2 still running, 1 on error -- so it is usable in a
+    shell loop (``until remote_handler status; do sleep 60; done``).
+    """
+    try:
+        _path, handle = _load_handle(args.path)
+    except Exception as exc:  # noqa: BLE001 - report cleanly
+        print(f"[FAIL] {exc}", file=sys.stderr)
+        return 1
+    _print_manifest_header(handle.manifest)
+    try:
+        finished = handle.is_finished()
+    except Exception as exc:  # noqa: BLE001 - unreachable cluster, etc.
+        print(f"[FAIL] could not query job status: {exc}", file=sys.stderr)
+        return 1
+    print(f"  status: {'finished' if finished else 'running'}")
+    return 0 if finished else 2
+
+
+def cmd_collect(args: argparse.Namespace) -> int:
+    """Retrieve a detached task's results from its manifest.
+
+    If the job is still running, refuses (exit 2) unless ``--wait`` is given,
+    which blocks until it finishes. ``--force`` skips the completion check and
+    fetches whatever is there now -- useful when the remote env has drifted and
+    only the files are wanted.
+    """
+    try:
+        _path, handle = _load_handle(args.path)
+    except Exception as exc:  # noqa: BLE001 - report cleanly
+        print(f"[FAIL] {exc}", file=sys.stderr)
+        return 1
+    _print_manifest_header(handle.manifest)
+
+    if not args.force:
+        try:
+            finished = handle.is_finished()
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"[FAIL] could not query job status: {exc}\n"
+                "Pass --force to collect the current files regardless.",
+                file=sys.stderr,
+            )
+            return 1
+        if not finished:
+            if not args.wait:
+                print(
+                    "  status: running -- not collecting. Re-run with "
+                    "--wait to block, or check later with "
+                    "'remote_handler status'."
+                )
+                return 2
+            print("  status: running -- waiting for it to finish...")
+            handle.wait()
+
+    try:
+        local = handle.collect()
+    except Exception as exc:  # noqa: BLE001 - transfer/connection failure
+        print(f"[FAIL] collection failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"  collected results to {local}")
+    return 0
+
+
+# --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
 def _build_parser() -> argparse.ArgumentParser:
@@ -874,6 +998,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "  show clusters             list registered clusters + paths\n"
             "  show extras               probe which optional extras are "
             "installed\n"
+            "  status [PATH]             has a detached task finished?\n"
+            "  collect [PATH]            fetch a detached task's results\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -933,6 +1059,38 @@ def _build_parser() -> argparse.ArgumentParser:
             "(none = local only; multiple = comparison table)"
         ),
     )
+
+    p_status = sub.add_parser(
+        "status",
+        help="report whether a detached task (by manifest) has finished",
+    )
+    p_status.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="manifest file, or a dir containing one (default: cwd)",
+    )
+
+    p_collect = sub.add_parser(
+        "collect",
+        help="fetch a detached task's results from its manifest",
+    )
+    p_collect.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="manifest file, or a dir containing one (default: cwd)",
+    )
+    p_collect.add_argument(
+        "--wait",
+        action="store_true",
+        help="if the job is still running, block until it finishes",
+    )
+    p_collect.add_argument(
+        "--force",
+        action="store_true",
+        help="skip the completion check; fetch whatever files exist now",
+    )
     return parser
 
 
@@ -964,6 +1122,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if show_target == "extras":
                 return cmd_show_extras(args)
             return cmd_show(args)
+        if args.command == "status":
+            return cmd_status(args)
+        if args.command == "collect":
+            return cmd_collect(args)
 
         parser.print_help()
         return 1

@@ -9,6 +9,76 @@ The version is derived from git tags by `setuptools-scm` (tag `v0.2.0` →
 version `0.2.0`). To cut a release: add a dated section below, merge to `main`,
 then `git tag -a vX.Y.Z`.
 
+## [0.5.0] — 2026-07-26
+
+### Added
+- **Durable task handles (crash resume + detach-on-submit).** A submitted
+  `SingleScriptTask` / `ArrayScriptTask` now persists everything needed to
+  await and collect its job to a small JSON `TaskManifest` (`core/manifest.py`),
+  written both locally (`<local_savepath>.manifest.json`) and into the remote
+  job directory. **This happens by default** on every `submit`/`run` — right
+  after submission and *before* the blocking wait — so if the driver process
+  dies mid-wait the running job is no longer orphaned (the original motivation).
+  Opt out per task with `write_manifest_on_submit=False`. The write is
+  best-effort (the local copy is the contract; a remote-copy failure only
+  warns) so persisting the safety net can never take down the job it protects.
+  `task.detach()` additionally *returns without waiting*, so submitting a
+  remote job feels like a local backgrounded command.
+  `TaskHandle.from_file(<manifest>)` rebuilds the filesystem + execution backend
+  in a *different* process (re-binding to the running job via the new
+  `Executor.attach`) to poll (`is_finished`), `wait`, and `collect` the results.
+- `ClusterConfig.to_dict()` — JSON-round-trippable snapshot, embedded in the
+  manifest so a resume does not depend on the original cluster JSON.
+- `Executor.is_finished()` — non-blocking completion poll (SLURM `squeue`;
+  `direct` sentinel file); `ArrayScriptTask.submit(only_start=…)` for parity
+  with `SingleScriptTask`.
+- **CLI `status` / `collect`.** `remote_handler status [PATH]` reports whether
+  a detached task has finished (exit `0` finished / `2` running, for shell
+  loops); `remote_handler collect [PATH] [--wait] [--force]` fetches its
+  results. `PATH` is the manifest file or a directory containing one (defaults
+  to the cwd) — so the workflow is: launch, walk away, and the next day `cd`
+  back and run `remote_handler collect --wait`.
+- **`[all]` install extra** — `pip install ".[all]"` pulls the full stack in
+  one shot (`dev,mace_freeze,torch_sim,clinamen,quests,neuralil,mace_jax`).
+  It deliberately uses the `mace_freeze` fork as the sole `mace-torch` source
+  (not `[mace]`), so it stays internally consistent. CI's install step now
+  uses it, so every optional test tier un-skips.
+- **Runnable local MD→EMT→Morse AL example** (`examples/local_emt_AL/`) — a
+  self-contained active-learning loop (MD sampling → EMT ground truth → Morse
+  MLFF) that runs locally with no cluster or licensed software, plus the
+  accompanying docs.
+- **`memory` job parameter** on `SlurmHandlerBase`, threaded through the tasks
+  layer and wired to the DFT engines (`dft_runner`) and the SLURM templates
+  (`datalab`/`dirona`/`musica`), so a per-job memory request can be set
+  centrally instead of hardcoded in a header.
+
+### Changed
+- **`shard_size` is now optional.** `AtomsShardManager`,
+  `RemoteTrajectoryProcessor`, and `RemoteOptimizationHandler` accept
+  `shard_size=None` (or a negative value such as `-1`), meaning "no sharding":
+  the entire configuration set is processed as a single shard, resolved once
+  the total count is known. Previously a shard size was mandatory.
+
+### Fixed
+- **Conda env no longer shadowed by module-loaded interpreters.** The generated
+  activation now appends `[ -n "$CONDA_PREFIX" ] && export
+  PATH="$CONDA_PREFIX/bin:$PATH"` after `conda activate`. On clusters where a
+  job's `environment`/`slurm_header_add` runs `module load` (e.g. EESSI/Lmod,
+  which prepend a compat-layer `python` to `PATH`), conda would re-insert the
+  env's `bin` *behind* that entry, so a bare `python` ran the module's
+  interpreter and the env's packages (`ase`, …) were invisible —
+  `ModuleNotFoundError` despite a correct `conda_env`. Forcing the env's `bin`
+  to the front fixes it centrally, so users never have to hardcode the env path
+  in their header (it is already declared once, in the cluster config). Applies
+  to both the SLURM and `direct` backends; guarded so a blank activation is a
+  no-op.
+- **`FixAtoms` constraints no longer corrupt written forces.** The singlepoint
+  payloads (`dft_singlepoint.py`, `orca_singlepoint.py`, `ase_singlepoint.py`)
+  read `atoms.calc.results["forces"]` instead of `atoms.get_forces()`, which
+  applies `FixAtoms` constraints deserialized from the extxyz and silently
+  zeroes the forces on frozen atoms. The calculator's stored results are
+  unaffected, so the real forces are now recorded.
+
 ## [0.4.1] — 2026-07-09
 
 A patch/minor increment on top of `0.4.0`: two optional per-cluster config

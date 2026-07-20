@@ -185,6 +185,14 @@ class SlurmHandlerBase(ABC):
             if status:
                 break
 
+    def is_finished(self) -> bool:
+        """Non-blocking completion poll (see ``Executor.is_finished``).
+
+        Thin wrapper over :meth:`check_status`; requires the job to have
+        been submitted or ``Executor.attach``-ed first.
+        """
+        return bool(self.check_status())
+
 
 class SlurmJobHandler(SlurmHandlerBase, SingleExecutor):
     # SLURM can re-place a single job on another node; SingleScriptTask runs

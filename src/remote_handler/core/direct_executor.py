@@ -97,6 +97,14 @@ class _DirectExecutorBase:
             if self.remote_fs.exists(self._sentinel):
                 break
 
+    def is_finished(self) -> bool:
+        """Non-blocking completion poll: has the sentinel been touched yet?
+
+        Sentinel-based, so it works for a job launched by another process
+        (a resumed handle) with no scheduler handle needed.
+        """
+        return bool(self.remote_fs.exists(self._sentinel))
+
 
 class DirectSingleExecutor(_DirectExecutorBase, SingleExecutor):
     """Runs one script against one input file, no scheduler."""

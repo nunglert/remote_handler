@@ -148,3 +148,37 @@ def test_resolve_remote_module_file_missing(python_on_path):
         LocalFileSystem(), "", "", "no_such_module_xyz123"
     )
     assert path is None
+
+
+# --------------------------------------------------------------------------
+# conda_activation_script: activation + PATH hardening
+# --------------------------------------------------------------------------
+def test_activation_hardens_path_after_conda_activate():
+    """The env's bin is forced to the front of PATH after activation, so a
+    module-loaded interpreter (EESSI/Lmod) cannot shadow it -- and the user
+    never has to hardcode the env path in their header."""
+    script = remote_env.conda_activation_script(
+        "/home/u/miniconda3/bin/activate", "jaxenv"
+    )
+    lines = [ln for ln in script.splitlines() if ln.strip()]
+    assert lines == [
+        "source /home/u/miniconda3/bin/activate",
+        "conda activate jaxenv",
+        '[ -n "$CONDA_PREFIX" ] && export PATH="$CONDA_PREFIX/bin:$PATH"',
+    ]
+    # The hardening comes *after* activation (so $CONDA_PREFIX is set).
+    assert script.index("conda activate") < script.index("CONDA_PREFIX")
+
+
+def test_activation_hardening_is_guarded_for_micromamba():
+    script = remote_env.conda_activation_script("/opt/micromamba", "jaxenv")
+    assert "micromamba activate jaxenv" in script
+    assert '[ -n "$CONDA_PREFIX" ]' in script
+
+
+def test_no_activation_no_hardening():
+    """Empty/dummy config yields no activation and no PATH manipulation."""
+    assert remote_env.conda_activation_script("", "env") == ""
+    assert "CONDA_PREFIX" not in remote_env.conda_activation_script(
+        "/nonsense/format", "env"
+    )

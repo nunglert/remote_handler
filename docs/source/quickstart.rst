@@ -3,6 +3,14 @@ Quick Start
 
 This guide will get you started with using remote_handler for your computational workflows.
 
+.. tip::
+
+   Want to see a complete active-learning loop before wiring up a cluster? The
+   bundled ``examples/local_emt_AL`` example runs the whole
+   sample → select → label → train cycle on your laptop in a few seconds, with
+   no SSH, no SLURM and no ML stack. See :doc:`examples` (*Run it now: a full
+   loop with no cluster*).
+
 Basic Workflow
 --------------
 
