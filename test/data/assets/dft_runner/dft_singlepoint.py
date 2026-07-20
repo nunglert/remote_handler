@@ -42,9 +42,9 @@ Vasp.xc_defaults["r2scan"] = {"metagga": "R2SCAN"}
 atoms.calc = Vasp(directory=calcpath, **VASP_config)
 
 if not STUB:
-    atoms.calc = SinglePointCalculator(
-        atoms, energy=atoms.get_potential_energy(), forces=atoms.get_forces()
-    )
+    energy = atoms.get_potential_energy()
+    forces = atoms.calc.results["forces"]
+    atoms.calc = SinglePointCalculator(atoms, energy=energy, forces=forces)
 
 atoms.info["is_finished"] = True
 ase.io.write(calcpath / ("dft_" + DATABASE), atoms)

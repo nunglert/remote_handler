@@ -56,7 +56,7 @@ def main(calcpath: Path) -> None:
         input_config.calculator, input_config.calculator_kwargs
     )
     energy = atoms.get_potential_energy()
-    forces = atoms.get_forces()
+    forces = atoms.calc.results["forces"]
     atoms.calc = SinglePointCalculator(atoms, energy=energy, forces=forces)
 
     ase.io.write(calcpath / ("dft_" + input_config.DATABASE), atoms)
