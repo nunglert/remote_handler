@@ -89,6 +89,10 @@ mace_jax = [
     "mace-jax @ git+https://github.com/nunglert/mace-jax.git@fixes",
 ]
 
+all = [
+    "remote_handler[dev,mace_freeze,torch_sim,clinamen,quests,neuralil,mace_jax]"
+]
+
 [project.scripts]
 remote_handler = "remote_handler.cli:main"
 
