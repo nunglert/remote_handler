@@ -47,6 +47,10 @@ then `git tag -a vX.Y.Z`.
   self-contained active-learning loop (MD sampling → EMT ground truth → Morse
   MLFF) that runs locally with no cluster or licensed software, plus the
   accompanying docs.
+- **`memory` job parameter** on `SlurmHandlerBase`, threaded through the tasks
+  layer and wired to the DFT engines (`dft_runner`) and the SLURM templates
+  (`datalab`/`dirona`/`musica`), so a per-job memory request can be set
+  centrally instead of hardcoded in a header.
 
 ### Changed
 - **`shard_size` is now optional.** `AtomsShardManager`,
@@ -68,6 +72,12 @@ then `git tag -a vX.Y.Z`.
   in their header (it is already declared once, in the cluster config). Applies
   to both the SLURM and `direct` backends; guarded so a blank activation is a
   no-op.
+- **`FixAtoms` constraints no longer corrupt written forces.** The singlepoint
+  payloads (`dft_singlepoint.py`, `orca_singlepoint.py`, `ase_singlepoint.py`)
+  read `atoms.calc.results["forces"]` instead of `atoms.get_forces()`, which
+  applies `FixAtoms` constraints deserialized from the extxyz and silently
+  zeroes the forces on frozen atoms. The calculator's stored results are
+  unaffected, so the real forces are now recorded.
 
 ## [0.4.1] — 2026-07-09
 
