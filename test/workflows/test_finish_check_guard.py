@@ -17,7 +17,6 @@ from remote_handler.exceptions import WorkflowError
 from remote_handler.workflows.samplers import (
     CMAESSampler,
     LammpsSampler,
-    SSPDSampler,
     TorchSimSampler,
 )
 from remote_handler.workflows.trainers import (
@@ -91,18 +90,6 @@ def test_torch_sim_raises_on_unfinished(tmp_path):
     s.sampling_task.collect_results.assert_not_called()
 
 
-def test_sspd_raises_on_unfinished(tmp_path):
-    s = SSPDSampler(
-        remote_fs=LocalFileSystem(),
-        data_path="start.xyz",
-        cluster_config=_cfg(tmp_path),
-    )
-    s.sampling_task = _failed_task()
-    with pytest.raises(WorkflowError, match="did not finish"):
-        s.get_sampled_configs()
-    s.sampling_task.collect_results.assert_not_called()
-
-
 def test_mace_trainer_raises_on_unfinished(tmp_path):
     t = MaceModelTrainer(
         remote_fs=LocalFileSystem(),
@@ -136,10 +123,11 @@ def test_mace_finetuning_raises_on_unfinished(tmp_path):
 
 def test_finish_check_runs_before_collect(tmp_path):
     """The check gates the (move-)collect, so it must precede it."""
-    s = SSPDSampler(
+    s = CMAESSampler(
         remote_fs=LocalFileSystem(),
-        data_path="start.xyz",
         cluster_config=_cfg(tmp_path),
+        founder_path="POSCAR",
+        stub=False,
     )
     s.sampling_task = _failed_task()
     with pytest.raises(WorkflowError):

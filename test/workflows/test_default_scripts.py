@@ -15,7 +15,6 @@ from remote_handler.workflows.samplers import (
     _SCRIPTS_DIR,
     CMAESSampler,
     LammpsSampler,
-    SSPDSampler,
     TorchSimSampler,
 )
 from remote_handler.workflows.trainers import (
@@ -73,26 +72,6 @@ def test_torch_sim_default_script(tmp_path):
         target_temperature=300.0,
     )
     assert _rel(s.sampling_script) == "torch_sim/torch_sim_sampling.py"
-
-
-def test_sspd_default_script(tmp_path):
-    s = SSPDSampler(
-        remote_fs=LocalFileSystem(),
-        data_path="start.xyz",
-        cluster_config=_cfg(tmp_path),
-    )
-    assert _rel(s.sampling_script) == "sspd/SSPD_sampling.py"
-
-
-def test_sspd_torch_sim_default_script(tmp_path):
-    """The torch_sim flag selects the matching shipped SSPD payload."""
-    s = SSPDSampler(
-        remote_fs=LocalFileSystem(),
-        data_path="start.xyz",
-        cluster_config=_cfg(tmp_path),
-        torch_sim=True,
-    )
-    assert _rel(s.sampling_script) == "sspd/SSPD_torch_sim_sampling.py"
 
 
 def test_vasp_default_script(tmp_path):
