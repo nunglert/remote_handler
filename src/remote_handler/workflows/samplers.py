@@ -979,6 +979,27 @@ class SSPDSampler(Sampler):
         self.cluster_config = cluster_config
         self.selector = selector
         self.torch_sim = torch_sim
+    
+    def _load_default_settings(self):
+        script_input = {
+            "input_struct_path": self.data_path,
+            "threshold": 0.99,
+            "inv_beta": 0.05,
+            "max_acceptance": 1.0,
+            "min_acceptance": 0.5,
+            "initial_timestep": 0.01,
+            "num_iterations": 10000,
+            "sampling_threshold": 0,
+            "sampling_frequency": 50,
+            "N": 100,
+            "model_file": str(Path(self.model_files).name), # TODO: fix for multiple models
+            "seed": np.random.randint(1e6),
+            "num_iterations_OL": None,
+            "hessian_method": "hessian",
+        }
+        return script_input
+    
+
 
     def update(
         self, calcdir: Path, sampler_input: list[Path], **kwargs
@@ -989,27 +1010,15 @@ class SSPDSampler(Sampler):
         os.makedirs(self.results_dir, exist_ok=True)
 
         self.model_files = sampler_input
-        # suggestion: go over everything in kwargs and just write it in there,
-        # implement defaults for each omission
+
         if "struct" in kwargs.keys():
             self.data_path = kwargs["struct"]
-        script_input = {
-            "input_struct_path": Path(self.data_path).name,
-            "threshold": kwargs.get("threshold"),
-            "inv_beta": kwargs.get("inv_beta", 0.05),
-            "max_acceptance": 1.0,
-            "min_acceptance": 0.5,
-            "initial_timestep": kwargs.get("initial_timestep", 0.01),
-            "num_iterations": kwargs.get("num_iterations", 10000),
-            "sampling_threshold": kwargs.get("sampling_threshold", 0),
-            "sampling_frequency": kwargs.get("sampling_frequency", 50),
-            "N": kwargs.get("N", 100),
-            "model_file": Path(self.model_files).name,
-            "seed": np.random.randint(1e6),
-            "num_iterations_OL": kwargs.get("num_iterations_OL"),
-            "hessian_method": kwargs.get("hessian_method", "hessian"),
-        }
-
+        script_input = self._load_default_settings()
+        for key in kwargs.keys():
+            script_input[key] = kwargs[key]
+        for key in script_input.keys():
+            if isinstance(script_input[key], Path):
+                script_input[key] = str(script_input[key].name)
         self.script_input_file = (
             self.results_dir / "input_sample.json"
         )  # script input file
@@ -1094,4 +1103,94 @@ class SSPDSampler(Sampler):
                 ase.io.write(output_path, torch_sim_alist)
 
         logger.info(f"SSPD sampled configurations written to {output_path}")
+        return output_path
+
+class BatchSSPDSampler(SSPDSampler):
+    """
+    Do several SSPD runs in parallel while allowing a dynamic set of parameters that are supposed to vary
+    """
+    def __init__(self, variable_param_dict={}, batch_size=None, *args, **kwargs):
+        """
+        Parameters
+        ----------
+        variable_param_dict : dict
+            Dictionary of parameters that are allowed to vary, every key is one parameter which will change
+            the keys are the same as in the SSPDSampler
+            Only one parameter will be changed from the default at the time. The first parameter in the dict
+            defines the default
+        batch_size : int
+            Number of jobs to run in parallel, default: all
+        """
+        super().__init__(*args, **kwargs)
+        self.variable_param_dict = variable_param_dict
+        n_runs = 0
+        for key in self.variable_param_dict.keys():
+            n_runs += len(self.variable_param_dict[key])
+        if batch_size is None:
+            batch_size = n_runs
+        self.batch_size = batch_size
+        self.sampling_tasks = []
+
+    def load_settings(self):
+        inputs = []
+        for key in self.variable_param_dict.keys():
+            for val in self.variable_param_dict[key]:
+                script_input = self._load_default_settings()
+                script_input[key] = val
+                inputs.append(script_input)
+        return inputs
+    
+    def update(self, calcdir: Path, sampler_input: list[Path], **kwargs) -> None:
+        self.sample_dir = calcdir / "sample"
+        self.results_dir = self.sample_dir / "results"
+        os.makedirs(self.sample_dir, exist_ok=True)
+        os.makedirs(self.results_dir, exist_ok=True)
+        self.model_files = sampler_input
+
+        inputs = self.load_settings()
+        if "struct" in kwargs.keys():
+            self.data_path = kwargs["struct"]
+        for iid, script_input in enumerate(inputs):
+            for key in kwargs.keys():
+                script_input[key] = kwargs[key]
+            sub_sample_dir = self.sample_dir / f"run_{iid}"
+            os.makedirs(sub_sample_dir, exist_ok=True)
+            sub_results_dir = sub_sample_dir / "results"
+            os.makedirs(sub_results_dir, exist_ok=True)
+
+            script_input_file = (
+                sub_results_dir / "input_sample.json"
+            )  # script input file
+            with open(script_input_file, "w") as f:
+                f.write(json.dumps(script_input))
+
+            sampling_task = SingleScriptTask(
+                local_savepath=sub_results_dir,
+                input_file=script_input_file,
+                cluster_config=self.cluster_config,
+                remote_fs=self.remote_fs,
+                script_file=self.sampling_script,
+                remote_savepath=self.remote_savepath,
+                jobfile_name="run_sample.sh",
+                jobname=f"sample_{iid}",
+                logfile=f"sample_{iid}.log",
+                n_processors=1,
+                loop_time=self.loop_time,
+                collect_only=False,
+            )
+            self.sampling_tasks.append(sampling_task)
+
+            self.sampling_task.allocate_data()  # moves script and input files
+
+            self.sampling_task.copy_file(self.data_path)
+            self.sampling_task.copy_file(self.model_files)
+
+    def get_sampled_configs(self) -> Path:
+        output_path = self.results_dir / "samples.extxyz"
+        with open(output_path, "w") as f:
+            for sampling_task in self.sampling_tasks:
+                self.sampling_task = sampling_task
+                path = super().get_sampled_configs()
+                with open(path, "r") as f2:
+                    f.write(f2.read())
         return output_path
