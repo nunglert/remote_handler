@@ -53,44 +53,30 @@ mace = [
     "mace-torch>=0.3.14",
     "cuequivariance-torch>=0.8.1",
 ]
-# MACE fork adding layer-freezing for finetuning (MaceFinetuningTrainer /
-# MACE_FREEZE_TRAIN_RUNNER). It builds the `mace-torch` distribution from git,
-# so it REPLACES mace-torch -- install in its own environment; do not combine
-# with [mace] or [torch_sim] (same package, conflicting sources).
 mace_freeze = [
     "mace-torch @ git+https://github.com/7radians/mace-freeze.git@mace-freeze",
     "cuequivariance-torch>=0.8.1",
 ]
-# torch_sim with the freeze fork instead of stock mace-torch. Self-contained:
-# its only mace-torch source is the git fork, so there is no conflicting
-# requirement (unlike combining [torch_sim] + [mace_freeze]). Mutually
-# exclusive with [mace]/[torch_sim]/[mace_freeze] -- pick one mace-torch source.
 clinamen = [
     "Clinamen2"
 ]
 quests = [
     "quests>=2025.9.29"
 ]
-# NeuralIL force-field training (remote-side payload
-# `remote_handler.scripts.neuralil.train_model`, run by `NeuralilILTrainer`).
-# This payload no longer depends on `jaxnest` -- the small closure it used is
-# vendored under `scripts/neuralil/_support/`. The NeuralIL library is pulled
-# from the group's git fork (not on PyPI); it brings in jax/flax transitively.
 neuralil = [
     "neuralil @ git+https://github.com/nunglert/neuralil-jaxrens.git@jaxrens",
     "pandas",
     "tqdm",
 ]
-# mace-jax, for converting a trained torch MACE model to a mace-jax `.pkl`
-# bundle (MaceFinetuningTrainer(convert_to_jax=True)). The conversion needs a
-# torch MACE source too (it reads the .model via `mace.tools.scripts_utils`),
-# so install alongside a mace extra, e.g. `.[mace_freeze,mace_jax]`.
 mace_jax = [
     "mace-jax @ git+https://github.com/nunglert/mace-jax.git@fixes",
 ]
+steinhardt = [
+    "jax>=0.9.0",
+]
 
 all = [
-    "remote_handler[dev,mace_freeze,torch_sim,clinamen,quests,neuralil,mace_jax]"
+    "remote_handler[dev,mace_freeze,torch_sim,clinamen,quests,neuralil,mace_jax,steinhardt]"
 ]
 
 [project.scripts]

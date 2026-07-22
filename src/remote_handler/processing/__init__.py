@@ -18,7 +18,7 @@ Public surface:
   sharded trajectory; :class:`RemoteOptimizationHandler` -- thin factory for the
   optimize step.
 * :class:`Processor` -- base for a host-side spec; :class:`OptimizeProcessor`,
-  :class:`RDFProcessor` -- the built-ins.
+  :class:`RDFProcessor`, :class:`SteinhardtProcessor` -- the built-ins.
 * :func:`register` -- the downstream extension point.
 """
 
@@ -33,6 +33,8 @@ from remote_handler.processing.processors import (
     OptimizeProcessor,
     RdfArgs,
     RDFProcessor,
+    SteinhardtArgs,
+    SteinhardtProcessor,
 )
 from remote_handler.processing.registry import (
     REGISTRY,
@@ -46,8 +48,10 @@ __all__ = [
     "RemoteOptimizationHandler",
     "OptimizeProcessor",
     "RDFProcessor",
+    "SteinhardtProcessor",
     "OptimizeArgs",
     "RdfArgs",
+    "SteinhardtArgs",
     "ProcessTrajInput",
     "REGISTRY",
     "register",
