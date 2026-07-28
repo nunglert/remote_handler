@@ -108,7 +108,7 @@ must provide. The markers are registered in ``pyproject.toml``:
     ``ClusterConfig``). No cluster needed.
 
 ``integration``
-    Needs the ML stack (mace/clinamen). Deselected by default;
+    Needs the ML stack (mace). Deselected by default;
     individual tests self-skip when their specific dep is absent.
 
 ``slurm``

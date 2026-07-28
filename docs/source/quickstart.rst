@@ -161,96 +161,17 @@ Train MACE machine learning potentials:
    mace_trainer.allocate_data()
    mace_trainer.train()
 
-LAMMPS Molecular Dynamics Sampling
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Run LAMMPS MD simulations with uncertainty-based sampling:
-
-.. code-block:: python
-
-   from remote_handler.workflows.samplers import LammpsSampler
-   from remote_handler.core.cluster_handler import ClusterConfig
-   from remote_handler.core.file_handler import RemoteFileSystem
-
-   # Set up configuration
-   config = ClusterConfig.from_file("my_cluster.json")
-   remote_fs = RemoteFileSystem(remote_alias="datalab")
-
-   # Create LAMMPS sampler
-   lammps_sampler = LammpsSampler(
-       sampling_script="lammps/lammps_sampling.py",
-       template_path="lammps_template.in",
-       data_path="initial_structure.data",
-       remote_lammps_executable_path="/usr/local/bin/lmp",
-       cluster_config=config,
-       filesystem=remote_fs,
-       num_samples=1000,  # Generate 1000 configurations
-       results_dir="lammps_samples",
-   )
-
-   # Run sampling
-   lammps_sampler.allocate_data()
-   lammps_sampler.sample(model_ensemble=trained_models)
-
 Active Learning Workflows
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Combine sampling, evaluation, and training into a complete active learning loop:
+``remote_handler`` provides the orchestration loop
+(:class:`~remote_handler.workflows.active_learning_base.ActiveLearningHandler`)
+and the ``Sampler`` / ``Evaluator`` / ``Trainer`` interfaces, together with
+concrete evaluators (VASP/ORCA) and trainers (MACE/NeuralIL).
 
-.. code-block:: python
-
-   from remote_handler.workflows.active_learning_base import ActiveLearningHandler
-   from remote_handler.workflows.samplers import LammpsSampler
-   from remote_handler.workflows.evaluators import DFTEvaluator
-   from remote_handler.workflows.trainers import MaceModelTrainer
-   from remote_handler.core.cluster_handler import ClusterConfig
-   from remote_handler.core.file_handler import RemoteFileSystem
-
-   # Set up configuration
-   config = ClusterConfig.from_file("my_cluster.json")
-   remote_fs = RemoteFileSystem(remote_alias="datalab")
-
-   # Configure components
-   sampler = LammpsSampler(
-       sampling_script="lammps/lammps_sampling.py",
-       template_path="lammps.in.j2",
-       data_path="start.data",
-       remote_lammps_executable_path="/usr/local/bin/lmp",
-       cluster_config=config,
-       filesystem=remote_fs,
-   )
-
-   evaluator = DFTEvaluator(
-       cluster_config=config,
-       filesystem=remote_fs,
-       vasp_kwargs={"encut": 400, "xc": "PBE"},
-   )
-
-   trainer = MaceModelTrainer(
-       training_script="train_mace.py",
-       config_file="mace_config.yaml.j2",
-       remote_mace_train_runner="/path/to/run_train.py",
-       cluster_config=config,
-       filesystem=remote_fs,
-       num_models=5,
-   )
-
-   # Create active learning handler
-   al_handler = ActiveLearningHandler(
-       sampler=sampler,
-       evaluator=evaluator,
-       trainer=trainer,
-       initial_training_data="initial_data.extxyz",
-       max_iterations=10,
-   )
-
-   # Run the active learning loop
-   al_handler.run()
-
-This will automatically:
-
-1. Train initial models on your starting data
-2. Sample new configurations using LAMMPS with the current models
-3. Evaluate high-uncertainty configurations with DFT
-4. Retrain models with the augmented dataset
-5. Repeat until convergence or max iterations
+**Concrete samplers are not shipped here** -- they live in downstream project
+repositories that build on the ``Sampler`` interface (for example
+``jaxrens_active_learning`` and ``lammps_active_learning``). A full run wires a
+sampler, an evaluator and a trainer into an ``ActiveLearningHandler`` and drives
+the Sampler -> Evaluator -> Trainer loop; see :doc:`examples` for runnable
+end-to-end references.

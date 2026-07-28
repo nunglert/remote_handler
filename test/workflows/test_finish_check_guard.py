@@ -14,7 +14,6 @@ import pytest
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import LocalFileSystem
 from remote_handler.exceptions import WorkflowError
-from remote_handler.workflows.samplers import CMAESSampler
 from remote_handler.workflows.trainers import (
     MaceFinetuningTrainer,
     MaceModelTrainer,
@@ -38,19 +37,6 @@ def _failed_task():
     task.finish_check.return_value = False
     task.calcdir = "/remote/calc"
     return task
-
-
-def test_cmaes_raises_on_unfinished(tmp_path):
-    s = CMAESSampler(
-        remote_fs=LocalFileSystem(),
-        cluster_config=_cfg(tmp_path),
-        founder_path="POSCAR",
-        stub=False,
-    )
-    s.sampling_task = _failed_task()
-    with pytest.raises(WorkflowError, match="did not finish"):
-        s.get_sampled_configs()
-    s.sampling_task.collect_results.assert_not_called()
 
 
 def test_mace_trainer_raises_on_unfinished(tmp_path):
@@ -86,16 +72,18 @@ def test_mace_finetuning_raises_on_unfinished(tmp_path):
 
 def test_finish_check_runs_before_collect(tmp_path):
     """The check gates the (move-)collect, so it must precede it."""
-    s = CMAESSampler(
+    t = MaceModelTrainer(
         remote_fs=LocalFileSystem(),
         cluster_config=_cfg(tmp_path),
-        founder_path="POSCAR",
+        config_file="mace.yaml",
+        remote_mace_train_runner="run_train.py",
         stub=False,
     )
-    s.sampling_task = _failed_task()
+    t.results_dir = tmp_path
+    t.training_task = _failed_task()
     with pytest.raises(WorkflowError):
-        s.get_sampled_configs()
+        t.get_trained_model()
     # submit happened, finish_check happened, collect did NOT.
-    s.sampling_task.submit.assert_called_once()
-    s.sampling_task.finish_check.assert_called_once()
-    s.sampling_task.collect_results.assert_not_called()
+    t.training_task.submit.assert_called_once()
+    t.training_task.finish_check.assert_called_once()
+    t.training_task.collect_results.assert_not_called()

@@ -8,7 +8,6 @@ import pytest
 from remote_handler.exceptions import ScriptInputError
 from remote_handler.processing import OptimizeArgs, ProcessTrajInput, RdfArgs
 from remote_handler.scripts.input_models import (
-    CmaesSamplingInput,
     DftSinglepointInput,
     MaceFinetuningInput,
     MaceTrainingInput,
@@ -370,174 +369,6 @@ class TestProcessTrajInput:
         assert "DATABASE cannot be empty" in str(exc_info.value)
 
 
-class TestCmaesSamplingInput:
-    """Tests for CmaesSamplingInput."""
-
-    def test_from_file_valid(self, tmp_path):
-        """Test loading from valid JSON file."""
-        input_file = tmp_path / "input.json"
-        input_data = {
-            "founder": "/path/to/POSCAR",
-            "label": "test_evo",
-            "random_seed": 123,
-            "step_size": 0.12,
-            "generations": 500,
-            "pop_size": 20,
-            "save_nth": 5,
-            "batch": True,
-            "models": ["model1.pt", "model2.pt"],
-            "loss_mode": "energy-only",
-            "loss_threshold": -1e4,
-            "scaled_center": [0.5, 0.5, 0.5],
-            "radius": 3.0,
-            "c_r": 15.0,
-            "continue_evolution": False,
-        }
-        input_file.write_text(json.dumps(input_data))
-
-        config = CmaesSamplingInput.from_file(input_file)
-
-        assert config.founder == "/path/to/POSCAR"
-        assert config.label == "test_evo"
-        assert config.random_seed == 123
-        assert config.step_size == 0.12
-        assert config.generations == 500
-        assert config.pop_size == 20
-        assert config.save_nth == 5
-        assert config.batch is True
-        assert config.models == ["model1.pt", "model2.pt"]
-        assert config.loss_mode == "energy-only"
-        assert config.loss_threshold == -1e4
-        assert config.scaled_center == [0.5, 0.5, 0.5]
-        assert config.radius == 3.0
-        assert config.c_r == 15.0
-        assert config.continue_evolution is False
-
-    def test_from_file_defaults(self, tmp_path):
-        """Test loading with only required fields uses correct defaults."""
-        input_file = tmp_path / "input.json"
-        input_data = {"founder": "/path/to/POSCAR"}
-        input_file.write_text(json.dumps(input_data))
-
-        config = CmaesSamplingInput.from_file(input_file)
-
-        assert config.founder == "/path/to/POSCAR"
-        assert config.label == "dummy"
-        assert config.random_seed == 0
-        assert config.step_size == 1.0
-        assert config.generations == 1000
-        assert config.pop_size is None
-        assert config.save_nth == 1
-        assert config.batch is False
-        assert config.models is None
-        assert config.loss_mode == "energy-only"
-        assert config.loss_threshold == -1e6
-        assert config.scaled_center is None
-        assert config.radius is None
-        assert config.c_r == 20.0
-        assert config.continue_evolution is False
-        assert config.generation_checkpoint is None
-        assert config.repository_path is None
-
-    def test_from_file_not_found(self, tmp_path):
-        """Test with non-existent file."""
-        with pytest.raises(ScriptInputError) as exc_info:
-            CmaesSamplingInput.from_file(tmp_path / "nonexistent.json")
-
-        assert "not found" in str(exc_info.value)
-
-    def test_from_file_invalid_json(self, tmp_path):
-        """Test with invalid JSON."""
-        input_file = tmp_path / "invalid.json"
-        input_file.write_text("{ invalid }")
-
-        with pytest.raises(ScriptInputError) as exc_info:
-            CmaesSamplingInput.from_file(input_file)
-
-        assert "Invalid JSON" in str(exc_info.value)
-
-    def test_from_file_missing_required_field(self, tmp_path):
-        """Test with missing required founder field."""
-        input_file = tmp_path / "input.json"
-        input_data = {"label": "test"}  # Missing founder
-        input_file.write_text(json.dumps(input_data))
-
-        with pytest.raises(ScriptInputError) as exc_info:
-            CmaesSamplingInput.from_file(input_file)
-
-        assert "missing fields" in str(exc_info.value).lower()
-
-    def test_validate_empty_founder(self):
-        """Test validation with empty founder."""
-        config = CmaesSamplingInput(founder="")
-
-        with pytest.raises(ScriptInputError) as exc_info:
-            config.validate()
-
-        assert "cannot be empty" in str(exc_info.value)
-
-    def test_validate_invalid_generations(self):
-        """Test validation with non-positive generations."""
-        config = CmaesSamplingInput(founder="/path/to/POSCAR", generations=0)
-
-        with pytest.raises(ScriptInputError) as exc_info:
-            config.validate()
-
-        assert "must be positive" in str(exc_info.value)
-
-    def test_validate_invalid_step_size(self):
-        """Test validation with non-positive step_size."""
-        config = CmaesSamplingInput(founder="/path/to/POSCAR", step_size=-0.1)
-
-        with pytest.raises(ScriptInputError) as exc_info:
-            config.validate()
-
-        assert "must be positive" in str(exc_info.value)
-
-    def test_validate_invalid_save_nth(self):
-        """Test validation with non-positive save_nth."""
-        config = CmaesSamplingInput(founder="/path/to/POSCAR", save_nth=0)
-
-        with pytest.raises(ScriptInputError) as exc_info:
-            config.validate()
-
-        assert "must be positive" in str(exc_info.value)
-
-    def test_validate_invalid_loss_mode(self):
-        """Test validation with invalid loss_mode."""
-        config = CmaesSamplingInput(
-            founder="/path/to/POSCAR", loss_mode="invalid-mode"
-        )
-
-        with pytest.raises(ScriptInputError) as exc_info:
-            config.validate()
-
-        assert "loss_mode must be one of" in str(exc_info.value)
-
-    def test_validate_continue_without_models(self):
-        """Test validation when continue_evolution=True but models is None."""
-        config = CmaesSamplingInput(
-            founder="/path/to/POSCAR",
-            continue_evolution=True,
-            models=None,
-        )
-
-        with pytest.raises(ScriptInputError) as exc_info:
-            config.validate()
-
-        assert "models must be provided" in str(exc_info.value)
-
-    def test_validate_valid_config(self):
-        """Test validation passes with valid configuration."""
-        config = CmaesSamplingInput(
-            founder="/path/to/POSCAR",
-            models=["model.pt"],
-            loss_mode="loss-threshold",
-        )
-
-        config.validate()  # Should not raise
-
-
 class TestValidateWithRoot:
     """Path-existence checks run only when ``validate`` gets a ``root``."""
 
@@ -609,16 +440,17 @@ class TestScriptInputBaseClass:
     def test_from_dict_filters_unknown_keys(self):
         """Test that from_dict filters unknown keys with warning."""
         data = {
-            "founder": "/path/to/POSCAR",
-            "label": "test",
+            "DATABASE": "structures.xyz",
+            "launch_command": "vasp",
+            "INCAR_kwargs": {"encut": 500},
             "stub": True,  # Unknown key
             "extra_field": 42,  # Unknown key
         }
 
-        config = CmaesSamplingInput.from_dict(data)
+        config = DftSinglepointInput.from_dict(data)
 
-        assert config.founder == "/path/to/POSCAR"
-        assert config.label == "test"
+        assert config.DATABASE == "structures.xyz"
+        assert config.launch_command == "vasp"
         assert not hasattr(config, "stub")
         assert not hasattr(config, "extra_field")
 
@@ -642,10 +474,10 @@ class TestScriptInputBaseClass:
 
     def test_from_dict_missing_required_field(self):
         """Test that from_dict raises on missing required fields."""
-        data = {"label": "test"}  # Missing 'founder'
+        data = {"launch_command": "vasp"}  # Missing DATABASE + INCAR_kwargs
 
         with pytest.raises(ScriptInputError) as exc_info:
-            CmaesSamplingInput.from_dict(data)
+            DftSinglepointInput.from_dict(data)
 
         assert "missing fields" in str(exc_info.value).lower()
 
@@ -653,14 +485,16 @@ class TestScriptInputBaseClass:
         """Test that from_file with unknown keys still works via from_dict."""
         input_file = tmp_path / "input.json"
         input_data = {
-            "founder": "/path/to/POSCAR",
+            "DATABASE": "structures.xyz",
+            "launch_command": "vasp",
+            "INCAR_kwargs": {},
             "stub": True,  # Unknown key - should be filtered
         }
         input_file.write_text(json.dumps(input_data))
 
-        config = CmaesSamplingInput.from_file(input_file)
+        config = DftSinglepointInput.from_file(input_file)
 
-        assert config.founder == "/path/to/POSCAR"
+        assert config.DATABASE == "structures.xyz"
         assert not hasattr(config, "stub")
 
     def test_from_dict_no_path_fields(self):

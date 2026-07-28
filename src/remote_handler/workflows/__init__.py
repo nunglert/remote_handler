@@ -4,7 +4,8 @@ Active Learning Workflow Components.
 This module provides workflow components for active learning pipelines:
 
 - Evaluators: Ground truth evaluation (e.g., DFT with VASP)
-- Samplers: Configuration sampling (e.g., CMA-ES)
+- Samplers: Configuration sampling (concrete samplers live in downstream
+  project repos; remote_handler provides only the ``Sampler`` interface)
 - Trainers: Model training (e.g., MACE models)
 
 Required Dependencies:

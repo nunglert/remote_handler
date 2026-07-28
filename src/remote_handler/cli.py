@@ -498,7 +498,6 @@ _EXTRA_IMPORTS: dict[str, list[str]] = {
     "docs": ["sphinx"],
     "mace": ["mace"],
     "mace_freeze": ["mace.tools.freeze"],
-    "clinamen": ["clinamen2"],
     "quests": ["quests"],
     "neuralil": ["neuralil"],
     "mace_jax": ["mace_jax"],

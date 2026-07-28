@@ -8,15 +8,19 @@ script and assert the resolved path points at the expected shipped payload.
 
 from pathlib import Path
 
+import remote_handler
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import LocalFileSystem
 from remote_handler.workflows.evaluators import ORCAEvaluator, VASPEvaluator
-from remote_handler.workflows.samplers import _SCRIPTS_DIR, CMAESSampler
 from remote_handler.workflows.trainers import (
     MaceFinetuningTrainer,
     MaceModelTrainer,
     NeuralilILTrainer,
 )
+
+# The shipped payloads live under the package's ``scripts/`` dir; each actor
+# defaults its script to a path in here.
+_SCRIPTS_DIR = Path(remote_handler.__file__).resolve().parent / "scripts"
 
 
 def _cfg(tmp_path):
@@ -33,15 +37,6 @@ def _cfg(tmp_path):
 def _rel(script) -> str:
     """Path of the resolved script relative to the shipped scripts/ dir."""
     return Path(script).resolve().relative_to(_SCRIPTS_DIR).as_posix()
-
-
-def test_cmaes_default_script(tmp_path):
-    s = CMAESSampler(
-        remote_fs=LocalFileSystem(),
-        cluster_config=_cfg(tmp_path),
-        founder_path="POSCAR",
-    )
-    assert _rel(s.sampling_script) == "clinamen2/cmaes_sampling.py"
 
 
 def test_vasp_default_script(tmp_path):
@@ -98,10 +93,12 @@ def test_neuralil_default_script(tmp_path):
 
 def test_explicit_script_overrides_default(tmp_path):
     """Passing a script still wins -- the default only fills the gap."""
-    s = CMAESSampler(
+    t = MaceModelTrainer(
         remote_fs=LocalFileSystem(),
         cluster_config=_cfg(tmp_path),
-        founder_path="POSCAR",
-        sampling_script="/custom/my_sampling.py",
+        config_file="mace.yaml",
+        remote_mace_train_runner="run_train.py",
+        training_script="/custom/my_training.py",
+        stub=True,
     )
-    assert str(s.sampling_script) == "/custom/my_sampling.py"
+    assert str(t.training_script) == "/custom/my_training.py"

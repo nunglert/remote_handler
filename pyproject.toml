@@ -54,9 +54,6 @@ mace_freeze = [
     "mace-torch @ git+https://github.com/7radians/mace-freeze.git@mace-freeze",
     "cuequivariance-torch>=0.8.1",
 ]
-clinamen = [
-    "Clinamen2"
-]
 quests = [
     "quests>=2025.9.29"
 ]
@@ -73,7 +70,7 @@ steinhardt = [
 ]
 
 all = [
-    "remote_handler[dev,mace_freeze,clinamen,quests,neuralil,mace_jax,steinhardt]"
+    "remote_handler[dev,mace_freeze,quests,neuralil,mace_jax,steinhardt]"
 ]
 
 [project.scripts]
@@ -104,7 +101,7 @@ remote_handler = ["templates/*.j2"]
 testpaths = ["test"]
 # Test tiers, grouped by what the environment must provide:
 #   (unmarked) unit  -- pure logic, no special deps; always run.
-#   integration      -- needs the ML stack (mace/clinamen); opt in.
+#   integration      -- needs the ML stack (mace); opt in.
 #   slurm            -- needs a working local sbatch; opt in (also integration).
 #   sshlive          -- needs Docker (dummy remote); opt in.
 #   remote           -- needs a configured live cluster; runs but self-skips.
@@ -115,7 +112,7 @@ addopts = "-m 'not remote' -ra"
 markers = [
     "remote: needs a configured live cluster; auto-skips when REMOTE_HANDLER_CONFIG_DIR/remote.json is absent",
     "local: file-handler variant running against the local filesystem; no cluster needed",
-    "integration: needs the ML stack (mace/clinamen) installed; deselected by default",
+    "integration: needs the ML stack (mace) installed; deselected by default",
     "slurm: needs a working local sbatch (job-submission orchestration); auto-skips when sbatch is absent",
     "sshlive: real SSH/SFTP round-trip against a throwaway Docker container; auto-skips when Docker is unavailable; deselected by default",
 ]

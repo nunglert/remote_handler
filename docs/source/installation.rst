@@ -69,8 +69,6 @@ actor or remote-side payload:
        mace-jax ``.pkl``)
    * - ``neuralil``
      - ``NeuralilILTrainer`` (NeuralIL force-field training)
-   * - ``clinamen``
-     - CMA-ES structure sampling (``scripts/clinamen2``)
    * - ``quests``
      - QUESTS-based config selection (``workflows/selectors.py``)
 
