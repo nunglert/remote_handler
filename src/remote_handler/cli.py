@@ -497,7 +497,6 @@ _EXTRA_IMPORTS: dict[str, list[str]] = {
     "dev": ["pytest"],
     "docs": ["sphinx"],
     "mace": ["mace"],
-    "torch_sim": ["torch_sim", "mace"],
     "mace_freeze": ["mace.tools.freeze"],
     "clinamen": ["clinamen2"],
     "quests": ["quests"],

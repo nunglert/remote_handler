@@ -14,7 +14,6 @@ from remote_handler.scripts.input_models import (
     MaceTrainingInput,
     OrcaSinglepointInput,
     ScriptInput,
-    TorchSimSamplingInput,
 )
 
 
@@ -595,19 +594,6 @@ class TestValidateWithRoot:
         )
         with pytest.raises(ScriptInputError, match="foundation_model"):
             cfg.validate(tmp_path)
-
-    def test_torchsim_skips_foundation_sentinel(self, tmp_path):
-        (tmp_path / "start.xyz").write_text("x")
-        cfg = TorchSimSamplingInput.from_dict(
-            dict(
-                founder="start.xyz",
-                model_paths=["foundation"],  # sentinel, not a path
-                ensemble="nvt",
-                temperatures=[300.0],
-                target_temperature=300.0,
-            )
-        )
-        cfg.validate(tmp_path)  # must not try to stat "foundation"
 
     def test_dft_root_checks_database(self, tmp_path):
         cfg = DftSinglepointInput(

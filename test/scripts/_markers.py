@@ -38,8 +38,3 @@ def _cuda_available():
 requires_cuda = pytest.mark.skipif(
     not _cuda_available(), reason="needs an NVIDIA GPU (CUDA)"
 )
-
-# Device for *device-flexible* integration tests: the GPU when present (dev
-# boxes) else CPU (CPU-only CI). The torch_sim sampling script runs on both,
-# so these tests exercise it on whatever hardware is available.
-TEST_DEVICE = "cuda" if _cuda_available() else "cpu"

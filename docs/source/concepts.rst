@@ -30,7 +30,7 @@ The package is organised in three layers:
 ``scripts/``
     **Remote payloads** -- shipped to the cluster and executed in its conda
     environment, never imported on the host. This is the only layer that
-    depends on the heavy ML stacks (MACE, torch-sim, jax, ...).
+    depends on the heavy ML stacks (MACE, jax, ...).
 
 A useful test for *where new code belongs*: if it needs an ML framework at
 import time, it is a ``scripts/`` payload; if it decides *what* to run and

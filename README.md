@@ -22,7 +22,7 @@ pip install -e .              # host-side orchestration (dependency-light)
 pip install -e ".[dev,docs]"  # + test suite and docs tooling
 ```
 
-The ML/scientific functionality (MACE, torch-sim, NeuralIL, …) lives behind
+The ML/scientific functionality (MACE, NeuralIL, …) lives behind
 optional extras and is usually installed in the *remote* conda environment, not
 on the host. See the
 [Installation guide](https://e165-03-1_theoretische_materialchemie.git-pages.tuwien.ac.at/madsen-s-research-group/remote_handler/installation.html)
@@ -42,7 +42,7 @@ remote_handler check                     # validate it (add --connect to probe)
 From there, see:
 
 - **[Quickstart](https://e165-03-1_theoretische_materialchemie.git-pages.tuwien.ac.at/madsen-s-research-group/remote_handler/quickstart.html)** — a first end-to-end run.
-- **[Examples](https://e165-03-1_theoretische_materialchemie.git-pages.tuwien.ac.at/madsen-s-research-group/remote_handler/examples.html)** — DFT labelling, MACE training, torch-sim sampling, a full active-learning loop.
+- **[Examples](https://e165-03-1_theoretische_materialchemie.git-pages.tuwien.ac.at/madsen-s-research-group/remote_handler/examples.html)** — DFT labelling and MACE training.
 - **[CLI](https://e165-03-1_theoretische_materialchemie.git-pages.tuwien.ac.at/madsen-s-research-group/remote_handler/cli.html)** — configure / check / show.
 
 ## How it fits together

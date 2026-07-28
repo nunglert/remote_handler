@@ -14,7 +14,7 @@ import pytest
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import LocalFileSystem
 from remote_handler.exceptions import WorkflowError
-from remote_handler.workflows.samplers import CMAESSampler, TorchSimSampler
+from remote_handler.workflows.samplers import CMAESSampler
 from remote_handler.workflows.trainers import (
     MaceFinetuningTrainer,
     MaceModelTrainer,
@@ -45,22 +45,6 @@ def test_cmaes_raises_on_unfinished(tmp_path):
         remote_fs=LocalFileSystem(),
         cluster_config=_cfg(tmp_path),
         founder_path="POSCAR",
-        stub=False,
-    )
-    s.sampling_task = _failed_task()
-    with pytest.raises(WorkflowError, match="did not finish"):
-        s.get_sampled_configs()
-    s.sampling_task.collect_results.assert_not_called()
-
-
-def test_torch_sim_raises_on_unfinished(tmp_path):
-    s = TorchSimSampler(
-        remote_fs=LocalFileSystem(),
-        cluster_config=_cfg(tmp_path),
-        founder_path="founder.xyz",
-        ensemble="nvt",
-        temperatures=[300.0],
-        target_temperature=300.0,
         stub=False,
     )
     s.sampling_task = _failed_task()

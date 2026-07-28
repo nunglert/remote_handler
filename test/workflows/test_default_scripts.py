@@ -11,11 +11,7 @@ from pathlib import Path
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import LocalFileSystem
 from remote_handler.workflows.evaluators import ORCAEvaluator, VASPEvaluator
-from remote_handler.workflows.samplers import (
-    _SCRIPTS_DIR,
-    CMAESSampler,
-    TorchSimSampler,
-)
+from remote_handler.workflows.samplers import _SCRIPTS_DIR, CMAESSampler
 from remote_handler.workflows.trainers import (
     MaceFinetuningTrainer,
     MaceModelTrainer,
@@ -46,18 +42,6 @@ def test_cmaes_default_script(tmp_path):
         founder_path="POSCAR",
     )
     assert _rel(s.sampling_script) == "clinamen2/cmaes_sampling.py"
-
-
-def test_torch_sim_default_script(tmp_path):
-    s = TorchSimSampler(
-        remote_fs=LocalFileSystem(),
-        cluster_config=_cfg(tmp_path),
-        founder_path="founder.xyz",
-        ensemble="nvt",
-        temperatures=[300.0],
-        target_temperature=300.0,
-    )
-    assert _rel(s.sampling_script) == "torch_sim/torch_sim_sampling.py"
 
 
 def test_vasp_default_script(tmp_path):
