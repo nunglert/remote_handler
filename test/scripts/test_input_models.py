@@ -10,7 +10,6 @@ from remote_handler.processing import OptimizeArgs, ProcessTrajInput, RdfArgs
 from remote_handler.scripts.input_models import (
     CmaesSamplingInput,
     DftSinglepointInput,
-    LammpsSamplingInput,
     MaceFinetuningInput,
     MaceTrainingInput,
     OrcaSinglepointInput,
@@ -169,97 +168,6 @@ class TestMaceTrainingInput:
             config.validate()
 
         assert "cannot be empty" in str(exc_info.value)
-
-
-class TestLammpsSamplingInput:
-    """Tests for LammpsSamplingInput."""
-
-    def test_from_file_valid(self, tmp_path):
-        """Test loading from valid JSON file."""
-        # Create mock lammps executable
-        lammps_exe = tmp_path / "lmp"
-        lammps_exe.touch()
-
-        input_file = tmp_path / "input.json"
-        input_data = {
-            "lammps_path": str(lammps_exe),
-            "template_file": "lammps.in.template",
-            "data_file": "structure.data",
-            "model_files": ["model1.pt", "model2.pt"],
-            "element_mapping": {"1": "H", "2": "O"},
-            "cutoff_radius": 5.0,
-            "bin_count": 10,
-            "seed": 42,
-        }
-        input_file.write_text(json.dumps(input_data))
-
-        config = LammpsSamplingInput.from_file(input_file)
-
-        assert config.lammps_path == lammps_exe
-        assert config.template_file == "lammps.in.template"
-        assert config.model_files == ["model1.pt", "model2.pt"]
-        assert config.cutoff_radius == 5.0
-        assert config.bin_count == 10
-
-    def test_validate_lammps_not_found(self, tmp_path):
-        """Test validation when LAMMPS executable doesn't exist."""
-        config = LammpsSamplingInput(
-            lammps_path=Path("/nonexistent/lmp"),
-            template_file="template.in",
-            data_file="data.in",
-            model_files=["model.pt"],
-            element_mapping={"1": "H"},
-            cutoff_radius=5.0,
-            bin_count=10,
-            seed=42,
-        )
-
-        with pytest.raises(ScriptInputError) as exc_info:
-            config.validate()
-
-        assert "not found" in str(exc_info.value)
-
-    def test_validate_empty_model_files(self, tmp_path):
-        """Test validation with empty model_files."""
-        lammps_exe = tmp_path / "lmp"
-        lammps_exe.touch()
-
-        config = LammpsSamplingInput(
-            lammps_path=lammps_exe,
-            template_file="template.in",
-            data_file="data.in",
-            model_files=[],  # Empty!
-            element_mapping={"1": "H"},
-            cutoff_radius=5.0,
-            bin_count=10,
-            seed=42,
-        )
-
-        with pytest.raises(ScriptInputError) as exc_info:
-            config.validate()
-
-        assert "cannot be empty" in str(exc_info.value)
-
-    def test_validate_negative_cutoff(self, tmp_path):
-        """Test validation with negative cutoff_radius."""
-        lammps_exe = tmp_path / "lmp"
-        lammps_exe.touch()
-
-        config = LammpsSamplingInput(
-            lammps_path=lammps_exe,
-            template_file="template.in",
-            data_file="data.in",
-            model_files=["model.pt"],
-            element_mapping={"1": "H"},
-            cutoff_radius=-1.0,  # Invalid!
-            bin_count=10,
-            seed=42,
-        )
-
-        with pytest.raises(ScriptInputError) as exc_info:
-            config.validate()
-
-        assert "must be positive" in str(exc_info.value)
 
 
 class TestDftSinglepointInput:

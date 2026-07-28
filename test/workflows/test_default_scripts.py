@@ -14,7 +14,6 @@ from remote_handler.workflows.evaluators import ORCAEvaluator, VASPEvaluator
 from remote_handler.workflows.samplers import (
     _SCRIPTS_DIR,
     CMAESSampler,
-    LammpsSampler,
     TorchSimSampler,
 )
 from remote_handler.workflows.trainers import (
@@ -38,19 +37,6 @@ def _cfg(tmp_path):
 def _rel(script) -> str:
     """Path of the resolved script relative to the shipped scripts/ dir."""
     return Path(script).resolve().relative_to(_SCRIPTS_DIR).as_posix()
-
-
-def test_lammps_default_script():
-    s = LammpsSampler(
-        remote_fs=LocalFileSystem(),
-        template_path="lammps.in.j2",
-        data_path="lammps.data",
-        element_mapping={1: "Cu"},
-        num_samples=5,
-        uncertainty_cutoff_radius=4.0,
-        remote_lammps_executable_path="/usr/bin/lmp",
-    )
-    assert _rel(s.sampling_script) == "lammps/lammps_sampling.py"
 
 
 def test_cmaes_default_script(tmp_path):

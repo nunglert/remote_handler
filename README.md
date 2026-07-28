@@ -54,6 +54,13 @@ cluster). The
 page explains the boundaries — host vs. remote, the task abstraction, the
 pluggable executor, and the active-learning loop.
 
+## Example projects using remote_handler
+
+- [Replica-exchange nested sampling](https://gitlab.tuwien.ac.at/e165-03-1_theoretische_materialchemie/madsen-s-research-group/jaxrens_active_learning)
+- [LAMMPS](https://gitlab.tuwien.ac.at/e165-03-1_theoretische_materialchemie/madsen-s-research-group/lammps_active_learning)
+- Clinamen2 — _link TBD_
+- SSPD — _link TBD_
+
 ## Contributing
 
 Dev setup, test tiers, code style, and the release/versioning workflow are in

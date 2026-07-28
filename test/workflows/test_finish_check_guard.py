@@ -14,11 +14,7 @@ import pytest
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import LocalFileSystem
 from remote_handler.exceptions import WorkflowError
-from remote_handler.workflows.samplers import (
-    CMAESSampler,
-    LammpsSampler,
-    TorchSimSampler,
-)
+from remote_handler.workflows.samplers import CMAESSampler, TorchSimSampler
 from remote_handler.workflows.trainers import (
     MaceFinetuningTrainer,
     MaceModelTrainer,
@@ -42,23 +38,6 @@ def _failed_task():
     task.finish_check.return_value = False
     task.calcdir = "/remote/calc"
     return task
-
-
-def test_lammps_raises_on_unfinished():
-    s = LammpsSampler(
-        remote_fs=LocalFileSystem(),
-        template_path="lammps.in.j2",
-        data_path="lammps.data",
-        element_mapping={1: "Cu"},
-        num_samples=5,
-        uncertainty_cutoff_radius=4.0,
-        remote_lammps_executable_path="/usr/bin/lmp",
-        stub=False,
-    )
-    s.sampling_task = _failed_task()
-    with pytest.raises(WorkflowError, match="did not finish"):
-        s.get_sampled_configs()
-    s.sampling_task.collect_results.assert_not_called()
 
 
 def test_cmaes_raises_on_unfinished(tmp_path):
