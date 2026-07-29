@@ -65,8 +65,8 @@ actor or remote-side payload:
    * - ``mace_freeze``
      - ``MaceFinetuningTrainer`` (layer-freezing finetune)
    * - ``mace_jax``
-     - ``MaceFinetuningTrainer(convert_to_jax=True)`` (torch ``.model`` →
-       mace-jax ``.pkl``)
+     - ``MaceModelTrainer``/``MaceFinetuningTrainer`` with
+       ``convert_to_jax=True`` (torch ``.model`` → mace-jax ``.pkl``)
    * - ``neuralil``
      - ``NeuralilILTrainer`` (NeuralIL force-field training)
    * - ``quests``

@@ -43,6 +43,14 @@ def _require_path(root: Path, value, label: str) -> None:
         raise ScriptInputError(f"{label} does not exist: {full}")
 
 
+def _require_jax_format(value: str) -> None:
+    """Shared check for the ``jax_output_format`` field of the MACE inputs."""
+    if value not in ("pkl", "bundle"):
+        raise ScriptInputError(
+            f"jax_output_format must be 'pkl' or 'bundle', got '{value}'"
+        )
+
+
 @dataclass
 class ScriptInput:
     """Base class for script input configurations.
@@ -161,6 +169,10 @@ class MaceTrainingInput(ScriptInput):
         model_name: Name tag for the trained model
         seed: Random seed for database splitting and training
         validation_fraction: Fraction of data to use for validation (default: 0.1)
+        convert_to_jax: If True, convert the trained torch model to a mace-jax
+            bundle after training (needs mace-jax in the same env)
+        jax_output_format: Bundle format when ``convert_to_jax`` -- ``"pkl"``
+            or ``"bundle"``
 
     Example:
         >>> config = MaceTrainingInput.from_file(Path("input_train.json"))
@@ -175,6 +187,10 @@ class MaceTrainingInput(ScriptInput):
     model_name: str
     seed: int
     validation_fraction: float = 0.1
+    convert_to_jax: bool = False
+    # "pkl" (default) -> opaque pickle bundle; "bundle" -> a directory with
+    # config.json + params.msgpack (mace-jax's canonical, inspectable format).
+    jax_output_format: str = "pkl"
 
     def validate(self, root: Optional[Path] = None) -> None:
         """Validate configuration parameters.
@@ -192,6 +208,8 @@ class MaceTrainingInput(ScriptInput):
 
         if not self.model_name:
             raise ScriptInputError("model_name cannot be empty")
+
+        _require_jax_format(self.jax_output_format)
 
         if root is not None:
             for f in self.database_files:
@@ -253,11 +271,7 @@ class MaceFinetuningInput(ScriptInput):
         if not self.model_name:
             raise ScriptInputError("model_name cannot be empty")
 
-        if self.jax_output_format not in ("pkl", "bundle"):
-            raise ScriptInputError(
-                "jax_output_format must be 'pkl' or 'bundle', got "
-                f"'{self.jax_output_format}'"
-            )
+        _require_jax_format(self.jax_output_format)
 
         if root is not None:
             for f in self.database_files:

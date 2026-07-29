@@ -9,6 +9,18 @@ The version is derived from git tags by `setuptools-scm` (tag `v0.2.0` →
 version `0.2.0`). To cut a release: add a dated section below, merge to `main`,
 then `git tag -a vX.Y.Z`.
 
+## [Unreleased]
+
+### Changed
+- **`convert_to_jax` / `jax_output_format` moved to the shared MACE trainer
+  base**, so `MaceModelTrainer` (train from scratch) supports the torch →
+  mace-jax conversion too, not just `MaceFinetuningTrainer`. Conversion is a
+  property of training a MACE model, not of finetuning specifically. The
+  cluster-side step is now the shared `mace_utils.maybe_convert_to_jax`, called
+  by both the `mace_training.py` and `mace_finetuning.py` payloads, and
+  `MaceTrainingInput` gained the two matching fields. Existing
+  `MaceFinetuningTrainer` usage is unchanged.
+
 ## [0.5.0] — 2026-07-26
 
 ### Added
