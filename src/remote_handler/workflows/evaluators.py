@@ -185,7 +185,7 @@ class AseCalculatorEvaluator(GroundTruthEvaluator):
                 logger.info(f"evaluation failed for {calcpath=}: {e}")
                 continue
             at.info["REF_energy"] = at.get_potential_energy()
-            at.arrays["REF_forces"] = at.get_forces()
+            at.arrays["REF_forces"] = at.get_forces(apply_constraint=False)
             at.calc = None
             all_ats.append(at)
             logger.info(f"evaluation successful for {calcpath=}")
