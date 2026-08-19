@@ -49,9 +49,9 @@ these boundaries (see :doc:`api/index` for the module map):
     host-side orchestration (``core``/``workflows``) out of ``scripts`` and
     vice versa.
 
-A good rule of thumb: if a new module needs ``mace`` / ``torch_sim`` /
-``jax`` at import time, it almost certainly belongs in ``scripts/`` (behind an
-extra), not in the host-side layers.
+A good rule of thumb: if a new module needs ``mace`` / ``jax`` at import time,
+it almost certainly belongs in ``scripts/`` (behind an extra), not in the
+host-side layers.
 
 Code style
 ----------
@@ -108,7 +108,7 @@ must provide. The markers are registered in ``pyproject.toml``:
     ``ClusterConfig``). No cluster needed.
 
 ``integration``
-    Needs the ML stack (mace/torch_sim/clinamen). Deselected by default;
+    Needs the ML stack (mace). Deselected by default;
     individual tests self-skip when their specific dep is absent.
 
 ``slurm``

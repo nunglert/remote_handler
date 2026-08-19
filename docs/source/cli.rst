@@ -305,7 +305,6 @@ checked on ``PATH`` after their setup runs:
    ---------------------------------
    mace           ✓      ✓      ✓
    mace_jax       ✗      ✓      ✗
-   torch_sim      ✓      ✓      ✓
    ---------------------------------
    vasp           ✗      ✓      —
 

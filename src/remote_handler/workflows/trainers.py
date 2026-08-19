@@ -66,10 +66,15 @@ class _MaceArrayTrainer(ModelTrainer):
     ``MaceModelTrainer`` (train from scratch) and ``MaceFinetuningTrainer``
     (finetune a foundation model) differ only in a few spots: the default
     payload script, the SLURM job name, a few extra keys/resources for the
-    remote input, the artifact filename collected back, and the stub contents.
-    Those are expressed as the class attributes / hook methods below; the rest
-    (data prep, array submission, finish-check, collection, stub scaffolding)
+    remote input, and the stub contents. Those are expressed as the class
+    attributes / hook methods below; the rest (data prep, array submission,
+    finish-check, collection, stub scaffolding, optional mace-jax conversion)
     lives here once.
+
+    The optional torch -> mace-jax conversion (``convert_to_jax`` /
+    ``jax_output_format``) is a property of *training a MACE model*, not of
+    finetuning specifically, so it is offered here and both subclasses inherit
+    it. Both shipped payloads run the conversion in the same job as training.
     """
 
     # Per-subclass constants -----------------------------------------------
@@ -91,6 +96,8 @@ class _MaceArrayTrainer(ModelTrainer):
         loop_time: float = 30,
         stub: bool = False,
         n_processors: int = 1,
+        convert_to_jax: bool = False,
+        jax_output_format: str = "pkl",
     ):
         super().__init__()
         if training_script is None:
@@ -109,6 +116,15 @@ class _MaceArrayTrainer(ModelTrainer):
         # (``--gres=gpu:n``). One model per job -> one GPU by default.
         self.n_processors = n_processors
         self.model_name = "Model"  # Default model name
+        self.convert_to_jax = convert_to_jax
+        # When convert_to_jax: "pkl" (default, opaque) or "bundle" (a directory
+        # with config.json + params.msgpack -- mace-jax's canonical format).
+        if jax_output_format not in ("pkl", "bundle"):
+            raise ConfigurationError(
+                "jax_output_format must be 'pkl' or 'bundle', got "
+                f"'{jax_output_format}'"
+            )
+        self.jax_output_format = jax_output_format
 
     # Hooks subclasses override --------------------------------------------
     def _extra_shared_input(self) -> dict:
@@ -119,9 +135,22 @@ class _MaceArrayTrainer(ModelTrainer):
         """Extra files staged into the shared resource dir (after config)."""
         return []
 
+    # Shared: optional torch -> mace-jax conversion -------------------------
+    def _jax_artifact_name(self) -> str:
+        """Filename of the per-job artifact handed to the next sampler.
+
+        A ``.model`` (no conversion), a ``-jax.pkl`` file, or a ``-jax``
+        directory bundle, per ``convert_to_jax`` / ``jax_output_format``.
+        """
+        if not self.convert_to_jax:
+            return f"{self.model_name}.model"
+        if self.jax_output_format == "bundle":
+            return f"{self.model_name}-jax"
+        return f"{self.model_name}-jax.pkl"
+
     def _artifact_name(self) -> str:
         """Per-job filename, under ``models/``, handed to the next sampler."""
-        return f"{self.model_name}.model"
+        return self._jax_artifact_name()
 
     def _stub_model_dict(self) -> dict:
         """Mock model payload written by stub mode."""
@@ -140,9 +169,22 @@ class _MaceArrayTrainer(ModelTrainer):
     def _write_stub_artifact(self, model_dir, model_path, mock_model) -> Path:
         """Write any extra stub artifact and return the path to hand on.
 
-        Base trainers hand on the torch ``.model`` itself.
+        Without conversion that is the torch ``.model`` itself; with
+        ``convert_to_jax`` it is a mock bundle in the requested format.
         """
-        return model_path
+        if not self.convert_to_jax:
+            return model_path
+        jax_path = model_dir / self._jax_artifact_name()
+        if self.jax_output_format == "bundle":
+            jax_path.mkdir(parents=True, exist_ok=True)
+            (jax_path / "config.json").write_text("{}")
+            (jax_path / "params.msgpack").write_bytes(b"")
+        else:
+            with open(jax_path, "wb") as f:
+                pickle.dump(
+                    {"config": mock_model, "params": b"", "head": None}, f
+                )
+        return jax_path
 
     # Shared implementation -------------------------------------------------
     def update(
@@ -188,6 +230,8 @@ class _MaceArrayTrainer(ModelTrainer):
             "model_name": self.model_name,
             "validation_fraction": self.validation_fraction,
             "train_runner": Path(self.remote_mace_train_runner).as_posix(),
+            "convert_to_jax": self.convert_to_jax,
+            "jax_output_format": self.jax_output_format,
             **self._extra_shared_input(),
         }
 
@@ -318,6 +362,14 @@ class MaceModelTrainer(_MaceArrayTrainer):
         remote_savepath: Path on remote machine for calculation files
         loop_time: Interval (seconds) to poll for job completion
         stub: If True, creates mock model outputs without training
+        convert_to_jax: If True, convert each trained torch model to a
+            mace-jax bundle in the same job and return those paths from
+            ``get_trained_model``. The training (cluster) environment must then
+            have both the torch MACE stack and ``mace-jax``.
+        jax_output_format: Bundle format when ``convert_to_jax`` -- ``"pkl"``
+            (default; an opaque single-file pickle) or ``"bundle"`` (a
+            directory with ``config.json`` + ``params.msgpack``, the canonical
+            inspectable format mace-jax's loader / jaxrens consume).
     """
 
     # Behaviour is entirely the base default (script mace_training.py, jobname
@@ -329,8 +381,8 @@ class MaceFinetuningTrainer(_MaceArrayTrainer):
     Trainer for finetuning MACE models from a foundation model.
 
     Like MaceModelTrainer but stages a pretrained foundation model as an extra
-    shared resource and, optionally, converts each trained torch model to a
-    mace-jax bundle in the same job.
+    shared resource. The optional torch -> mace-jax conversion is inherited
+    from the shared base and works the same way here.
 
     Args:
         remote_fs: FileSystemHandlerBase for the machine where training runs
@@ -390,42 +442,18 @@ class MaceFinetuningTrainer(_MaceArrayTrainer):
             loop_time=loop_time,
             stub=stub,
             n_processors=n_processors,
+            convert_to_jax=convert_to_jax,
+            jax_output_format=jax_output_format,
         )
         self.foundation_model = foundation_model
-        self.convert_to_jax = convert_to_jax
-        # When convert_to_jax: "pkl" (default, opaque) or "bundle" (a directory
-        # with config.json + params.msgpack -- mace-jax's canonical format).
-        if jax_output_format not in ("pkl", "bundle"):
-            raise ConfigurationError(
-                "jax_output_format must be 'pkl' or 'bundle', got "
-                f"'{jax_output_format}'"
-            )
-        self.jax_output_format = jax_output_format
-
-    def _jax_artifact_name(self) -> str:
-        """Filename of the per-job artifact handed to the next sampler.
-
-        A ``.model`` (no conversion), a ``-jax.pkl`` file, or a ``-jax``
-        directory bundle, per ``convert_to_jax`` / ``jax_output_format``.
-        """
-        if not self.convert_to_jax:
-            return f"{self.model_name}.model"
-        if self.jax_output_format == "bundle":
-            return f"{self.model_name}-jax"
-        return f"{self.model_name}-jax.pkl"
 
     # Hook overrides --------------------------------------------------------
-    def _artifact_name(self) -> str:
-        return self._jax_artifact_name()
-
     def _extra_shared_input(self) -> dict:
         return {
             "foundation_model": (
                 f"{SHARED_RESOURCE_PREFIX}/"
                 f"{Path(self.foundation_model).name}"
             ),
-            "convert_to_jax": self.convert_to_jax,
-            "jax_output_format": self.jax_output_format,
         }
 
     def _extra_shared_resources(self) -> list:

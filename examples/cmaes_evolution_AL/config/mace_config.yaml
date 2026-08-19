@@ -1,6 +1,0 @@
-model: MACE
-batch_size: 4
-E0s: average
-max_num_epochs: 5
-freeze: 6
-foundation_model: 2023-12-10-mace-128-L0_energy_epoch-249.model

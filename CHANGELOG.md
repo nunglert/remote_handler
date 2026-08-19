@@ -9,6 +9,96 @@ The version is derived from git tags by `setuptools-scm` (tag `v0.2.0` →
 version `0.2.0`). To cut a release: add a dated section below, merge to `main`,
 then `git tag -a vX.Y.Z`.
 
+## [0.6.0] — 2026-08-26
+
+Sampling moves out of `remote_handler`. Every concrete `Sampler` and the
+remote payload behind it now lives in its own downstream project repository;
+the package keeps the `Sampler` interface and the orchestration around it.
+This is a breaking change — see **Removed** / **Breaking** for the import
+paths and extras that are gone. In exchange the host install and the test
+matrix shrink substantially, and the Steinhardt processor moves *in*.
+
+### Added
+- **`SteinhardtProcessor` / `SteinhardtArgs`** — per-atom Steinhardt
+  bond-orientational order parameters (`q<l>` / `w<l>`, plus the per-frame
+  means `q<l>_mean` / `w<l>_mean` in `atoms.info`) as a built-in `processing`
+  step, re-exported from `remote_handler.processing`. The compute is a JAX
+  port of QUIP's `steinhardt_nelson_qw_module::calc_qw` together with the
+  angular machinery it relies on (`SphericalYCartesian` / `SolidRCartesian`,
+  `wigner3j`), validated against QUIP's `get_qw` binary to machine precision
+  with the reference data checked in under `test/data/steinhardt/`. The
+  `jit`-compiled core runs in float64 / complex128 (the spherical-harmonic
+  sums lose all signal in float32), opted in for the scope of the computation
+  rather than by flipping the global `jax_enable_x64` flag, so a surrounding
+  float32 pipeline is unaffected. Previously this lived downstream and was
+  cited as the example of an out-of-package processor.
+- **`[steinhardt]` install extra** (`jax>=0.9.0`). `jax` is imported lazily
+  inside the cluster-side `run`, so the module stays importable — and cheap —
+  on a jax-free host, like the other built-in processors.
+
+### Changed
+- **`convert_to_jax` / `jax_output_format` moved to the shared MACE trainer
+  base**, so `MaceModelTrainer` (train from scratch) supports the torch →
+  mace-jax conversion too, not just `MaceFinetuningTrainer`. Conversion is a
+  property of training a MACE model, not of finetuning specifically. The
+  cluster-side step is now the shared `mace_utils.maybe_convert_to_jax`, called
+  by both the `mace_training.py` and `mace_finetuning.py` payloads, and
+  `MaceTrainingInput` gained the two matching fields. Existing
+  `MaceFinetuningTrainer` usage is unchanged.
+- **The `[all]` extra is recomposed** to
+  `dev,mace_freeze,quests,neuralil,mace_jax,steinhardt`: `torch_sim` and
+  `clinamen` are gone with the samplers, `steinhardt` is new. CI still
+  installs `[all]`, so every optional tier keeps un-skipping.
+- **Docs and README follow the split.** The installation table drops the
+  removed extras and the "`torch_sim` needs a mace source" warning, the
+  examples page covers DFT labelling and MACE training, and the README gains
+  an *Example projects using remote_handler* section linking the downstream
+  sampler repositories.
+
+### Fixed
+- **`FixAtoms` constraints no longer corrupt forces on the *aggregation*
+  paths either.** `scripts/mace/mace_utils.write_with_keys` and
+  `AseCalculatorEvaluator._collect_results` now call
+  `get_forces(apply_constraint=False)`. Both re-derive forces from an `Atoms`
+  deserialized from extxyz *after* the singlepoint already stored the correct
+  values, so a `FixAtoms` constraint carried in the file silently re-zeroed
+  the frozen atoms' forces on the way into `REF_forces` — the training labels
+  — even though the payload that wrote them was already fixed. The 0.5.0 entry
+  covered only `dft_singlepoint.py` / `orca_singlepoint.py` /
+  `ase_singlepoint.py`; this completes it. Regression tests added for both
+  call sites.
+
+### Removed
+- **Every concrete sampler and its remote payload.** `workflows/samplers.py`
+  is gone in full — `LammpsSampler`, `TorchSimSampler`, `CMAESSampler`,
+  `BatchCMAESSampler`, `SSPDSampler`, `BatchSSPDSampler` — along with the
+  payloads they shipped (`scripts/lammps/`, `scripts/torch_sim/` including
+  `mace_ensemble.py`, `parallel_tempering.py`, `create_interface.py` and
+  `simulation_pipelines.py`, `scripts/clinamen2/`, `scripts/sspd/`) and their
+  input schemas (`LammpsSamplingInput`, `TorchSimSamplingInput`,
+  `CmaesSamplingInput`, `CmaesOptimizeInput`). `remote_handler` now provides
+  only the `Sampler` interface, in `workflows/active_learning_base.py`.
+- **The `[torch_sim]` and `[clinamen]` install extras.**
+- **The samplers' examples** — `examples/mace_md_AL/`,
+  `examples/torch_sim_AL/`, `examples/cmaes_evolution_AL/`,
+  `examples/mace_sspd_AL/`, the stale `examples/cluster_handler.py`, and the
+  torch-sim / active-learning docs example pages. `examples/local_emt_AL/`
+  (no cluster, no licensed software) remains the runnable reference.
+- **The samplers' tests** — `test_cmaes_sampling_integration.py`,
+  `test_torch_sim_integration.py`, `test_mace_ensemble.py` and
+  `test_active_learning_workflows.py`. The `integration` tier now means
+  "needs mace", not "needs mace/torch_sim/clinamen".
+
+### Breaking
+- `from remote_handler.workflows import LammpsSampler, TorchSimSampler` (both
+  were in `workflows.__all__`) and any import from
+  `remote_handler.workflows.samplers` now raise `ImportError`. Depend on the
+  relevant downstream project instead — the actors keep their constructor
+  signatures there, so only the import path moves.
+- `pip install ".[torch_sim]"` / `".[clinamen]"` no longer resolve; pip warns
+  that the extra is not provided and installs nothing for it. `".[all]"` still
+  resolves but no longer brings torch-sim or Clinamen2 into the environment.
+
 ## [0.5.0] — 2026-07-26
 
 ### Added

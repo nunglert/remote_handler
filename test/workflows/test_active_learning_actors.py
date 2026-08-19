@@ -16,7 +16,6 @@ from ase import Atoms
 
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.workflows import (
-    LammpsSampler,
     MaceModelTrainer,
     NeuralilILTrainer,
     VASPEvaluator,
@@ -197,106 +196,6 @@ class TestVASPEvaluator:
             assert "REF_energy" in atoms.info
             assert "REF_forces" in atoms.arrays
             assert atoms.arrays["REF_forces"].shape == (3, 3)
-
-
-class TestLammpsSampler:
-    """Test LammpsSampler in stub mode."""
-
-    def test_init_lammps_sampler(self, mock_remote_fs, tmp_path):
-        """Test LammpsSampler initialization."""
-        script = tmp_path / "lammps_sampling.py"
-        script.touch()
-        template = tmp_path / "lammps.in.template"
-        template.touch()
-        data_file = tmp_path / "structure.data"
-        data_file.touch()
-
-        sampler = LammpsSampler(
-            remote_fs=mock_remote_fs,
-            sampling_script=script,
-            template_path=template,
-            data_path=data_file,
-            element_mapping={1: "Cu", 2: "Co"},
-            num_samples=10,
-            uncertainty_cutoff_radius=4.0,
-            remote_lammps_executable_path="/remote/lammps/lmp",
-            stub=True,
-        )
-
-        assert sampler.stub is True
-        assert sampler.num_samples == 10
-        assert sampler.element_mapping == {1: "Cu", 2: "Co"}
-
-    def test_lammps_stub_outputs(
-        self, mock_remote_fs, temp_calcdir, mock_model_files, tmp_path
-    ):
-        """Test LammpsSampler creates stub outputs."""
-        script = tmp_path / "lammps_sampling.py"
-        script.touch()
-        template = tmp_path / "lammps.in.template"
-        template.touch()
-        data_file = tmp_path / "structure.data"
-        data_file.touch()
-
-        sampler = LammpsSampler(
-            remote_fs=mock_remote_fs,
-            sampling_script=script,
-            template_path=template,
-            data_path=data_file,
-            element_mapping={1: "Cu", 2: "Co", 3: "H"},
-            num_samples=15,
-            uncertainty_cutoff_radius=4.0,
-            remote_lammps_executable_path="/remote/lammps/lmp",
-            stub=True,
-        )
-
-        # Update sampler with model files
-        sampler.update(temp_calcdir, mock_model_files)
-
-        # Get sampled configs (should create stub outputs)
-        output_file = sampler.get_sampled_configs()
-
-        assert output_file.exists()
-        assert output_file.name == "samples.xyz"
-
-        # Verify output structure
-        sampled_atoms = ase.io.read(output_file, index=":")
-        assert len(sampled_atoms) == 15
-
-        # Check that stub outputs have uncertainty information
-        for atoms in sampled_atoms:
-            assert "max_uncertainty" in atoms.info
-            assert "mean_uncertainty" in atoms.info
-            assert "step" in atoms.info
-
-    def test_lammps_create_stub_outputs(self, mock_remote_fs, tmp_path):
-        """Test _create_stub_outputs method directly."""
-        script = tmp_path / "lammps_sampling.py"
-        script.touch()
-        template = tmp_path / "lammps.in.template"
-        template.touch()
-        data_file = tmp_path / "structure.data"
-        data_file.touch()
-
-        sampler = LammpsSampler(
-            remote_fs=mock_remote_fs,
-            sampling_script=script,
-            template_path=template,
-            data_path=data_file,
-            element_mapping={1: "Cu", 2: "Co"},
-            num_samples=20,
-            uncertainty_cutoff_radius=4.0,
-            remote_lammps_executable_path="/remote/lammps/lmp",
-            stub=True,
-        )
-
-        stub_samples = sampler._create_stub_outputs(num_samples=8)
-
-        assert len(stub_samples) == 8
-        for atoms in stub_samples:
-            assert len(atoms) == 26  # 20 Cu + 4 Co + 2 H
-            assert "max_uncertainty" in atoms.info
-            assert atoms.info["max_uncertainty"] > 0
 
 
 class TestMaceModelTrainer:

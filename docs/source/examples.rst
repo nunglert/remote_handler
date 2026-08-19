@@ -10,7 +10,7 @@ They come in two flavours:
 * The **runnable local example** below needs no cluster and no ML stack -- it
   runs on any machine with just the core install and is *executed* end-to-end
   in CI (``test/test_local_emt_example.py``). Start here.
-* The **cluster workflows** (Examples 1--4) orchestrate remote work (SSH +
+* The **cluster workflows** (Examples 1--2) orchestrate remote work (SSH +
   SLURM, GPUs, VASP), so they are **not executed** in CI -- only checked for
   API-currency (``test/test_examples.py``). They assume you have registered the
   referenced clusters with ``remote_handler configure cluster`` (see
@@ -92,30 +92,10 @@ Example 2: Training a MACE force field
 --------------------------------------
 
 Configure a :class:`~remote_handler.workflows.trainers.MaceModelTrainer` and run
-a training step. The trainer is an active-learning *actor*: in a full run the
-loop (Example 4) drives it, but you can also call ``update`` /
-``get_trained_model`` directly:
+a training step. The trainer is an active-learning *actor*: in a full run an
+:class:`~remote_handler.workflows.active_learning_base.ActiveLearningHandler`
+loop drives it, but you can also call ``update`` / ``get_trained_model``
+directly:
 
 .. literalinclude:: examples/example_2_mace_training.py
-   :language: python
-
-Example 3: Sampling with torch-sim MD
--------------------------------------
-
-Configure a :class:`~remote_handler.workflows.samplers.TorchSimSampler` to run
-parallel-tempering MD from the current model and propose new candidate
-configurations:
-
-.. literalinclude:: examples/example_3_torch_sim.py
-   :language: python
-
-Example 4: A full active-learning loop
---------------------------------------
-
-Wire a sampler, a ground-truth evaluator and a trainer into the
-:class:`~remote_handler.workflows.active_learning_base.ActiveLearningHandler`
-and run the Sampler → Evaluator → Trainer loop. Note how each actor can target a
-different cluster:
-
-.. literalinclude:: examples/example_4_active_learning.py
    :language: python
