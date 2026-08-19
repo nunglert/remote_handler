@@ -11,7 +11,7 @@ The compute is a JAX port of QUIP's ``steinhardt_nelson_qw_module::calc_qw``
 it relies on (``SphericalYCartesian`` / ``SolidRCartesian`` and ``wigner3j`` in
 ``src/libAtoms/angular_functions.f95``).  Validated against QUIP's ``get_qw``
 binary to machine precision; the reference data and comparison live in
-``test/processing/test_steinhardt.py``.
+``test/scripts/test_steinhardt.py``.
 
 For each central atom *i* and (even) degree *l*::
 

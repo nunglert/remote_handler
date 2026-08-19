@@ -71,6 +71,10 @@ actor or remote-side payload:
      - ``NeuralilILTrainer`` (NeuralIL force-field training)
    * - ``quests``
      - QUESTS-based config selection (``workflows/selectors.py``)
+   * - ``steinhardt``
+     - ``SteinhardtProcessor`` (per-atom ``q_l`` / ``w_l`` bond-orientational
+       order parameters). Pulls ``jax``; needed only in the *remote* env,
+       where the processor imports it lazily.
 
 .. warning::
 
