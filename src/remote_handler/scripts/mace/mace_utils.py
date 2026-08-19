@@ -73,7 +73,7 @@ def write_with_keys(
         if energy_key not in atoms.info.keys():
             atoms.info[energy_key] = atoms.get_potential_energy()
         if forces_key not in atoms.arrays.keys():
-            atoms.arrays[forces_key] = atoms.get_forces()
+            atoms.arrays[forces_key] = atoms.get_forces(apply_constraint=False)
     ase.io.write(file_name, alist)
 
 
