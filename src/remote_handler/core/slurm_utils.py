@@ -85,9 +85,10 @@ def validate_slurm_available(ssh_command, target, policy):
     except subprocess.CalledProcessError as exc:
         # An ssh-level failure is NOT a missing sbatch: `which sbatch` truly
         # absent exits 1 on the remote; ssh's own connect/auth failure exits
-        # 255. `is_connection_error` also matches known stderr markers (e.g.
-        # an expired step "certificate").
-        if resilience.is_connection_error(exc) or exc.returncode == 255:
+        # 255, which `is_connection_error` treats as transient outright (it
+        # also matches known stderr markers, e.g. an expired step
+        # "certificate").
+        if resilience.is_connection_error(exc):
             raise RemoteConnectionError(
                 f"Cannot reach {target} to probe SLURM (ssh exit "
                 f"{exc.returncode}). The credential may have expired -- "
