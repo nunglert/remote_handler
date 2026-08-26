@@ -30,9 +30,9 @@ class FakeClock:
         return self.t
 
 
-def _calledproc(stderr):
+def _calledproc(stderr, returncode=255):
     return subprocess.CalledProcessError(
-        returncode=255, cmd="ssh host '...'", stderr=stderr
+        returncode=returncode, cmd="ssh host '...'", stderr=stderr
     )
 
 
@@ -65,8 +65,15 @@ def test_connection_errors_are_classified_transient(exc):
 @pytest.mark.parametrize(
     "exc",
     [
-        _calledproc("sbatch: error: invalid partition specified"),
-        _calledproc("slurm_load_jobs error: Invalid job id specified"),
+        # Genuine remote-command failures exit with *their own* code, passed
+        # through by ssh unmangled -- never ssh's reserved 255 -- so these
+        # must stay non-transient.
+        _calledproc(
+            "sbatch: error: invalid partition specified", returncode=1
+        ),
+        _calledproc(
+            "slurm_load_jobs error: Invalid job id specified", returncode=1
+        ),
         FileNotFoundError("no such file"),  # OSError ENOENT must NOT loop
         ValueError("nonsense"),
         KeyError("x"),
@@ -74,6 +81,28 @@ def test_connection_errors_are_classified_transient(exc):
 )
 def test_real_errors_are_not_transient(exc):
     assert is_connection_error(exc) is False
+
+
+def test_returncode_255_is_transient_even_with_unmatched_stderr():
+    """Regression: ssh reserves exit 255 for its own connect/auth failures
+    (a remote command's exit status is passed through unmangled, and
+    legitimate SLURM tools don't use 255) -- so a 255 must be classified
+    transient even when the stderr text doesn't match any known marker.
+    This is exactly what let a live ``squeue`` poll crash a
+    ``resilient_connection=True`` cluster instead of pausing and retrying:
+    the connection dropped with wording the marker list didn't anticipate."""
+    exc = _calledproc(
+        "some unrecognised firewall/NAT wording never seen before",
+        returncode=255,
+    )
+    assert is_connection_error(exc) is True
+
+
+def test_returncode_255_is_transient_even_with_empty_stderr():
+    """Regression: the connection can die mid-write and leave ``stderr``
+    empty, which must not be misread as a clean, genuine failure."""
+    exc = _calledproc("", returncode=255)
+    assert is_connection_error(exc) is True
 
 
 def test_calledprocesserror_with_bytes_stderr():
@@ -158,6 +187,34 @@ def test_enabled_retries_a_hung_ssh_timeout():
 
     assert run_resilient(fn, policy) == "done"
     assert clock.sleeps == [10, 10]  # paused on each hang, then recovered
+
+
+def test_enabled_retries_past_unrecognized_255_squeue_failure():
+    """Regression for the real incident: a ``resilient_connection=True``
+    cluster (e.g. musica) still crashed on a ``squeue`` poll that returned
+    exit 255 with stderr the marker list didn't recognize, because
+    ``is_connection_error`` only trusted the stderr text. It must now pause
+    and retry on the bare 255 and succeed once the connection recovers."""
+    clock = FakeClock()
+    policy = ConnectionPolicy(
+        enabled=True,
+        poll_interval=10,
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+    state = {"n": 0}
+
+    def fn():
+        if state["n"] < 2:
+            state["n"] += 1
+            raise _calledproc(
+                "some unrecognised firewall/NAT wording never seen before",
+                returncode=255,
+            )
+        return "squeue output"
+
+    assert run_resilient(fn, policy) == "squeue output"
+    assert clock.sleeps == [10, 10]
 
 
 def test_enabled_non_connection_error_propagates_without_pausing():
