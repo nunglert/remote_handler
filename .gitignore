@@ -2,6 +2,7 @@
 experiments*
 *.egg-info
 .vscode*
+build/
 
 # coverage / pytest artifacts
 .coverage

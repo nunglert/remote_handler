@@ -67,7 +67,12 @@ def resolve_conda(conda_source: str) -> CondaEnv:
     if "micromamba" in source:
         return CondaEnv(
             "micromamba",
-            'eval "$(micromamba shell hook --shell bash)"',
+            # ${MAMBA_EXE:-micromamba}: standalone-mamba installs (e.g. a
+            # Miniforge/`micromamba`-installer setup where the binary itself
+            # is named ``mamba``, not ``micromamba``) export $MAMBA_EXE
+            # pointing at the real binary; fall back to the literal name for
+            # a genuine micromamba install where it's unset.
+            'eval "$(${MAMBA_EXE:-micromamba} shell hook --shell bash)"',
             Path(source),
         )
     if "bin/activate" in source:
@@ -217,5 +222,16 @@ def conda_activation_script(conda_source, conda_env) -> str:
         )
         return ""
     if spec.kind == "micromamba":
-        return f"{spec.activate_source}\nmicromamba activate {env}\n"
+        # The hook binds its shell function to the *basename* of the binary
+        # that generated it (e.g. "mamba" for a standalone-mamba install
+        # where $MAMBA_EXE points at a binary literally named `mamba`, not
+        # `micromamba`) -- and bash only does function lookup for a bare
+        # command name, never a `/`-qualified path, so the activate call
+        # must reuse that exact bare name rather than invoking $MAMBA_EXE
+        # (a full path) directly.
+        return (
+            'MAMBA_BIN="$(basename "${MAMBA_EXE:-micromamba}")"\n'
+            'eval "$("$MAMBA_BIN" shell hook --shell bash)"\n'
+            f'"$MAMBA_BIN" activate {env}\n'
+        )
     return f"source {spec.activate_source}\nconda activate {env}\n"

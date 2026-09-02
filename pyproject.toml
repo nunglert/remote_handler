@@ -71,6 +71,14 @@ clinamen = [
 quests = [
     "quests>=2025.9.29"
 ]
+# OVITO, for interface/surface-normal detection in the amorphous matrix
+# embedding payload (scripts/embedding/surface_mesh.py). Only needed on the
+# remote env running scripts/embedding/extract.py with
+# topology_mode in {"surface", "interface"}; "bulk" mode needs no OVITO, and
+# the fallback species-COM heuristic is used if this extra is absent.
+embedding = [
+    "ovito"
+]
 # NeuralIL force-field training (remote-side payload
 # `remote_handler.scripts.neuralil.train_model`, run by `NeuralilILTrainer`).
 # This payload no longer depends on `jaxnest` -- the small closure it used is
@@ -109,8 +117,10 @@ where = ["src"]
 # Ship the built-in SLURM job templates inside the installed package; without
 # this they are missing from a real (non-editable) install and find_template()
 # fails at runtime. (Editable installs mask this by pointing back at src/.)
+# scripts/lammps/templates/*.j2 ships the default amorphous-embedding anneal
+# deck (AmorphousEmbeddingSampler) the same way.
 [tool.setuptools.package-data]
-remote_handler = ["templates/*.j2"]
+remote_handler = ["templates/*.j2", "scripts/lammps/templates/*.j2"]
 
 
 [tool.pytest.ini_options]
