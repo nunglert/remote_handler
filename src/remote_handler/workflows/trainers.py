@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import yaml
 
 from remote_handler.core import remote_env
 from remote_handler.core.cluster_handler import ClusterConfig
@@ -58,6 +59,38 @@ def _resolve_mace_train_runner(remote_fs, cluster_config):
             "explicitly."
         )
     logger.info("Resolved remote MACE run_train.py: %s", path)
+    return path
+
+
+def _resolve_executable_train_runner(
+    remote_fs, cluster_config, executable, extra_name
+):
+    """Locate a CLI training tool's executable in the *remote* conda env.
+
+    The CLI-tool counterpart of :func:`_resolve_mace_train_runner`: ACE
+    (``pacemaker``) and GRACE (``gracemaker``) ship as bare console scripts
+    rather than importable python modules, so their runner is probed via
+    :func:`remote_env.resolve_remote_executable` instead of a module import.
+
+    Args:
+        executable: The console script's name (e.g. ``"pacemaker"``).
+        extra_name: This package's optional-dependency extra that installs
+            it (e.g. ``"ace"``), named in the error message.
+    """
+    path = remote_env.resolve_remote_executable(
+        remote_fs,
+        getattr(cluster_config, "conda_source", ""),
+        getattr(cluster_config, "conda_env", ""),
+        executable,
+    )
+    if not path:
+        env = getattr(cluster_config, "conda_env", "") or "(ambient)"
+        raise ConfigurationError(
+            f"Could not locate '{executable}' in the remote conda env "
+            f"'{env}'. Install it there (e.g. pip install '.[{extra_name}]'"
+            "), or pass the runner path explicitly."
+        )
+    logger.info("Resolved remote %s: %s", executable, path)
     return path
 
 
@@ -513,6 +546,389 @@ class MaceFinetuningTrainer(_MaceArrayTrainer):
                     {"config": mock_model, "params": b"", "head": None}, f
                 )
         return jax_path
+
+
+class _EnsembleArrayTrainer(ModelTrainer):
+    """Shared machinery for training an ensemble of models via array jobs.
+
+    A generic sibling of ``_MaceArrayTrainer``: same array-job orchestration
+    (submit ``num_models`` independently-seeded jobs, poll, collect one
+    artifact per job from ``calcdirs/*/models/``, skipping non-job entries),
+    but without the MACE-specific torch -> mace-jax conversion, and
+    resolving its training executable as a bare CLI console script (via
+    :func:`_resolve_executable_train_runner`) rather than a python module.
+
+    Kept independent of ``_MaceArrayTrainer`` on purpose -- rather than
+    generalising it in place -- so the existing, tested MACE trainers are
+    left completely untouched by this addition. ``_AceArrayTrainer`` and
+    ``_GraceArrayTrainer`` are the concrete subclasses; ``AceModelTrainer``/
+    ``GraceModelTrainer`` are their trivial public names, mirroring how
+    ``MaceModelTrainer`` sits over ``_MaceArrayTrainer``.
+    """
+
+    # Per-subclass constants -------------------------------------------------
+    _script_name = "training.py"  # shipped payload; subclasses override
+    _script_subdir = ""  # e.g. "ace", "grace"; subclasses override
+    _jobname = "train"  # SLURM job name
+    _tool_label = "Ensemble"  # e.g. "ACE", "GRACE"; used in log/error text
+    _participle = "trained"  # "No models were successfully {participle}"
+
+    def __init__(
+        self,
+        remote_fs: FileSystemHandlerBase,
+        cluster_config: ClusterConfig,
+        config_file: os.PathLike,
+        training_script: Optional[os.PathLike] = None,
+        remote_train_runner: Optional[os.PathLike] = None,
+        num_models: int = 5,
+        validation_fraction: float = 0.1,
+        remote_savepath: Optional[os.PathLike] = None,
+        loop_time: float = 30,
+        stub: bool = False,
+        n_processors: int = 1,
+    ):
+        super().__init__()
+        if training_script is None:
+            training_script = (
+                _SCRIPTS_DIR / self._script_subdir / self._script_name
+            )
+        self.training_script = training_script
+        self.remote_fs = remote_fs
+        self.cluster_config = cluster_config
+        self.config_file = config_file
+        self.num_models = num_models
+        self.validation_fraction = validation_fraction
+        self.remote_train_runner = remote_train_runner
+        self.remote_savepath = remote_savepath
+        self.loop_time = loop_time
+        self.stub = stub
+        # Resources per training job; for GPU templates this is the GPU count
+        # (``--gres=gpu:n``). One model per job -> one GPU by default.
+        self.n_processors = n_processors
+        self.model_name = "Model"  # Default model name
+
+    # Hooks subclasses override --------------------------------------------
+    def _resolve_train_runner(self) -> str:
+        """Locate the remote training executable. Implemented per tool."""
+        raise NotImplementedError
+
+    def _extra_shared_input(self) -> dict:
+        """Extra keys merged into the remote script's shared input JSON."""
+        return {}
+
+    def _extra_shared_resources(self) -> list:
+        """Extra files staged into the shared resource dir (after config)."""
+        return []
+
+    def _artifact_name(self) -> str:
+        """Per-job filename/dirname, under ``models/``, handed to the next
+        sampler. Implemented per tool."""
+        raise NotImplementedError
+
+    def _stub_model_dict(self) -> dict:
+        """Mock model payload written by stub mode."""
+        return {
+            "model_type": self._tool_label,
+            "seed": np.random.randint(1e6),
+            "training_loss": np.random.uniform(0.01, 0.05),
+            "validation_loss": np.random.uniform(0.02, 0.08),
+        }
+
+    def _serialize_stub_model(self, model_dict: dict, path: Path) -> None:
+        """Write the stub model payload to ``path``. Default: pickle it.
+
+        Overridden where the real artifact isn't a pickle (ACE's is a YAML
+        file, GRACE's is a directory).
+        """
+        with open(path, "wb") as f:
+            pickle.dump(model_dict, f)
+
+    # Shared implementation -------------------------------------------------
+    def update(
+        self, calcdir: Path, trainer_input: Path | list[Path], **kwargs
+    ) -> None:
+        """Prepare the trainer for a new iteration.
+
+        Args:
+            calcdir: Directory for this AL iteration
+            trainer_input: Path(s) to database files with training data
+            **kwargs: Additional parameters
+        """
+        self.train_dir = calcdir / "train"
+        self.results_dir = self.train_dir / "results"
+        os.makedirs(self.train_dir, exist_ok=True)
+
+        self.db_files = (
+            [trainer_input]
+            if isinstance(trainer_input, Path)
+            else trainer_input
+        )
+
+        # In stub mode, we don't need to create the task
+        if self.stub:
+            return
+
+        # Auto-resolve the remote training executable if not given.
+        if self.remote_train_runner is None:
+            self.remote_train_runner = self._resolve_train_runner()
+
+        # Shared resources live in rootpath/, but scripts run in a subdir of
+        # it; reference them via SHARED_RESOURCE_PREFIX so each script resolves
+        # them relative to its own calcpath.
+        script_input_shared = {
+            "database_files": [
+                f"{SHARED_RESOURCE_PREFIX}/{Path(p).name}"
+                for p in self.db_files
+            ],
+            "config_file": (
+                f"{SHARED_RESOURCE_PREFIX}/{Path(self.config_file).name}"
+            ),
+            "model_name": self.model_name,
+            "validation_fraction": self.validation_fraction,
+            "train_runner": Path(self.remote_train_runner).as_posix(),
+            **self._extra_shared_input(),
+        }
+
+        # Create individual input files with different seeds
+        individual_resources = [
+            [
+                DictJSON(
+                    content=script_input_shared
+                    | {"seed": np.random.randint(1e6)},
+                    filename="input_train.json",
+                    remote_fs=self.remote_fs,
+                )
+                for i in range(self.num_models)
+            ]
+        ]
+
+        self.training_task = ArrayScriptTask(
+            cluster_config=self.cluster_config,
+            local_savepath=self.results_dir,
+            remote_fs=self.remote_fs,
+            python_script_file=self.training_script,
+            individual_ressources=individual_resources,
+            shared_ressources=(
+                [self.config_file]
+                + self._extra_shared_resources()
+                + self.db_files
+            ),
+            logfile="train.log",
+            remote_savepath=self.remote_savepath,
+            collect_only=False,
+            num_parallel=min(self.num_models, 5),
+            loop_time=self.loop_time,
+            jobname=self._jobname,
+            n_processors=self.n_processors,
+        )
+
+        self.training_task.allocate_data()
+
+    def _create_stub_outputs(self) -> list[Path]:
+        """Create mock per-job model artifacts for testing."""
+        logger.info(
+            f"Creating {self.num_models} stub {self._tool_label} models"
+        )
+
+        calcdirs = self.results_dir / "calcdirs"
+        os.makedirs(calcdirs, exist_ok=True)
+
+        model_paths = []
+        for i in range(self.num_models):
+            model_dir = calcdirs / f"job_{i}" / "models"
+            os.makedirs(model_dir, exist_ok=True)
+
+            artifact_path = model_dir / self._artifact_name()
+            mock_model = self._stub_model_dict()
+            self._serialize_stub_model(mock_model, artifact_path)
+            model_paths.append(artifact_path)
+            logger.info(f"Created stub model: {artifact_path}")
+
+        return model_paths
+
+    def get_trained_model(self) -> list[Path]:
+        """Run the array job and collect the per-model artifacts.
+
+        Raises:
+            WorkflowError: If the job left no ``is_finished.info`` marker, or
+                no model artifacts were produced.
+        """
+        if self.stub:
+            logger.info(
+                f"Running in stub mode - creating mock {self._tool_label} models"
+            )
+            return self._create_stub_outputs()
+
+        self.training_task.submit()
+        if not self.training_task.finish_check():
+            raise WorkflowError(
+                f"{self._tool_label} training did not finish successfully "
+                "(one or more array tasks left no is_finished.info marker). "
+                f"Check the training logs in: {self.results_dir}"
+            )
+        self.training_task.collect_results()
+
+        artifact = self._artifact_name()
+        model_paths = []
+        for calcpath in grep(str(self.results_dir / "calcdirs"), ""):
+            models_dir = Path(calcpath) / "models"
+            # calcdirs/ also holds non-job entries (logs/, ...); only entries
+            # with a models/ subdir are real array-task dirs. Skip the rest
+            # silently -- warning for them is noise -- but still warn for a
+            # genuine job dir missing its artifact.
+            if not models_dir.is_dir():
+                continue
+            model_path = models_dir / artifact
+            if model_path.exists():
+                model_paths.append(model_path)
+            else:
+                logger.warning(f"Model not found at {model_path}")
+
+        if not model_paths:
+            raise WorkflowError(
+                f"No models were successfully {self._participle}\n"
+                f"Check training logs in: {self.results_dir}"
+            )
+
+        logger.info(f"Collected {len(model_paths)} {self._participle} models")
+        return model_paths
+
+
+class _AceArrayTrainer(_EnsembleArrayTrainer):
+    """Ensemble trainer for ACE potentials, fit with ``pacemaker``."""
+
+    _script_name = "ace_training.py"
+    _script_subdir = "ace"
+    _jobname = "ace_train"
+    _tool_label = "ACE"
+    _participle = "trained"
+
+    def _resolve_train_runner(self) -> str:
+        return _resolve_executable_train_runner(
+            self.remote_fs, self.cluster_config, "pacemaker", "ace"
+        )
+
+    def _artifact_name(self) -> str:
+        # pacemaker's B-basis potential -- a single YAML file.
+        return f"{self.model_name}.yaml"
+
+    def _stub_model_dict(self) -> dict:
+        return {
+            "model_type": "ACE",
+            "seed": np.random.randint(1e6),
+            "cutoff": 5.0,
+            "embeddings": 9,
+            "training_loss": np.random.uniform(0.01, 0.05),
+            "validation_loss": np.random.uniform(0.02, 0.08),
+        }
+
+    def _serialize_stub_model(self, model_dict: dict, path: Path) -> None:
+        with open(path, "w") as f:
+            yaml.safe_dump(model_dict, f)
+
+
+class _GraceArrayTrainer(_EnsembleArrayTrainer):
+    """Ensemble trainer for GRACE potentials, fit with ``gracemaker``."""
+
+    _script_name = "grace_training.py"
+    _script_subdir = "grace"
+    _jobname = "grace_train"
+    _tool_label = "GRACE"
+    _participle = "trained"
+
+    def _resolve_train_runner(self) -> str:
+        return _resolve_executable_train_runner(
+            self.remote_fs, self.cluster_config, "gracemaker", "grace"
+        )
+
+    def _artifact_name(self) -> str:
+        # gracemaker's output is a directory (model.yaml + checkpoints/), not
+        # a single file.
+        return self.model_name
+
+    def _stub_model_dict(self) -> dict:
+        return {
+            "model_type": "GRACE",
+            "seed": np.random.randint(1e6),
+            "cutoff": 5.0,
+            "n_layers": 1,
+            "training_loss": np.random.uniform(0.01, 0.05),
+            "validation_loss": np.random.uniform(0.02, 0.08),
+        }
+
+    def _serialize_stub_model(self, model_dict: dict, path: Path) -> None:
+        path.mkdir(parents=True, exist_ok=True)
+        with open(path / "model.yaml", "w") as f:
+            yaml.safe_dump(model_dict, f)
+        os.makedirs(path / "checkpoints", exist_ok=True)
+
+
+class AceModelTrainer(_AceArrayTrainer):
+    """
+    Trainer for ACE (Atomic Cluster Expansion) models, fit with ``pacemaker``
+    (https://github.com/ICAMS/python-ace) using array script tasks.
+
+    Trains multiple ACE potentials in parallel using different random seeds,
+    mirroring ``MaceModelTrainer``. Supports stub mode for testing without
+    actual training. pacemaker (the ``python-ace``/``pyace`` package) is
+    typically installed via conda-forge or built from source, since it ships
+    compiled C++ extensions -- see the ``ace`` optional-dependency extra.
+
+    Args:
+        remote_fs: FileSystemHandlerBase for the machine where training runs
+        config_file: Path to a YAML config with pacemaker's ``potential``/
+            ``fit``/``backend`` sections (no ``data``/``seed`` needed there
+            -- those are injected per job)
+        training_script: Remote payload; defaults to the shipped
+            ``ace/ace_training.py``.
+        remote_train_runner: Path to the ``pacemaker`` executable on the
+            remote machine. Optional -- if omitted, it is resolved
+            automatically by probing the remote conda env's PATH.
+        num_models: Number of models to train per generation
+        validation_fraction: Fraction of data pacemaker splits off as its own
+            internal test set
+        remote_savepath: Path on remote machine for calculation files
+        loop_time: Interval (seconds) to poll for job completion
+        stub: If True, creates mock model outputs without training
+    """
+
+    # Behaviour is entirely the base default (script ace_training.py,
+    # jobname "ace_train"); this subclass only fixes the public name and
+    # documentation.
+
+
+class GraceModelTrainer(_GraceArrayTrainer):
+    """
+    Trainer for GRACE (Graph Atomic Cluster Expansion) models, fit with
+    ``gracemaker`` (https://github.com/ICAMS/grace-tensorpotential) using
+    array script tasks.
+
+    Trains multiple GRACE potentials in parallel using different random
+    seeds, mirroring ``MaceModelTrainer``. Supports stub mode for testing
+    without actual training. gracemaker is installed via the ``grace``
+    optional-dependency extra (the ``tensorpotential`` package).
+
+    Args:
+        remote_fs: FileSystemHandlerBase for the machine where training runs
+        config_file: Path to a YAML config with gracemaker's ``cutoff``/
+            ``potential``/``fit`` sections (no ``data``/``seed`` needed there
+            -- those are injected per job)
+        training_script: Remote payload; defaults to the shipped
+            ``grace/grace_training.py``.
+        remote_train_runner: Path to the ``gracemaker`` executable on the
+            remote machine. Optional -- if omitted, it is resolved
+            automatically by probing the remote conda env's PATH.
+        num_models: Number of models to train per generation
+        validation_fraction: Fraction of data gracemaker splits off as its
+            own internal test set
+        remote_savepath: Path on remote machine for calculation files
+        loop_time: Interval (seconds) to poll for job completion
+        stub: If True, creates mock model outputs without training
+    """
+
+    # Behaviour is entirely the base default (script grace_training.py,
+    # jobname "grace_train"); this subclass only fixes the public name and
+    # documentation.
 
 
 class NeuralilILTrainer(DetachableTaskMixin, ModelTrainer):

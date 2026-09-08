@@ -68,9 +68,34 @@ mace_jax = [
 steinhardt = [
     "jax>=0.9.0",
 ]
+# pacemaker (the ACE fitting tool, repo name "python-ace") is not published
+# on PyPI under any usable name: "pip install pacemaker"/"pyace" both exist
+# on PyPI but are unrelated packages (a rate-limiting helper and a chord-
+# estimation library, respectively). The real package declares its own name
+# as "pyace" (see its setup.py) even though the repo is "python-ace" -- pip
+# requires the two to match for a direct URL requirement, hence the name
+# below. Tracks master rather than the "0.2.8" tag: 0.2.8's vendored
+# pybind11 predates CPython 3.11's opaque frame-object layout and fails to
+# compile there ("invalid use of incomplete type 'PyFrameObject'"); master
+# builds fine on 3.11+. (Note: master's ``bin/pacemaker`` has had a latent
+# bug since Nov 2023 -- commit 29ba519 dropped the ``--query-data`` argparse
+# flag but left two ``args_parse.query_data`` reads behind, crashing with
+# ``AttributeError`` -- but it only fires when the input YAML omits a
+# ``backend`` section, which ``ace_utils.merge_ace_config_with_paths``
+# always supplies, so it's avoided rather than hit.) It ships compiled C++
+# extensions built via CMake, so this also needs cmake + a C++ compiler
+# (and see that repo's README for the optional maxvolpy sub-install); it is
+# not pip-installable as a plain version pin the way the other extras are,
+# and conda-forge is the more common install route.
+ace = [
+    "pyace @ git+https://github.com/ICAMS/python-ace.git",
+]
+grace = [
+    "tensorpotential>=0.6.1",
+]
 
 all = [
-    "remote_handler[dev,mace_freeze,quests,neuralil,mace_jax,steinhardt]"
+    "remote_handler[dev,mace_freeze,quests,neuralil,mace_jax,steinhardt,grace,ace]"
 ]
 
 [project.scripts]
