@@ -142,6 +142,56 @@ class TestAtomsShardManagerCombineTrajs:
         assert result[0].info["iteration_index"] == 0  # 0 * 3
         assert result[1].info["iteration_index"] == 3  # 1 * 3
 
+    def test_combine_trajs_bare_slice(self):
+        """A default slice(None, None, None) must not crash.
+
+        Regression test: when ``every``/``start``/``end`` are all left at
+        their default of ``None`` (as VASPHandler & friends do), ``indices``
+        is ``slice(None, None, None)``. iteration_index used to compute
+        ``iteration_idx * indices.step`` -> ``int * None`` -> TypeError.
+        """
+        mock_fs = MagicMock()
+
+        atoms1 = Atoms("H2O", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]])
+        atoms2 = Atoms("H2O", positions=[[0, 0, 1], [1, 0, 1], [0, 1, 1]])
+        mock_fs.read_ase.return_value = [atoms1, atoms2]
+
+        manager = AtomsShardManager(
+            traj_files=["traj.extxyz"],
+            shard_size=5,
+            indices=slice(None, None, None),
+        )
+
+        result = manager.combine_trajs(
+            ["traj.extxyz"], slice(None, None, None), mock_fs
+        )
+
+        # step defaults to 1, start defaults to 0
+        assert result[0].info["iteration_index"] == 0
+        assert result[1].info["iteration_index"] == 1
+
+    def test_combine_trajs_with_start_offset(self):
+        """iteration_index must account for a non-None start offset."""
+        mock_fs = MagicMock()
+
+        atoms1 = Atoms("H2O", positions=[[0, 0, 0], [1, 0, 0], [0, 1, 0]])
+        atoms2 = Atoms("H2O", positions=[[0, 0, 1], [1, 0, 1], [0, 1, 1]])
+        mock_fs.read_ase.return_value = [atoms1, atoms2]
+
+        manager = AtomsShardManager(
+            traj_files=["traj.extxyz"],
+            shard_size=5,
+            indices=slice(5, None, 2),
+        )
+
+        result = manager.combine_trajs(
+            ["traj.extxyz"], slice(5, None, 2), mock_fs
+        )
+
+        # start + iteration_idx * step
+        assert result[0].info["iteration_index"] == 5  # 5 + 0 * 2
+        assert result[1].info["iteration_index"] == 7  # 5 + 1 * 2
+
 
 class TestAtomsShardManagerReadAndShard:
     """Test reading and sharding logic."""

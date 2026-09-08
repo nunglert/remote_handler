@@ -21,7 +21,7 @@ def register(name, run, schema=None):
     """Add (or override) a processor in the registry.
 
     The extension point for downstream packages: a package that depends on both
-    remote_handler and, say, jaxrens can register its own ``steinhardt``
+    remote_handler and some heavier upstream can register its own custom
     processor here. Call this at module import time and define the matching
     host-side ``Processor`` subclass in the *same module* -- its
     ``registration_module`` then defaults to that module, and the stock driver

@@ -15,7 +15,7 @@ flatten it automatically.
 Example:
     >>> from remote_handler.workflows.selectors import StrideSelector
     >>> selector = StrideSelector(n_configs=20)
-    >>> sampler = TorchSimSampler(..., selector=selector)
+    >>> # pass the selector to your sampler, e.g. sampler(..., selector=...)
 
     >>> from remote_handler.workflows.selectors import QUESTSSelector
     >>> selector = QUESTSSelector(n_configs=20, method="msc")
@@ -168,6 +168,38 @@ class UniformSelector(StrideSelector):
             stacklevel=2,
         )
         super().__init__(n_configs)
+
+
+class RandomSelector(ConfigSelector):
+    """Select configurations at random with an equal probability.
+
+    When given grouped input (``list[list[Atoms]]``), returns a random
+    sample of ``n_configs`` from each inner list (e.g., one random frame
+    from each trajectory/replica).
+
+    When given a flat list, returns a random sample of ``n_configs`` from
+    it.
+    """
+
+    def __init__(self, n_configs: int):
+        self.n_configs = n_configs
+
+    def select(
+        self, configs: Configs, reference: list[Atoms] | None = None
+    ) -> list[Atoms]:
+        flat = _flatten(configs)
+        n_total = len(flat)
+        if n_total == 0:
+            logger.warning("RandomSelector: received empty config list")
+            return []
+
+        indices = np.random.choice(n_total, self.n_configs, replace=False)
+        selected = [flat[i] for i in indices]
+        logger.info(
+            f"RandomSelector: selected {len(selected)} from "
+            f"{n_total} configs"
+        )
+        return selected
 
 
 class UncertaintySelector(ConfigSelector):

@@ -10,7 +10,11 @@ from jinja2 import Environment, FileSystemLoader
 
 from remote_handler.config import get_config
 from remote_handler.core import remote_env, resilience
-from remote_handler.exceptions import TaskError
+from remote_handler.exceptions import (
+    DependencyError,
+    RemoteConnectionError,
+    TaskError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +47,59 @@ def _run_ssh(cmd: str, policy: resilience.ConnectionPolicy):
         policy,
         label=f"ssh command ({cmd[:60]}...)",
     )
+
+
+def validate_slurm_available(ssh_command, target, policy):
+    """Probe that ``sbatch`` is available on the target system.
+
+    Runs ``which sbatch`` through the same resilient wrapper as
+    :func:`submit_job` / the status checks: with an enabled ``policy`` an
+    expired/lost credential pauses-and-retries here instead of crashing, and
+    ``policy.command_timeout`` still bounds a hung ssh.
+
+    Args:
+        ssh_command: The ``ssh <alias>`` prefix, or ``None`` to probe the
+            local machine.
+        target: Human-readable name of the machine, for error messages.
+        policy: The cluster's :class:`resilience.ConnectionPolicy`.
+
+    Raises:
+        RemoteConnectionError: The probe failed at the ssh level (expired
+            cert, auth, unreachable host) -- ``which sbatch`` truly absent
+            exits 1 on the remote, whereas ssh's own connect/auth failure
+            exits 255.
+        DependencyError: ``sbatch`` is genuinely missing, or a bounded probe
+            timed out.
+    """
+    cmd = "which sbatch"
+    if ssh_command is not None:
+        cmd = f"{ssh_command} '{cmd}'"
+    try:
+        _run_ssh(cmd, policy)
+    except subprocess.TimeoutExpired:
+        raise DependencyError(
+            f"Timed out probing SLURM on {target}: the ssh connection did "
+            "not respond. The credential may have expired -- refresh it "
+            "(e.g. run `step ssh login` on the driver host) and retry."
+        )
+    except subprocess.CalledProcessError as exc:
+        # An ssh-level failure is NOT a missing sbatch: `which sbatch` truly
+        # absent exits 1 on the remote; ssh's own connect/auth failure exits
+        # 255, which `is_connection_error` treats as transient outright (it
+        # also matches known stderr markers, e.g. an expired step
+        # "certificate").
+        if resilience.is_connection_error(exc):
+            raise RemoteConnectionError(
+                f"Cannot reach {target} to probe SLURM (ssh exit "
+                f"{exc.returncode}). The credential may have expired -- "
+                "refresh it (e.g. run `step ssh login`). Set "
+                "resilient_connection=True on this cluster to pause-and-"
+                "retry instead of failing."
+            ) from exc
+        raise DependencyError(
+            f"SLURM is not available on {target}: 'sbatch' not found.\n"
+            "Ensure SLURM is installed and accessible in PATH."
+        )
 
 
 def submit_job(
@@ -290,6 +347,7 @@ def get_array_slurm_str(
     slurm_header_add="",
     per_task=1,
     time_limit=None,
+    memory=None,
 ):
     """
     Get the SLURM script for an array job as a string.
@@ -338,6 +396,7 @@ def get_array_slurm_str(
         job_type_template=job_type_template,
         per_task=per_task,
         time_limit=time_limit,
+        memory=memory,
     )
 
     return slurm_str
@@ -356,6 +415,7 @@ def get_slurm_str(
     slurm_header_add="",
     exclude_nodes: str = None,
     time_limit=None,
+    memory=None,
 ):
     """
     Get the SLURM script as a string.
@@ -396,6 +456,7 @@ def get_slurm_str(
         job_type_template=job_type_template,
         exclude_nodes=exclude_nodes,
         time_limit=time_limit,
+        memory=memory,
     )
 
     return slurm_str

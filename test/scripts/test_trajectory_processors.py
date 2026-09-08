@@ -1,8 +1,10 @@
 """Unit tests for the owned trajectory processors (no jaxnest needed).
 
 The RDF and the LBFGS relaxation are dependency-light glue owned by
-remote_handler (the NNFF calculator comes from neuralil-jaxrens and Steinhardt
-from a downstream package, so neither is exercised here). Runs against ASE only.
+remote_handler (the NNFF calculator comes from neuralil-jaxrens, so it is not
+exercised here). Steinhardt is now a built-in too, but its jax-backed compute is
+covered separately in ``test_steinhardt.py``; here we only assert it registers.
+Runs against ASE only.
 """
 
 import importlib
@@ -32,24 +34,24 @@ def _import_registration_modules(modules):
 
 
 def test_registry_has_builtin_steps():
-    # Steinhardt moved downstream (it needs jaxrens); the built-ins are the
-    # dependency-light ones plus the NNFF optimizer.
-    assert set(REGISTRY) == {"optimize", "rdf"}
+    # The built-ins: the dependency-light RDF, the NNFF optimizer, and the
+    # (jax-backed, lazy-imported) Steinhardt order-parameter processor.
+    assert set(REGISTRY) == {"optimize", "rdf", "steinhardt"}
 
 
 def test_register_adds_downstream_processor():
-    """Downstream packages plug in via register() (e.g. their steinhardt)."""
+    """Downstream packages plug in via register() under their own name."""
     sentinel = object()
 
     def _fake(atoms_list, args, calcpath=None):
         return sentinel
 
     try:
-        register("steinhardt", _fake)
-        assert REGISTRY["steinhardt"] is _fake
-        assert REGISTRY["steinhardt"]([], {}) is sentinel
+        register("my_downstream", _fake)
+        assert REGISTRY["my_downstream"] is _fake
+        assert REGISTRY["my_downstream"]([], {}) is sentinel
     finally:
-        REGISTRY.pop("steinhardt", None)
+        REGISTRY.pop("my_downstream", None)
 
 
 def test_driver_import_step_registers_downstream(tmp_path):

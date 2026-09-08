@@ -5,6 +5,7 @@ from pathlib import Path
 from remote_handler.scripts.input_models import MaceTrainingInput
 from remote_handler.scripts.mace.mace_utils import (
     combine_databases,
+    maybe_convert_to_jax,
     run_training_from_config,
     split_db,
 )
@@ -41,6 +42,16 @@ run_training_from_config(
     valid_file=valid_path,
     train_runner=input_config.train_runner,
     storage_dir=calcpath,
+    logger=logging.getLogger(),
+)
+
+# Optionally convert the trained torch model to a mace-jax bundle, in the same
+# job/env (so torch-mace + mace-jax must both be installed there).
+maybe_convert_to_jax(
+    calcpath,
+    input_config.model_name,
+    input_config.convert_to_jax,
+    input_config.jax_output_format,
     logger=logging.getLogger(),
 )
 

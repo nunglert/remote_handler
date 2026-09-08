@@ -15,6 +15,8 @@ import ase.io
 import numpy as np
 import pytest
 from ase import Atoms
+from ase.calculators.singlepoint import SinglePointCalculator
+from ase.constraints import FixAtoms
 
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import LocalFileSystem
@@ -83,6 +85,24 @@ def test_emt_evaluator_runs_locally(tmp_path, direct_python_on_path):
         assert "REF_energy" in at.info
         assert np.isfinite(at.info["REF_energy"])
         assert at.arrays["REF_forces"].shape == (len(at), 3)
+
+
+def test_collect_results_preserves_forces_on_constrained_atoms(tmp_path):
+    results_dir = tmp_path / "results"
+    calcdir = results_dir / "calcdirs" / "0"
+    calcdir.mkdir(parents=True)
+    atoms = Atoms("Cu2", positions=[[0, 0, 0], [2.55, 0, 0]])
+    atoms.set_constraint(FixAtoms(indices=[0]))
+    forces = np.array([[0.1, 0.2, 0.3], [-0.1, -0.2, -0.3]])
+    atoms.calc = SinglePointCalculator(atoms, energy=-1.0, forces=forces)
+    ase.io.write(calcdir / "dft_dft.extxyz", atoms)
+
+    evaluator = object.__new__(EMTEvaluator)
+    evaluator.results_dir = results_dir
+
+    collected = evaluator._collect_results()
+
+    np.testing.assert_allclose(collected[0].arrays["REF_forces"], forces)
 
 
 def test_emt_evaluator_stub(tmp_path):

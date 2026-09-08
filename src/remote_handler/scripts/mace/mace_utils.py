@@ -73,7 +73,7 @@ def write_with_keys(
         if energy_key not in atoms.info.keys():
             atoms.info[energy_key] = atoms.get_potential_energy()
         if forces_key not in atoms.arrays.keys():
-            atoms.arrays[forces_key] = atoms.get_forces()
+            atoms.arrays[forces_key] = atoms.get_forces(apply_constraint=False)
     ase.io.write(file_name, alist)
 
 
@@ -382,6 +382,57 @@ def convert_torch_model_to_jax_bundle(
         json.dumps(_serialize_for_json(config), indent=2)
     )
     return output_dir
+
+
+def maybe_convert_to_jax(
+    calcpath: pathlib.Path,
+    model_name: str,
+    convert_to_jax: bool,
+    jax_output_format: str = "pkl",
+    logger=None,
+) -> Optional[pathlib.Path]:
+    """Post-training hook: convert ``models/<model_name>.model`` to mace-jax.
+
+    Shared by the ``mace_training.py`` / ``mace_finetuning.py`` payloads so the
+    conversion step is declared once. Runs in the same job/env as training, so
+    that env needs both the torch MACE stack and ``mace-jax``.
+
+    Args:
+        calcpath: The array task's calc dir (holds ``models/``).
+        model_name: Name tag the trained model was written under.
+        convert_to_jax: No-op returning ``None`` when False.
+        jax_output_format: ``"pkl"`` (opaque single file) or ``"bundle"``
+            (a ``<model_name>-jax/`` directory with config.json +
+            params.msgpack, mace-jax's canonical format).
+
+    Returns:
+        Path to the written bundle, or ``None`` if no conversion was asked for.
+    """
+    if not convert_to_jax:
+        return None
+
+    models_dir = pathlib.Path(calcpath) / "models"
+    torch_model_path = models_dir / f"{model_name}.model"
+    if not torch_model_path.exists():
+        raise FileNotFoundError(
+            f"Trained model not found for conversion: {torch_model_path}"
+        )
+
+    if jax_output_format == "bundle":
+        jax_model_path = convert_torch_model_to_jax_bundle(
+            torch_model_path,
+            output_dir=models_dir / f"{model_name}-jax",
+        )
+    else:
+        jax_model_path = convert_torch_model_to_jax(
+            torch_model_path,
+            output_path=models_dir / f"{model_name}-jax.pkl",
+        )
+
+    (logger or logging.getLogger(__name__)).info(
+        f"Converted torch model to mace-jax bundle: {jax_model_path}"
+    )
+    return jax_model_path
 
 
 def generate_jax_foundation_model(

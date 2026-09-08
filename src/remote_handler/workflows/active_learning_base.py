@@ -244,15 +244,25 @@ def process_progress(
             # even if combine_trainer_output=False, trainer_output is needed for
             # the next generation's sampling
             if combine_sampler_outputs:
-                append_or_extend(
-                    progress[last_iteration_key]["sampler_output"],
-                    evaluator_in,
-                )
+                if "sampler_output" in progress[last_iteration_key].keys():
+                    append_or_extend(
+                        progress[last_iteration_key]["sampler_output"],
+                        evaluator_in,
+                    )
+                else:
+                    logger.warning(
+                        "No sampler_output found in the last iteration."
+                    )
             if combine_evaluator_outputs:
-                append_or_extend(
-                    progress[last_iteration_key]["evaluator_output"],
-                    trainer_in,
-                )
+                if "evaluator_output" in progress[last_iteration_key].keys():
+                    append_or_extend(
+                        progress[last_iteration_key]["evaluator_output"],
+                        trainer_in,
+                    )
+                else:
+                    logger.warning(
+                        "No evaluator_output found in the last iteration."
+                    )
             append_or_extend(
                 progress[last_iteration_key]["trainer_output"], sampler_in
             )

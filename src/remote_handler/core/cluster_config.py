@@ -10,7 +10,7 @@ from any single backend's handler code.
 import json
 import logging
 import os
-from dataclasses import dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Optional
 
@@ -36,6 +36,11 @@ class ClusterConfig:
         remote_machine: SSH alias or hostname of the remote machine
         partition: SLURM partition name to submit jobs to (SLURM backend only)
         conda_env: Name of the conda environment to activate on the remote
+        conda_env_dir: Directory on the remote where the named environments
+            live, for setups that store envs outside the conda install's
+            ``envs/`` and ``~/.conda/envs``. ``None`` (default) means only
+            those two standard locations are searched. A leading ``~`` is
+            expanded against the remote home. Used by env-existence validation.
         savepath: Default path on the remote where computations are saved
         template: Jinja2 template file for SLURM job headers (SLURM backend only)
         resilient_connection: Opt-in. When True, SSH operations to this cluster
@@ -53,6 +58,12 @@ class ClusterConfig:
         executor: Which execution backend to run jobs through. ``"slurm"``
             (default) submits via sbatch; other backends are selected by the
             executor factory. Unset in a config JSON means ``"slurm"``.
+        slurm_header_add: Cluster-intrinsic SLURM header lines prepended to the
+            header of *every* job on this cluster, before any per-call
+            ``slurm_header_add`` an actor passes. Use it for setup that is a
+            property of the machine rather than of the job -- e.g. datalab's
+            ``export TMPDIR=$HOME/tmp`` (its ``/tmp`` is permission-denied, so
+            any job writing there fails). SLURM backend only; empty by default.
         environment: Per-application shell setup for *this* cluster, keyed by
             application name (e.g. ``"vasp"``, ``"orca"``). Each value is shell
             lines injected into the SLURM header for jobs of that application
@@ -75,11 +86,13 @@ class ClusterConfig:
     conda_source: str
     savepath: str
     template: str
+    conda_env_dir: Optional[str] = None
     resilient_connection: bool = False
     connection_retry_interval: float = 60.0
     connection_max_wait: Optional[float] = None
     connection_command_timeout: Optional[float] = 120.0
     executor: str = "slurm"
+    slurm_header_add: str = ""
     environment: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -202,6 +215,16 @@ class ClusterConfig:
             for p in Path(config_dir).glob("*.json")
             if p.name != "config.json"
         )
+
+    def to_dict(self) -> dict:
+        """Serialise this config to a plain ``dict`` (JSON-round-trippable).
+
+        The inverse of :meth:`from_dict`: ``from_dict(cfg.to_dict())`` yields
+        an equal config. Used to embed a self-contained snapshot of the
+        cluster in a task manifest, so a job can be resumed later without the
+        original cluster JSON still being present in the config dir.
+        """
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, config_dict: dict) -> "ClusterConfig":

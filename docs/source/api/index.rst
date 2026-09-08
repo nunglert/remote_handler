@@ -130,13 +130,6 @@ Evaluators
    :undoc-members:
    :show-inheritance:
 
-Samplers
-~~~~~~~~
-
-.. automodule:: remote_handler.workflows.samplers
-   :members:
-   :undoc-members:
-   :show-inheritance:
 
 Trainers
 ~~~~~~~~

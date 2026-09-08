@@ -8,21 +8,19 @@ script and assert the resolved path points at the expected shipped payload.
 
 from pathlib import Path
 
+import remote_handler
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import LocalFileSystem
 from remote_handler.workflows.evaluators import ORCAEvaluator, VASPEvaluator
-from remote_handler.workflows.samplers import (
-    _SCRIPTS_DIR,
-    CMAESSampler,
-    LammpsSampler,
-    SSPDSampler,
-    TorchSimSampler,
-)
 from remote_handler.workflows.trainers import (
     MaceFinetuningTrainer,
     MaceModelTrainer,
     NeuralilILTrainer,
 )
+
+# The shipped payloads live under the package's ``scripts/`` dir; each actor
+# defaults its script to a path in here.
+_SCRIPTS_DIR = Path(remote_handler.__file__).resolve().parent / "scripts"
 
 
 def _cfg(tmp_path):
@@ -39,60 +37,6 @@ def _cfg(tmp_path):
 def _rel(script) -> str:
     """Path of the resolved script relative to the shipped scripts/ dir."""
     return Path(script).resolve().relative_to(_SCRIPTS_DIR).as_posix()
-
-
-def test_lammps_default_script():
-    s = LammpsSampler(
-        remote_fs=LocalFileSystem(),
-        template_path="lammps.in.j2",
-        data_path="lammps.data",
-        element_mapping={1: "Cu"},
-        num_samples=5,
-        uncertainty_cutoff_radius=4.0,
-        remote_lammps_executable_path="/usr/bin/lmp",
-    )
-    assert _rel(s.sampling_script) == "lammps/lammps_sampling.py"
-
-
-def test_cmaes_default_script(tmp_path):
-    s = CMAESSampler(
-        remote_fs=LocalFileSystem(),
-        cluster_config=_cfg(tmp_path),
-        founder_path="POSCAR",
-    )
-    assert _rel(s.sampling_script) == "clinamen2/cmaes_sampling.py"
-
-
-def test_torch_sim_default_script(tmp_path):
-    s = TorchSimSampler(
-        remote_fs=LocalFileSystem(),
-        cluster_config=_cfg(tmp_path),
-        founder_path="founder.xyz",
-        ensemble="nvt",
-        temperatures=[300.0],
-        target_temperature=300.0,
-    )
-    assert _rel(s.sampling_script) == "torch_sim/torch_sim_sampling.py"
-
-
-def test_sspd_default_script(tmp_path):
-    s = SSPDSampler(
-        remote_fs=LocalFileSystem(),
-        data_path="start.xyz",
-        cluster_config=_cfg(tmp_path),
-    )
-    assert _rel(s.sampling_script) == "sspd/SSPD_sampling.py"
-
-
-def test_sspd_torch_sim_default_script(tmp_path):
-    """The torch_sim flag selects the matching shipped SSPD payload."""
-    s = SSPDSampler(
-        remote_fs=LocalFileSystem(),
-        data_path="start.xyz",
-        cluster_config=_cfg(tmp_path),
-        torch_sim=True,
-    )
-    assert _rel(s.sampling_script) == "sspd/SSPD_torch_sim_sampling.py"
 
 
 def test_vasp_default_script(tmp_path):
@@ -149,10 +93,12 @@ def test_neuralil_default_script(tmp_path):
 
 def test_explicit_script_overrides_default(tmp_path):
     """Passing a script still wins -- the default only fills the gap."""
-    s = CMAESSampler(
+    t = MaceModelTrainer(
         remote_fs=LocalFileSystem(),
         cluster_config=_cfg(tmp_path),
-        founder_path="POSCAR",
-        sampling_script="/custom/my_sampling.py",
+        config_file="mace.yaml",
+        remote_mace_train_runner="run_train.py",
+        training_script="/custom/my_training.py",
+        stub=True,
     )
-    assert str(s.sampling_script) == "/custom/my_sampling.py"
+    assert str(t.training_script) == "/custom/my_training.py"

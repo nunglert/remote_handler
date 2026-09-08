@@ -35,6 +35,10 @@ Overview
      - List the registered cluster configs and their file paths.
    * - ``remote_handler show extras [MACHINE ...]``
      - Probe importable extras — locally, or per machine (``local`` / clusters).
+   * - ``remote_handler status [PATH]``
+     - Report whether a detached task (by its manifest) has finished.
+   * - ``remote_handler collect [PATH] [--wait] [--force]``
+     - Fetch a detached task's results from its manifest.
    * - ``remote_handler --version``
      - Print the package version.
 
@@ -301,7 +305,6 @@ checked on ``PATH`` after their setup runs:
    ---------------------------------
    mace           ✓      ✓      ✓
    mace_jax       ✗      ✓      ✗
-   torch_sim      ✓      ✓      ✓
    ---------------------------------
    vasp           ✗      ✓      —
 
@@ -322,3 +325,57 @@ is exactly right when ``local`` is itself a cluster node with modules loaded.
 On a cluster, the app's ``environment`` setup is run first (in a login shell,
 so ``module load`` works) before checking the binary. The command exits
 non-zero if any requested machine could not be reached.
+
+Detach a job, collect it later
+------------------------------
+
+Long remote jobs no longer need the launching process to stay alive. **By
+default**, every task ``submit``/``run`` writes a small ``task_manifest.json``
+(both locally, as ``<local_savepath>.manifest.json``, and inside the remote job
+directory) right after submission and *before* the blocking wait — so even a
+plain blocking run that dies mid-wait (SSH drop, laptop sleep, ``Ctrl-C``)
+leaves a resume handle on disk and the running job is not orphaned. The write
+is best-effort and never aborts the job; opt out with
+``write_manifest_on_submit=False``.
+
+A task can also **detach**: start the remote job, write the manifest, and
+return immediately without waiting — so submitting feels like a local,
+backgrounded command.
+
+.. code-block:: python
+
+   task = VASPEvaluator(...).build_task(...)   # any SingleScriptTask/ArrayScriptTask
+   manifest_path = task.detach()               # fires the job, returns at once
+   # ...or just run it blocking; the manifest is written either way.
+
+The manifest is a self-contained resume handle: it embeds the full cluster
+config and the resolved remote directory, so collecting later needs neither the
+original process nor the cluster JSON still on disk. The day after, ``cd`` back
+to where you launched (or point at the manifest) and retrieve the results:
+
+.. code-block:: bash
+
+   $ remote_handler status            # searches the cwd for a manifest
+   task 'vasp'  [array/slurm, job 4815162]
+     remote: /scratch/u/dump/vasp-xR3k9
+     local:  ./evaluated_configs
+     status: running
+
+   $ remote_handler collect --wait    # block until done, then fetch
+     status: running -- waiting for it to finish...
+     collected results to ./evaluated_configs
+
+``status`` exits ``0`` when finished and ``2`` while still running, so it drops
+straight into a shell loop:
+
+.. code-block:: bash
+
+   until remote_handler status results.manifest.json; do sleep 60; done
+   remote_handler collect results.manifest.json
+
+``collect`` refuses to fetch a job that is still running unless you pass
+``--wait`` (block until it finishes) or ``--force`` (fetch whatever files exist
+now — handy when the remote env has since drifted and you only want the
+outputs). ``PATH`` may be the manifest file itself or a directory containing
+one; an ambiguous directory (more than one manifest) is an error rather than a
+guess.

@@ -13,7 +13,7 @@ Requirements
 
 The core install is lightweight -- it pulls in only ``ase``, ``numpy``,
 ``paramiko``, ``jinja2``, ``natsort`` and ``pyyaml``. Everything ML-specific
-(MACE, torch-sim, NeuralIL, ...) lives behind the optional extras below, so the
+(MACE, NeuralIL, ...) lives behind the optional extras below, so the
 host driver stays slim; the heavy stacks only need to be present in the *remote*
 conda environment where the payload scripts actually run.
 
@@ -62,28 +62,21 @@ actor or remote-side payload:
      - Building these Sphinx docs (``cd docs && make html``)
    * - ``mace``
      - ``MaceModelTrainer`` (train a MACE force field)
-   * - ``torch_sim``
-     - ``TorchSimSampler`` (MD/relaxation sampling via torch-sim). Provides
-       only torch-sim; **pair it with a mace source** (see below).
    * - ``mace_freeze``
      - ``MaceFinetuningTrainer`` (layer-freezing finetune)
    * - ``mace_jax``
-     - ``MaceFinetuningTrainer(convert_to_jax=True)`` (torch ``.model`` →
-       mace-jax ``.pkl``)
+     - ``MaceModelTrainer``/``MaceFinetuningTrainer`` with
+       ``convert_to_jax=True`` (torch ``.model`` → mace-jax ``.pkl``)
    * - ``neuralil``
      - ``NeuralilILTrainer`` (NeuralIL force-field training)
-   * - ``clinamen``
-     - CMA-ES structure sampling (``scripts/clinamen2``)
    * - ``quests``
      - QUESTS-based config selection (``workflows/selectors.py``)
+   * - ``steinhardt``
+     - ``SteinhardtProcessor`` (per-atom ``q_l`` / ``w_l`` bond-orientational
+       order parameters). Pulls ``jax``; needed only in the *remote* env,
+       where the processor imports it lazily.
 
 .. warning::
-
-   **``torch_sim`` needs a mace source -- pick one.** The ``torch_sim`` extra
-   installs only torch-sim; the sampler imports MACE, so install it *together
-   with* a mace source: ``.[mace,torch_sim]`` (stock mace-torch from PyPI) or
-   ``.[mace_freeze,torch_sim]`` (the git freeze fork). ``.[torch_sim]`` alone
-   will fail at runtime with a clear error.
 
    **Do not mix mace sources in one environment.** ``mace`` pulls
    ``mace-torch`` from PyPI and ``mace_freeze`` from the git fork -- the *same*
@@ -110,17 +103,13 @@ Common combinations
    # Finetune (freeze fork) and convert the result to mace-jax
    pip install -e ".[mace_freeze,mace_jax]"
 
-   # torch-sim sampling (with a mace source -- stock, or the freeze fork)
-   pip install -e ".[mace,torch_sim]"
-   pip install -e ".[mace_freeze,torch_sim]"
-
    # NeuralIL training
    pip install -e ".[neuralil]"
 
 .. tip::
 
    In a typical active-learning run the host only orchestrates; the MACE /
-   torch-sim / NeuralIL packages need to be installed in the **remote** conda
+   NeuralIL packages need to be installed in the **remote** conda
    environment named by your cluster config's ``conda_env``, not necessarily on
    the host. Install the matching extra on the host only when you import those
    actors there (e.g. for ``stub=True`` dry-runs or local testing).

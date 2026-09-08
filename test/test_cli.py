@@ -42,7 +42,7 @@ class _FakeSSH:
 
 
 # Cluster prompt order: remote_machine, partition, conda_env, conda_source,
-# savepath, template.
+# savepath, template, slurm_header_add (optional; blank -> not written).
 _CLUSTER_ANSWERS = [
     "lugus",
     "normal",
@@ -50,6 +50,7 @@ _CLUSTER_ANSWERS = [
     "~/miniconda3/bin/activate",
     "/home/u/dump",
     "dirona.sh.j2",
+    "",
 ]
 
 
@@ -76,6 +77,19 @@ def test_configure_cluster_writes_all_six_fields(monkeypatch):
     cc = ClusterConfig.from_file("lugus.json")
     assert cc.remote_machine == "lugus"
     assert cc.conda_source == "~/miniconda3/bin/activate"
+
+
+def test_configure_cluster_writes_slurm_header_add_when_given(monkeypatch):
+    answers = list(_CLUSTER_ANSWERS)
+    answers[6] = "export TMPDIR=$HOME/tmp"  # cluster-wide header line
+    _script_prompts(monkeypatch, answers)
+    monkeypatch.setattr(cli, "SSHConfigParser", _FakeSSH)
+
+    rc = cli.main(["configure", "cluster", "lugus"])
+    assert rc == 0
+
+    data = json.loads((get_persistent_config_dir() / "lugus.json").read_text())
+    assert data["slurm_header_add"] == "export TMPDIR=$HOME/tmp"
 
 
 def test_configure_cluster_rejects_empty_field(monkeypatch):
@@ -546,3 +560,82 @@ def test_show_extras_table_shows_versions(capsys, monkeypatch):
     # The reserved keys are a separate block, never raw ✓/✗ grid rows.
     assert cli._RH_VERSION_KEY not in out
     assert cli._RH_ENV_KEY not in out
+
+
+# --------------------------------------------------------------------------
+# status / collect  (resume a detached task from its manifest)
+# --------------------------------------------------------------------------
+def _detached_direct_task(tmp_path):
+    """Launch a real detached task on the direct/local backend and return the
+    local manifest path. No SSH, no scheduler -- just the filesystem."""
+    from remote_handler.core import file_handler, tasks
+
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    script = tmp_path / "single.py"
+    script.write_text(
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        "x = json.load(open(sys.argv[1]))\n"
+        "s = x['A'] + x['B']\n"
+        'Path("result.json").write_text(json.dumps({"sum": s}))\n'
+        'Path("is_finished.info").write_text("done")\n'
+    )
+    inp = tmp_path / "input.json"
+    inp.write_text(json.dumps({"A": 2, "B": 40}))
+    cfg = ClusterConfig(
+        remote_machine="local",
+        partition="p",
+        conda_env="",
+        conda_source="",
+        savepath=str(remote),
+        template="unused.sh.j2",
+        executor="direct",
+    )
+    task = tasks.SingleScriptTask(
+        script_file=script,
+        input_file=inp,
+        local_savepath=tmp_path / "results",
+        cluster_config=cfg,
+        remote_fs=file_handler.LocalFileSystem(),
+        logfile="s.log",
+        loop_time=0.1,
+        remote_savepath=str(remote / "calc"),
+    )
+    return task.detach()
+
+
+def test_collect_wait_then_status_finished(tmp_path, capsys):
+    manifest = _detached_direct_task(tmp_path)
+
+    # Collect blocks until the job finishes, then fetches the results.
+    rc = cli.main(["collect", str(manifest), "--wait"])
+    assert rc == 0
+    result = json.loads((tmp_path / "results" / "result.json").read_text())
+    assert result["sum"] == 42
+
+    # After completion, status reports finished (exit 0).
+    rc = cli.main(["status", str(manifest)])
+    assert rc == 0
+    assert "finished" in capsys.readouterr().out
+
+
+def test_collect_discovers_manifest_in_directory(tmp_path):
+    manifest = _detached_direct_task(tmp_path)
+    # Pass the *directory*, not the file -- the common "cd back in" workflow.
+    rc = cli.main(["collect", str(manifest.parent), "--wait"])
+    assert rc == 0
+    assert (tmp_path / "results" / "result.json").exists()
+
+
+def test_status_missing_manifest_errors(tmp_path):
+    rc = cli.main(["status", str(tmp_path)])
+    assert rc == 1
+
+
+def test_collect_ambiguous_manifest_errors(tmp_path):
+    _detached_direct_task(tmp_path)
+    # A second manifest in the same dir makes discovery ambiguous.
+    (tmp_path / "other.manifest.json").write_text("{}")
+    rc = cli.main(["collect", str(tmp_path)])
+    assert rc == 1

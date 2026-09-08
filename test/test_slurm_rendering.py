@@ -126,6 +126,29 @@ def test_header_template_accepts_explicit_path(tmp_path):
     assert "python /remote/script.py /remote/input.json" in script
 
 
+def test_slurm_header_add_is_rendered_into_header():
+    """The combined ``slurm_header_add`` lines land in the header verbatim.
+
+    Guards the template boundary for the cluster-wide header: whatever
+    ``SlurmHandlerBase`` combines (cluster config + per-call) must appear in
+    the rendered script -- e.g. datalab's TMPDIR redirect.
+    """
+    script = get_slurm_str(
+        input_file="/remote/input.json",
+        python_script_path="/remote/script.py",
+        jobname="charjob",
+        partition="charpart",
+        n_cores=4,
+        conda_env="charenv",
+        conda_source="/home/u/miniconda3",
+        header_template=HEADER,
+        job_type_template="body_single.sh.j2",
+        slurm_header_add="export TMPDIR=$HOME/tmp\nmodule load vasp",
+    )
+    assert "export TMPDIR=$HOME/tmp" in script
+    assert "module load vasp" in script
+
+
 def test_header_template_missing_path_errors():
     """An explicit template path that does not exist fails clearly."""
     with pytest.raises(TaskError, match="not found at the given path"):
@@ -142,7 +165,7 @@ def test_header_template_missing_path_errors():
         )
 
 
-def _single(time_limit, header=HEADER):
+def _single(time_limit, header=HEADER, memory=None):
     return get_slurm_str(
         input_file="i.json",
         python_script_path="s.py",
@@ -154,10 +177,11 @@ def _single(time_limit, header=HEADER):
         header_template=header,
         job_type_template="body_single.sh.j2",
         time_limit=time_limit,
+        memory=memory,
     )
 
 
-def _array(time_limit, header=HEADER):
+def _array(time_limit, header=HEADER, memory=None):
     return get_array_slurm_str(
         calcdir="/remote/calc",
         python_script_path="/remote/script.py",
@@ -167,6 +191,7 @@ def _array(time_limit, header=HEADER):
         header_template=header,
         job_type_template="body_array.sh.j2",
         time_limit=time_limit,
+        memory=memory,
     )
 
 
@@ -189,3 +214,24 @@ def test_time_limit_uniform_across_templates(header):
     # the parameter, consistently across all of them.
     assert "--time" not in _array(None, header=header)
     assert "#SBATCH --time=1-00:00:00" in _array("1-00:00:00", header=header)
+
+
+def test_memory_renders_directive_when_set():
+    assert "#SBATCH --mem=16G" in _single(None, memory="16G")
+    assert "#SBATCH --mem=16G" in _array(None, memory="16G")
+
+
+def test_no_memory_emits_no_directive():
+    # The default: no --mem line, so the job gets the partition's default.
+    assert "--mem" not in _single(None)
+    assert "--mem" not in _array(None)
+
+
+@pytest.mark.parametrize(
+    "header", ["dirona.sh.j2", "datalab.sh.j2", "musica.sh.j2"]
+)
+def test_memory_uniform_across_templates(header):
+    # No shipped template hardcodes a --mem; it is driven solely by the
+    # parameter, consistently across all of them.
+    assert "--mem" not in _array(None, header=header)
+    assert "#SBATCH --mem=8000M" in _array(None, header=header, memory="8000M")

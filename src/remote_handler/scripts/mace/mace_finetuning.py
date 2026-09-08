@@ -1,13 +1,11 @@
 import logging
-import os
 import sys
 from pathlib import Path
 
 from remote_handler.scripts.input_models import MaceFinetuningInput
 from remote_handler.scripts.mace.mace_utils import (
     combine_databases,
-    convert_torch_model_to_jax,
-    convert_torch_model_to_jax_bundle,
+    maybe_convert_to_jax,
     run_training_from_config,
     split_db,
 )
@@ -49,28 +47,14 @@ run_training_from_config(
 )
 
 # Optionally convert the trained torch model to a mace-jax bundle, in the same
-# job/env (so torch-mace + mace-jax must both be installed there). Two formats:
-# an opaque ``.pkl`` (default), or a ``-jax/`` directory bundle (config.json +
-# params.msgpack) that mace-jax's canonical loader / jaxrens consume.
-if input_config.convert_to_jax:
-    models_dir = calcpath / "models"
-    torch_model_path = models_dir / f"{input_config.model_name}.model"
-    assert os.path.exists(
-        torch_model_path
-    ), f"Trained model not found for conversion: {torch_model_path}"
-    if input_config.jax_output_format == "bundle":
-        jax_model_path = convert_torch_model_to_jax_bundle(
-            torch_model_path,
-            output_dir=models_dir / f"{input_config.model_name}-jax",
-        )
-    else:
-        jax_model_path = convert_torch_model_to_jax(
-            torch_model_path,
-            output_path=models_dir / f"{input_config.model_name}-jax.pkl",
-        )
-    logging.getLogger().info(
-        f"Converted torch model to mace-jax bundle: {jax_model_path}"
-    )
+# job/env (so torch-mace + mace-jax must both be installed there).
+maybe_convert_to_jax(
+    calcpath,
+    input_config.model_name,
+    input_config.convert_to_jax,
+    input_config.jax_output_format,
+    logger=logging.getLogger(),
+)
 
 # Success marker checked by ArrayScriptTask.finish_check on the host.
 (calcpath / "is_finished.info").write_text("MACE finetuning finished")

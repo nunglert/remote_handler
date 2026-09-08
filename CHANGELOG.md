@@ -9,6 +9,197 @@ The version is derived from git tags by `setuptools-scm` (tag `v0.2.0` →
 version `0.2.0`). To cut a release: add a dated section below, merge to `main`,
 then `git tag -a vX.Y.Z`.
 
+## [0.6.0] — 2026-08-26
+
+Sampling moves out of `remote_handler`. Every concrete `Sampler` and the
+remote payload behind it now lives in its own downstream project repository;
+the package keeps the `Sampler` interface and the orchestration around it.
+This is a breaking change — see **Removed** / **Breaking** for the import
+paths and extras that are gone. In exchange the host install and the test
+matrix shrink substantially, and the Steinhardt processor moves *in*.
+
+### Added
+- **`SteinhardtProcessor` / `SteinhardtArgs`** — per-atom Steinhardt
+  bond-orientational order parameters (`q<l>` / `w<l>`, plus the per-frame
+  means `q<l>_mean` / `w<l>_mean` in `atoms.info`) as a built-in `processing`
+  step, re-exported from `remote_handler.processing`. The compute is a JAX
+  port of QUIP's `steinhardt_nelson_qw_module::calc_qw` together with the
+  angular machinery it relies on (`SphericalYCartesian` / `SolidRCartesian`,
+  `wigner3j`), validated against QUIP's `get_qw` binary to machine precision
+  with the reference data checked in under `test/data/steinhardt/`. The
+  `jit`-compiled core runs in float64 / complex128 (the spherical-harmonic
+  sums lose all signal in float32), opted in for the scope of the computation
+  rather than by flipping the global `jax_enable_x64` flag, so a surrounding
+  float32 pipeline is unaffected. Previously this lived downstream and was
+  cited as the example of an out-of-package processor.
+- **`[steinhardt]` install extra** (`jax>=0.9.0`). `jax` is imported lazily
+  inside the cluster-side `run`, so the module stays importable — and cheap —
+  on a jax-free host, like the other built-in processors.
+
+### Changed
+- **`convert_to_jax` / `jax_output_format` moved to the shared MACE trainer
+  base**, so `MaceModelTrainer` (train from scratch) supports the torch →
+  mace-jax conversion too, not just `MaceFinetuningTrainer`. Conversion is a
+  property of training a MACE model, not of finetuning specifically. The
+  cluster-side step is now the shared `mace_utils.maybe_convert_to_jax`, called
+  by both the `mace_training.py` and `mace_finetuning.py` payloads, and
+  `MaceTrainingInput` gained the two matching fields. Existing
+  `MaceFinetuningTrainer` usage is unchanged.
+- **The `[all]` extra is recomposed** to
+  `dev,mace_freeze,quests,neuralil,mace_jax,steinhardt`: `torch_sim` and
+  `clinamen` are gone with the samplers, `steinhardt` is new. CI still
+  installs `[all]`, so every optional tier keeps un-skipping.
+- **Docs and README follow the split.** The installation table drops the
+  removed extras and the "`torch_sim` needs a mace source" warning, the
+  examples page covers DFT labelling and MACE training, and the README gains
+  an *Example projects using remote_handler* section linking the downstream
+  sampler repositories.
+
+### Fixed
+- **`FixAtoms` constraints no longer corrupt forces on the *aggregation*
+  paths either.** `scripts/mace/mace_utils.write_with_keys` and
+  `AseCalculatorEvaluator._collect_results` now call
+  `get_forces(apply_constraint=False)`. Both re-derive forces from an `Atoms`
+  deserialized from extxyz *after* the singlepoint already stored the correct
+  values, so a `FixAtoms` constraint carried in the file silently re-zeroed
+  the frozen atoms' forces on the way into `REF_forces` — the training labels
+  — even though the payload that wrote them was already fixed. The 0.5.0 entry
+  covered only `dft_singlepoint.py` / `orca_singlepoint.py` /
+  `ase_singlepoint.py`; this completes it. Regression tests added for both
+  call sites.
+
+### Removed
+- **Every concrete sampler and its remote payload.** `workflows/samplers.py`
+  is gone in full — `LammpsSampler`, `TorchSimSampler`, `CMAESSampler`,
+  `BatchCMAESSampler`, `SSPDSampler`, `BatchSSPDSampler` — along with the
+  payloads they shipped (`scripts/lammps/`, `scripts/torch_sim/` including
+  `mace_ensemble.py`, `parallel_tempering.py`, `create_interface.py` and
+  `simulation_pipelines.py`, `scripts/clinamen2/`, `scripts/sspd/`) and their
+  input schemas (`LammpsSamplingInput`, `TorchSimSamplingInput`,
+  `CmaesSamplingInput`, `CmaesOptimizeInput`). `remote_handler` now provides
+  only the `Sampler` interface, in `workflows/active_learning_base.py`.
+- **The `[torch_sim]` and `[clinamen]` install extras.**
+- **The samplers' examples** — `examples/mace_md_AL/`,
+  `examples/torch_sim_AL/`, `examples/cmaes_evolution_AL/`,
+  `examples/mace_sspd_AL/`, the stale `examples/cluster_handler.py`, and the
+  torch-sim / active-learning docs example pages. `examples/local_emt_AL/`
+  (no cluster, no licensed software) remains the runnable reference.
+- **The samplers' tests** — `test_cmaes_sampling_integration.py`,
+  `test_torch_sim_integration.py`, `test_mace_ensemble.py` and
+  `test_active_learning_workflows.py`. The `integration` tier now means
+  "needs mace", not "needs mace/torch_sim/clinamen".
+
+### Breaking
+- `from remote_handler.workflows import LammpsSampler, TorchSimSampler` (both
+  were in `workflows.__all__`) and any import from
+  `remote_handler.workflows.samplers` now raise `ImportError`. Depend on the
+  relevant downstream project instead — the actors keep their constructor
+  signatures there, so only the import path moves.
+- `pip install ".[torch_sim]"` / `".[clinamen]"` no longer resolve; pip warns
+  that the extra is not provided and installs nothing for it. `".[all]"` still
+  resolves but no longer brings torch-sim or Clinamen2 into the environment.
+
+## [0.5.0] — 2026-07-26
+
+### Added
+- **Durable task handles (crash resume + detach-on-submit).** A submitted
+  `SingleScriptTask` / `ArrayScriptTask` now persists everything needed to
+  await and collect its job to a small JSON `TaskManifest` (`core/manifest.py`),
+  written both locally (`<local_savepath>.manifest.json`) and into the remote
+  job directory. **This happens by default** on every `submit`/`run` — right
+  after submission and *before* the blocking wait — so if the driver process
+  dies mid-wait the running job is no longer orphaned (the original motivation).
+  Opt out per task with `write_manifest_on_submit=False`. The write is
+  best-effort (the local copy is the contract; a remote-copy failure only
+  warns) so persisting the safety net can never take down the job it protects.
+  `task.detach()` additionally *returns without waiting*, so submitting a
+  remote job feels like a local backgrounded command.
+  `TaskHandle.from_file(<manifest>)` rebuilds the filesystem + execution backend
+  in a *different* process (re-binding to the running job via the new
+  `Executor.attach`) to poll (`is_finished`), `wait`, and `collect` the results.
+- `ClusterConfig.to_dict()` — JSON-round-trippable snapshot, embedded in the
+  manifest so a resume does not depend on the original cluster JSON.
+- `Executor.is_finished()` — non-blocking completion poll (SLURM `squeue`;
+  `direct` sentinel file); `ArrayScriptTask.submit(only_start=…)` for parity
+  with `SingleScriptTask`.
+- **CLI `status` / `collect`.** `remote_handler status [PATH]` reports whether
+  a detached task has finished (exit `0` finished / `2` running, for shell
+  loops); `remote_handler collect [PATH] [--wait] [--force]` fetches its
+  results. `PATH` is the manifest file or a directory containing one (defaults
+  to the cwd) — so the workflow is: launch, walk away, and the next day `cd`
+  back and run `remote_handler collect --wait`.
+- **`[all]` install extra** — `pip install ".[all]"` pulls the full stack in
+  one shot (`dev,mace_freeze,torch_sim,clinamen,quests,neuralil,mace_jax`).
+  It deliberately uses the `mace_freeze` fork as the sole `mace-torch` source
+  (not `[mace]`), so it stays internally consistent. CI's install step now
+  uses it, so every optional test tier un-skips.
+- **Runnable local MD→EMT→Morse AL example** (`examples/local_emt_AL/`) — a
+  self-contained active-learning loop (MD sampling → EMT ground truth → Morse
+  MLFF) that runs locally with no cluster or licensed software, plus the
+  accompanying docs.
+- **`memory` job parameter** on `SlurmHandlerBase`, threaded through the tasks
+  layer and wired to the DFT engines (`dft_runner`) and the SLURM templates
+  (`datalab`/`dirona`/`musica`), so a per-job memory request can be set
+  centrally instead of hardcoded in a header.
+
+### Changed
+- **`shard_size` is now optional.** `AtomsShardManager`,
+  `RemoteTrajectoryProcessor`, and `RemoteOptimizationHandler` accept
+  `shard_size=None` (or a negative value such as `-1`), meaning "no sharding":
+  the entire configuration set is processed as a single shard, resolved once
+  the total count is known. Previously a shard size was mandatory.
+
+### Fixed
+- **Conda env no longer shadowed by module-loaded interpreters.** The generated
+  activation now appends `[ -n "$CONDA_PREFIX" ] && export
+  PATH="$CONDA_PREFIX/bin:$PATH"` after `conda activate`. On clusters where a
+  job's `environment`/`slurm_header_add` runs `module load` (e.g. EESSI/Lmod,
+  which prepend a compat-layer `python` to `PATH`), conda would re-insert the
+  env's `bin` *behind* that entry, so a bare `python` ran the module's
+  interpreter and the env's packages (`ase`, …) were invisible —
+  `ModuleNotFoundError` despite a correct `conda_env`. Forcing the env's `bin`
+  to the front fixes it centrally, so users never have to hardcode the env path
+  in their header (it is already declared once, in the cluster config). Applies
+  to both the SLURM and `direct` backends; guarded so a blank activation is a
+  no-op.
+- **`FixAtoms` constraints no longer corrupt written forces.** The singlepoint
+  payloads (`dft_singlepoint.py`, `orca_singlepoint.py`, `ase_singlepoint.py`)
+  read `atoms.calc.results["forces"]` instead of `atoms.get_forces()`, which
+  applies `FixAtoms` constraints deserialized from the extxyz and silently
+  zeroes the forces on frozen atoms. The calculator's stored results are
+  unaffected, so the real forces are now recorded.
+
+## [0.4.1] — 2026-07-09
+
+A patch/minor increment on top of `0.4.0`: two optional per-cluster config
+knobs, a bug fix in trajectory sharding, and the SLURM-availability probe moved
+behind the connection-resilience wrapper. No breaking changes.
+
+### Added
+- **`conda_env_dir`** — an optional `ClusterConfig` field naming the directory
+  on the remote that holds the named conda environments, so activation no
+  longer assumes a default install location. Prompted for by
+  `remote_handler configure cluster` and threaded through `remote_env`.
+- **`slurm_header_add`** — reintroduced as an optional `ClusterConfig` field for
+  extra lines injected verbatim into the generated SLURM job header (e.g.
+  account/partition/QoS directives). Exposed via the CLI and rendered by the
+  SLURM handler.
+
+### Changed
+- `validate_slurm_available` moved from `cluster_handler` to `slurm_utils` and
+  now runs through the same resilient wrapper as other remote commands, so a
+  transient credential/connection failure while probing `sbatch` pauses and
+  retries instead of crashing.
+
+### Fixed
+- **`AtomsShardManager` crash on a default slice.** When `every`/`start`/`end`
+  were left at their `None` defaults (as `VASPHandler` and the other DFT
+  handlers do), `combine_trajs` computed `iteration_idx * indices.step` —
+  `int * None` — and raised `TypeError` before any job was submitted. The
+  slice fields are now normalized (`step→1`, `start→0`) and `iteration_index`
+  is computed as `start + iteration_idx * step`, which also fixes a latent
+  offset bug where a non-`None` `start` was ignored. Regression tests added.
+
 ## [0.4.0] — 2026-07-02
 
 A feature release on top of `0.3.0`. The headline is a rewrite of trajectory

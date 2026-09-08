@@ -102,8 +102,19 @@ def is_connection_error(exc: BaseException) -> bool:
     if isinstance(exc, subprocess.TimeoutExpired):
         return True
 
-    # subprocess ``ssh ...`` -- inspect stderr for ssh-level markers.
+    # subprocess ``ssh ...`` -- ssh itself reserves exit code 255 for its own
+    # connect/auth failures (a remote command's exit status is passed through
+    # unmangled, and legitimate SLURM tools don't use 255), so treat that as
+    # transient outright rather than requiring the stderr text to match one of
+    # the markers below. This matters because the connection can die mid-write
+    # and leave ``stderr`` empty or truncated, or a marker list that can't
+    # anticipate every OpenSSH/locale/firewall wording -- either way a bare
+    # 255 must not be misclassified as a genuine remote error. Also still
+    # check stderr for the markers as a fallback for e.g. -o BatchMode
+    # rejections surfaced with a different exit code.
     if isinstance(exc, subprocess.CalledProcessError):
+        if exc.returncode == 255:
+            return True
         stderr = exc.stderr or ""
         if isinstance(stderr, bytes):
             stderr = stderr.decode("utf-8", "replace")

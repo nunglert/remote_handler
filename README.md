@@ -22,7 +22,7 @@ pip install -e .              # host-side orchestration (dependency-light)
 pip install -e ".[dev,docs]"  # + test suite and docs tooling
 ```
 
-The ML/scientific functionality (MACE, torch-sim, NeuralIL, …) lives behind
+The ML/scientific functionality (MACE, NeuralIL, …) lives behind
 optional extras and is usually installed in the *remote* conda environment, not
 on the host. See the
 [Installation guide](https://e165-03-1_theoretische_materialchemie.git-pages.tuwien.ac.at/madsen-s-research-group/remote_handler/installation.html)
@@ -42,7 +42,7 @@ remote_handler check                     # validate it (add --connect to probe)
 From there, see:
 
 - **[Quickstart](https://e165-03-1_theoretische_materialchemie.git-pages.tuwien.ac.at/madsen-s-research-group/remote_handler/quickstart.html)** — a first end-to-end run.
-- **[Examples](https://e165-03-1_theoretische_materialchemie.git-pages.tuwien.ac.at/madsen-s-research-group/remote_handler/examples.html)** — DFT labelling, MACE training, torch-sim sampling, a full active-learning loop.
+- **[Examples](https://e165-03-1_theoretische_materialchemie.git-pages.tuwien.ac.at/madsen-s-research-group/remote_handler/examples.html)** — DFT labelling and MACE training.
 - **[CLI](https://e165-03-1_theoretische_materialchemie.git-pages.tuwien.ac.at/madsen-s-research-group/remote_handler/cli.html)** — configure / check / show.
 
 ## How it fits together
@@ -53,6 +53,13 @@ cluster). The
 [Core Concepts](https://e165-03-1_theoretische_materialchemie.git-pages.tuwien.ac.at/madsen-s-research-group/remote_handler/concepts.html)
 page explains the boundaries — host vs. remote, the task abstraction, the
 pluggable executor, and the active-learning loop.
+
+## Example projects using remote_handler
+
+- [Replica-exchange nested sampling](https://gitlab.tuwien.ac.at/e165-03-1_theoretische_materialchemie/madsen-s-research-group/jaxrens_active_learning)
+- [LAMMPS](https://gitlab.tuwien.ac.at/e165-03-1_theoretische_materialchemie/madsen-s-research-group/lammps_active_learning)
+- Clinamen2 — _link TBD_
+- SSPD — _link TBD_
 
 ## Contributing
 

@@ -1,19 +1,83 @@
 Examples
 ========
 
-Practical, end-to-end examples for the most common workflows. Each example is a
-real, importable script under ``docs/source/examples/`` -- the very same files
-shown here are checked by the test suite (``test/test_examples.py``), so they
+Practical, end-to-end examples for the most common workflows. Every script
+shown here is a real file in the repository, checked by the test suite so it
 cannot silently drift out of sync with the API.
 
-.. note::
+They come in two flavours:
 
-   These scripts orchestrate work on remote clusters (SSH + SLURM, GPUs, VASP),
-   so they are **not executed** in CI -- only checked for API-currency. They
-   assume you have registered the referenced clusters with
-   ``remote_handler configure cluster`` (see :doc:`cli`); adapt the aliases,
-   paths and resources to your own setup before running. The conceptual roles
-   (sampler / evaluator / trainer) are explained in :doc:`concepts`.
+* The **runnable local example** below needs no cluster and no ML stack -- it
+  runs on any machine with just the core install and is *executed* end-to-end
+  in CI (``test/test_local_emt_example.py``). Start here.
+* The **cluster workflows** (Examples 1--2) orchestrate remote work (SSH +
+  SLURM, GPUs, VASP), so they are **not executed** in CI -- only checked for
+  API-currency (``test/test_examples.py``). They assume you have registered the
+  referenced clusters with ``remote_handler configure cluster`` (see
+  :doc:`cli`); adapt the aliases, paths and resources to your own setup before
+  running.
+
+The conceptual roles (sampler / selector / evaluator / trainer) are explained
+in :doc:`concepts`.
+
+Run it now: a full loop with no cluster
+---------------------------------------
+
+A complete active-learning cycle for bulk Cu that runs on your laptop in a few
+seconds::
+
+    sample (ASE MD)  ->  select (stride)  ->  label (EMT)  ->  train (Morse fit)  ->  loop
+
+Everything goes through the package's real task machinery, but over the
+scheduler-free ``direct`` executor on a
+:class:`~remote_handler.core.file_handler.LocalFileSystem` -- so there is no
+SSH, no SLURM and no ML framework. Ground truth is ASE's EMT calculator (the
+shipped :class:`~remote_handler.workflows.evaluators.EMTEvaluator`); the
+"trained model" is a pairwise Morse potential fitted with ``scipy``, standing
+in for a heavy MLFF trainer. Iteration 0 bootstraps under EMT; from then on the
+MD is driven by the potential fitted in the previous iteration.
+
+The point is orchestration, not accuracy: it shows that *anything* can be cast
+as a :class:`~remote_handler.core.tasks.RemoteTask`, and that moving the same
+loop onto a real cluster is a single change to the ``ClusterConfig``
+(``executor="slurm"`` with a ``remote_machine`` and ``conda_env``).
+
+Run it from the environment the package is installed in:
+
+.. code-block:: bash
+
+   cd examples/local_emt_AL
+   python run_al.py
+
+**The driver** wires four actors into the staged handler and runs the loop:
+
+.. literalinclude:: ../../examples/local_emt_AL/run_al.py
+   :language: python
+
+**The custom actors** are thin wrappers that cast an ordinary Python payload as
+a :class:`~remote_handler.core.tasks.SingleScriptTask`. The sampler and trainer
+here are *external* code plugged into the loop -- exactly how a production
+sampler or trainer is integrated:
+
+.. literalinclude:: ../../examples/local_emt_AL/actors.py
+   :language: python
+
+**The payloads** run on the target (here, locally). The sampler payload is a
+short ASE Langevin-MD run under the current model; the trainer payload fits the
+Morse parameters to the labelled data. Neither imports ``remote_handler`` -- a
+payload is just a script the executor ships and runs:
+
+.. literalinclude:: ../../examples/local_emt_AL/scripts/md_sample.py
+   :language: python
+
+.. literalinclude:: ../../examples/local_emt_AL/scripts/fit_morse.py
+   :language: python
+
+Cluster workflows
+-----------------
+
+The remaining examples orchestrate work on remote clusters. Adapt the cluster
+aliases and paths to your own setup before running.
 
 Example 1: DFT single-point labelling
 -------------------------------------
@@ -28,30 +92,10 @@ Example 2: Training a MACE force field
 --------------------------------------
 
 Configure a :class:`~remote_handler.workflows.trainers.MaceModelTrainer` and run
-a training step. The trainer is an active-learning *actor*: in a full run the
-loop (Example 4) drives it, but you can also call ``update`` /
-``get_trained_model`` directly:
+a training step. The trainer is an active-learning *actor*: in a full run an
+:class:`~remote_handler.workflows.active_learning_base.ActiveLearningHandler`
+loop drives it, but you can also call ``update`` / ``get_trained_model``
+directly:
 
 .. literalinclude:: examples/example_2_mace_training.py
-   :language: python
-
-Example 3: Sampling with torch-sim MD
--------------------------------------
-
-Configure a :class:`~remote_handler.workflows.samplers.TorchSimSampler` to run
-parallel-tempering MD from the current model and propose new candidate
-configurations:
-
-.. literalinclude:: examples/example_3_torch_sim.py
-   :language: python
-
-Example 4: A full active-learning loop
---------------------------------------
-
-Wire a sampler, a ground-truth evaluator and a trainer into the
-:class:`~remote_handler.workflows.active_learning_base.ActiveLearningHandler`
-and run the Sampler → Evaluator → Trainer loop. Note how each actor can target a
-different cluster:
-
-.. literalinclude:: examples/example_4_active_learning.py
    :language: python

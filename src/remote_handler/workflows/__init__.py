@@ -4,7 +4,8 @@ Active Learning Workflow Components.
 This module provides workflow components for active learning pipelines:
 
 - Evaluators: Ground truth evaluation (e.g., DFT with VASP)
-- Samplers: Configuration sampling (e.g., LAMMPS MD, torch_sim)
+- Samplers: Configuration sampling (concrete samplers live in downstream
+  project repos; remote_handler provides only the ``Sampler`` interface)
 - Trainers: Model training (e.g., MACE models)
 
 Required Dependencies:
@@ -22,7 +23,6 @@ from remote_handler.workflows.evaluators import (
     ORCAEvaluator,
     VASPEvaluator,
 )
-from remote_handler.workflows.samplers import LammpsSampler, TorchSimSampler
 from remote_handler.workflows.staged_active_learning import (
     InputSource,
     RemoteSelector,
@@ -41,8 +41,6 @@ __all__ = [
     "VASPEvaluator",
     "ORCAEvaluator",
     "EMTEvaluator",
-    "LammpsSampler",
-    "TorchSimSampler",
     "MaceFinetuningTrainer",
     "MaceModelTrainer",
     "NeuralilILTrainer",
