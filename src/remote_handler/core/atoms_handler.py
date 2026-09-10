@@ -15,6 +15,7 @@ from ase import Atoms
 from remote_handler.core import file_handler, tasks
 from remote_handler.core.atoms_shard import AtomsShardManager
 from remote_handler.core.cluster_handler import ClusterConfig
+from remote_handler.exceptions import TaskError
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,14 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
 
     Args:
         traj_files: List of extxyz files containing atomic configurations.
+            ``None`` skips the shard manager entirely (no reading, no
+            sharding) -- only used by :meth:`from_manifest`, where
+            ``num_array_tasks`` is supplied directly instead, exactly the
+            way ``ArrayScriptTask(num_array_tasks=...)`` lets a
+            ``collect_only`` reconstruction skip ``individual_ressources``.
+            Never pass ``None`` directly; it leaves trajectory-shape-aware
+            methods (``collect``, ``regroup``, ``redistribute``,
+            ``collect_and_harvest``, ``recompute_failed``) unusable.
         cluster_config: ClusterConfig instance containing cluster-specific settings.
         remote_fs: Instance of a RemoteFileSystem or LocalFileSystem
             (in case of running on a local machine with SLURM).
@@ -88,7 +97,7 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
 
     def __init__(
         self,
-        traj_files: list[str],
+        traj_files: Optional[list[str]],
         cluster_config: ClusterConfig,
         remote_fs: file_handler.FileSystemHandlerBase,
         shard_size: Optional[int],
@@ -107,6 +116,7 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
         slurm_header_add: str = "",
         time_limit: Optional[str] = None,
         memory: Optional[str] = None,
+        num_array_tasks: Optional[int] = None,
     ):
         super().__init__(
             local_savepath,
@@ -125,12 +135,29 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
             slurm_header_add=slurm_header_add,
             time_limit=time_limit,
             memory=memory,
+            num_array_tasks=num_array_tasks,
         )
 
         # Initialize instance variables
         self.loop_time = loop_time
         self.map_indices = None
         self.tag = tag
+
+        if traj_files is None:
+            # from_manifest() reconstruction: num_array_tasks already came
+            # from the manifest via super().__init__() above, and there is
+            # nothing to shard -- skip the shard manager entirely rather
+            # than re-reading (possibly large) trajectory files a pure
+            # collect call should not need to redo. Leaves
+            # trajectory-shape-aware methods unusable; see the docstring.
+            self.shard_manager = None
+            self.shards = None
+            self.traj_files = None
+            self.shard_size = shard_size
+            self.indices = None
+            self.num_configs_total = None
+            self.all_shard_sizes = None
+            return
 
         # Create the shard manager for domain logic
         self.shard_manager = AtomsShardManager(
@@ -149,6 +176,105 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
         self.num_configs_total = self.shard_manager.num_configs_total
         self.num_array_tasks = self.shard_manager.num_array_tasks
         self.all_shard_sizes = self.shard_manager.all_shard_sizes
+
+    @classmethod
+    def from_manifest(
+        cls,
+        manifest_path: os.PathLike,
+        remote_fs: Optional[file_handler.FileSystemHandlerBase] = None,
+        tag: str = "opt_",
+        **extra,
+    ) -> "RemoteAtomsHandler":
+        """Reconstruct a collect-only handler from a persisted manifest.
+
+        Mirrors :meth:`~remote_handler.core.tasks.ArrayScriptTask.from_manifest`,
+        for consistency: rebuilds the task exactly as it ran (same resolved
+        ``savepath``, cluster config, filesystem, and ``num_array_tasks``),
+        without re-reading or re-sharding the original trajectory files --
+        which a plain ``RemoteAtomsHandler(traj_files=..., collect_only=True,
+        ...)`` reconstruction would still do today, purely to recompute
+        ``num_array_tasks``, even though a collect call never uses the
+        shards themselves.
+
+        Because ``traj_files=None`` skips the shard manager entirely (see
+        ``__init__``), the returned handler has no ``shard_manager`` and
+        cannot do trajectory-shape-aware collection (``collect()``,
+        ``regroup()``, ``redistribute()``, ``collect_and_harvest()``,
+        ``recompute_failed()``). It supports exactly what
+        :class:`~remote_handler.core.tasks.ArrayScriptTask` itself offers:
+        ``finish_check()`` and the generic, per-job ``collect_results()`` --
+        which is all :class:`~remote_handler.workflows.evaluators.AseCalculatorEvaluator`
+        actually uses (it scans ``results_dir/calcdirs`` itself rather than
+        calling ``collect()``/``regroup()``).
+
+        Args:
+            manifest_path: Local ``*.manifest.json`` file written by
+                ``write_manifest``/``detach``.
+            remote_fs: Filesystem to use; rebuilt from the manifest if not
+                given.
+            tag: Restored onto the handler for API parity with a normal
+                construction (used by ``redistribute``, which is
+                unavailable here regardless).
+            **extra: Additional/overriding constructor kwargs; must be valid
+                ``RemoteAtomsHandler`` parameters.
+        """
+        if cls is not RemoteAtomsHandler:
+            raise TaskError(
+                "RemoteAtomsHandler.from_manifest() only reconstructs the "
+                f"base RemoteAtomsHandler class, not {cls.__name__}."
+            )
+        manifest = tasks.TaskManifest.load(manifest_path)
+        if manifest.task_type != tasks.TASK_ARRAY:
+            raise TaskError(
+                f"Manifest at {manifest_path} is a {manifest.task_type!r} "
+                "task, not an array task."
+            )
+        fs = remote_fs or manifest.build_fs()
+        remote_savepath = Path(manifest.remote_savepath).parent
+        jobname = Path(manifest.remote_savepath).name
+
+        base_kwargs = dict(
+            traj_files=None,
+            shard_size=None,
+            cluster_config=manifest.build_cluster_config(),
+            remote_fs=fs,
+            remote_savepath=remote_savepath,
+            num_parallel=manifest.num_parallel,
+            jobname=jobname,
+            collect_only=True,
+            n_processors=manifest.n_processors,
+            loop_time=manifest.loop_time,
+            local_savepath=manifest.local_savepath,
+            tag=tag,
+            num_array_tasks=manifest.num_array_tasks,
+        )
+        return cls(**tasks.finalize_manifest_kwargs(cls, base_kwargs, extra))
+
+    def finish_check(self, required_fraction: float = 0.8) -> bool:
+        """Check the fraction of jobs that wrote ``is_finished.info``.
+
+        Lives here (not on a subclass) because it only touches
+        ``all_calcpaths``/``remote_fs`` -- both available regardless of
+        whether this handler was built normally or via :meth:`from_manifest`
+        (``shard_manager=None``), so a reconstructed collect-only handler
+        supports the exact same ``finish_check(required_fraction)`` call a
+        freshly-built one does, with no special-casing needed by callers
+        like :class:`~remote_handler.workflows.evaluators.AseCalculatorEvaluator`.
+
+        Args:
+            required_fraction: Minimum success fraction to return True.
+        """
+        assert self.all_calcpaths, "There are no calcpaths to check!"
+
+        num_converged = 0
+        for calcpath in self.all_calcpaths:
+            if self.remote_fs.exists(Path(calcpath) / "is_finished.info"):
+                num_converged += 1
+
+        finished_fraction = num_converged / len(self.all_calcpaths)
+        if finished_fraction < 0.5:
+            logger.warning("More than 50% of the submitted runs failed..")
+        return finished_fraction >= required_fraction
 
     def combine_trajs(self, traj_files, indices):
         """

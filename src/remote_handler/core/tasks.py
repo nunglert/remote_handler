@@ -6,7 +6,7 @@ import string
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from remote_handler.core import executors, file_handler, file_utils, remote_env
 from remote_handler.core.cluster_handler import ClusterConfig
@@ -30,16 +30,19 @@ _ARRAY_TASK_RUN_SUBDIR = os.path.join(remote_env.CALCDIRS_DIRNAME, "0")
 SHARED_RESOURCE_PREFIX = os.path.relpath(os.curdir, _ARRAY_TASK_RUN_SUBDIR)
 
 
-def _finalize_manifest_kwargs(
+def finalize_manifest_kwargs(
     cls: type, base_kwargs: dict, extra: dict
 ) -> dict:
     """Merge manifest-derived kwargs with caller-supplied ``extra`` overrides.
 
     Used by ``from_manifest()`` classmethods to build the final constructor
-    call. Any ``extra`` key that is not a real parameter of ``cls.__init__``
-    is a typo and raises loudly; anything else (including a stale key that
-    ends up in ``base_kwargs``) is silently dropped rather than raising a
-    confusing ``TypeError`` from the constructor call.
+    call -- shared across modules (``ArrayScriptTask``/``SingleScriptTask``
+    here, ``RemoteAtomsHandler`` in ``atoms_handler.py``), so it is public
+    rather than module-private. Any ``extra`` key that is not a real
+    parameter of ``cls.__init__`` is a typo and raises loudly; anything else
+    (including a stale key that ends up in ``base_kwargs``) is silently
+    dropped rather than raising a confusing ``TypeError`` from the
+    constructor call.
     """
     sig_params = inspect.signature(cls.__init__).parameters
     unknown = sorted(key for key in extra if key not in sig_params)
@@ -679,7 +682,7 @@ class SingleScriptTask(RemoteTask):
             n_processors=manifest.n_processors,
             loop_time=manifest.loop_time,
         )
-        return cls(**_finalize_manifest_kwargs(cls, base_kwargs, extra))
+        return cls(**finalize_manifest_kwargs(cls, base_kwargs, extra))
 
 
 @dataclass
@@ -1346,7 +1349,7 @@ class ArrayScriptTask(RemoteTask):
             num_parallel=manifest.num_parallel,
             num_array_tasks=manifest.num_array_tasks,
         )
-        return cls(**_finalize_manifest_kwargs(cls, base_kwargs, extra))
+        return cls(**finalize_manifest_kwargs(cls, base_kwargs, extra))
 
     def finish_check(self):
         """Check for the presence of the 'is_finished.info' file in each
@@ -1359,3 +1362,128 @@ class ArrayScriptTask(RemoteTask):
                 return False
 
         return True
+
+
+class DetachableTaskMixin:
+    """Shared "submit now, collect later" logic for task-wrapping actors.
+
+    Every actor that wraps one remote task per iteration (build, allocate,
+    submit, later collect) -- a ``ModelTrainer``, a ``GroundTruthEvaluator``,
+    or a downstream ``Sampler`` (concrete samplers live outside this
+    package, in downstream repos, so this needs to be public) -- needs the
+    same ``collect_only`` mode switch: build+allocate+submit on the original
+    call, or reconstruct the already-submitted task from its manifest --
+    with no allocation, no re-submit -- on a later, standalone collect call.
+    Before this mixin, each actor hand-rolled that branch itself (see
+    ``remote_handler.workflows.trainers._MaceArrayTrainer``'s git history);
+    factoring it out here means any task-wrapping actor gets "detach one
+    process, collect from another" for free instead of re-implementing it.
+
+    Mix this into a class that already sets ``self.collect_only`` and
+    ``self.remote_fs`` in its own ``__init__`` -- those stay declared
+    per-class (they belong in each actor's own constructor signature/
+    docstring, same as ``n_processors``, ``loop_time``, etc.), only the
+    logic that *uses* them is shared here.
+
+    Works for both task kinds an actor might wrap -- see
+    :meth:`build_or_resume_array_task` (``ArrayScriptTask``, an ensemble/
+    array of jobs) and :meth:`build_or_resume_single_task`
+    (``SingleScriptTask``, one job). Both funnel through
+    :meth:`build_or_resume_task`, identical apart from which class's
+    ``from_manifest`` gets called.
+
+    Note that "wrap the task-building step in a closure" only gets an actor
+    this far, not all the way: an actor whose downstream code depends on
+    something the build step computes (e.g. a per-run remote filename) needs
+    that piece made available independent of the closure too, since the
+    closure is never called in ``collect_only`` mode -- see
+    ``NeuralilILTrainer``'s ``pickle_filename``, computed from ``calcdir``
+    alone up front, precisely so ``get_trained_model()`` does not depend on
+    the closure having run.
+    """
+
+    collect_only: bool
+    remote_fs: FileSystemHandlerBase
+
+    def manifest_path(self, results_dir: os.PathLike) -> Path:
+        """Where ``write_manifest``/``detach`` puts this task's manifest.
+
+        A fixed naming convention (``<results_dir>.manifest.json``, matching
+        ``RemoteTask._save_manifest``'s own default) rather than a
+        constructor argument -- so a later ``collect_only=True`` call can
+        find it from ``results_dir`` alone, without the caller having to
+        remember/pass a manifest path explicitly.
+        """
+        return Path(str(results_dir) + ".manifest.json")
+
+    def build_or_resume_task(
+        self,
+        task_cls: type,
+        results_dir: os.PathLike,
+        build_task: Callable[[], "RemoteTask"],
+        **from_manifest_extra,
+    ) -> "RemoteTask":
+        """Return this iteration's task, built fresh or resumed from a manifest.
+
+        ``collect_only=False`` (the normal path): calls ``build_task()`` --
+        supplied by the concrete actor, since only it knows how to construct
+        its own task (payload script, inputs, shared resources, ...) -- then
+        allocates it. Allocation stays here rather than inside ``build_task``
+        so every caller gets it uniformly, the same way it's skipped
+        uniformly below.
+
+        ``collect_only=True``: reconstructs the task an earlier,
+        ``collect_only=False`` call already submitted, via
+        ``task_cls.from_manifest`` at :meth:`manifest_path`, with no
+        allocation and no re-submit. ``build_task`` is never called in this
+        branch -- constructing it would touch things a pure collect call
+        shouldn't need (e.g. resolving a remote train-runner path, or the
+        original training data).
+
+        Args:
+            task_cls: ``ArrayScriptTask`` or ``SingleScriptTask`` -- whichever
+                this actor wraps.
+            results_dir: This iteration's task directory (e.g.
+                ``self.results_dir``); also anchors the manifest lookup.
+            build_task: Zero-arg callable building this actor's task. Only
+                invoked when not ``collect_only``.
+            **from_manifest_extra: Extra constructor overrides for the
+                ``collect_only`` path (e.g. ``python_script_file``); ignored
+                otherwise.
+        """
+        if self.collect_only:
+            return task_cls.from_manifest(
+                self.manifest_path(results_dir),
+                remote_fs=self.remote_fs,
+                **from_manifest_extra,
+            )
+        task = build_task()
+        task.allocate_data()
+        return task
+
+    def build_or_resume_array_task(
+        self,
+        results_dir: os.PathLike,
+        build_task: Callable[[], "ArrayScriptTask"],
+        **from_manifest_extra,
+    ) -> "ArrayScriptTask":
+        """:meth:`build_or_resume_task` for an ``ArrayScriptTask``."""
+        return self.build_or_resume_task(
+            ArrayScriptTask, results_dir, build_task, **from_manifest_extra
+        )
+
+    def build_or_resume_single_task(
+        self,
+        results_dir: os.PathLike,
+        build_task: Callable[[], "SingleScriptTask"],
+        **from_manifest_extra,
+    ) -> "SingleScriptTask":
+        """:meth:`build_or_resume_task` for a ``SingleScriptTask``."""
+        return self.build_or_resume_task(
+            SingleScriptTask, results_dir, build_task, **from_manifest_extra
+        )
+
+    def submit_if_needed(self, task: "RemoteTask") -> None:
+        """Submit ``task``, unless it was already submitted in another process."""
+        if not self.collect_only:
+            task.submit()

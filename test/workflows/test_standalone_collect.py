@@ -19,6 +19,7 @@ import ase.io
 import pytest
 from ase.build import bulk
 
+from remote_handler.core.atoms_handler import RemoteAtomsHandler
 from remote_handler.core.cluster_config import ClusterConfig
 from remote_handler.core.file_handler import LocalFileSystem
 from remote_handler.core.manifest import TaskHandle
@@ -27,6 +28,7 @@ from remote_handler.workflows.dft_runner import SinglePointHandler
 from remote_handler.workflows.trainers import (
     MaceFinetuningTrainer,
     MaceModelTrainer,
+    NeuralilILTrainer,
 )
 
 
@@ -264,3 +266,148 @@ def test_mace_finetuning_trainer_forwards_collect_only(tmp_path):
     assert len(model_paths) == 2
     for p in model_paths:
         assert p.exists()
+
+
+# --------------------------------------------------------------------------
+# NeuralilILTrainer: a SingleScriptTask-based trainer, same collect_only
+# story as the (ArrayScriptTask-based) MACE trainers above.
+# --------------------------------------------------------------------------
+
+FAKE_NEURALIL_SCRIPT = """
+import json, sys
+from pathlib import Path
+
+input_args = json.load(open(sys.argv[1]))
+filepath = Path(input_args["filepath"])
+Path(input_args["pickle_file_name"]).write_bytes(b"mock-model")
+(filepath / "is_finished.info").write_text("done")
+"""
+
+
+def test_neuralil_trainer_collect_only_round_trip(tmp_path):
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    script = tmp_path / "fake_neuralil.py"
+    script.write_text(FAKE_NEURALIL_SCRIPT)
+    db_file = tmp_path / "data.extxyz"
+    db_file.write_text("dummy db")
+    fs = LocalFileSystem()
+    calcdir = tmp_path / "iter0"
+
+    def build(collect_only):
+        return NeuralilILTrainer(
+            remote_fs=fs,
+            cluster_config=_direct_config(remote),
+            training_script=str(script),
+            loop_time=0.2,
+            collect_only=collect_only,
+        )
+
+    trainer1 = build(collect_only=False)
+    trainer1.update(calcdir, [db_file])
+    manifest_path = trainer1.train_task.submit_detached()
+    TaskHandle.from_file(manifest_path).wait()
+
+    trainer2 = build(collect_only=True)
+    trainer2.update(calcdir, None)
+    model_file = trainer2.get_trained_model()
+
+    assert model_file.exists()
+    # Deterministic from calcdir alone -- must agree between the two
+    # trainer instances/processes without either seeing the other's state.
+    assert model_file.name == trainer1.pickle_filename == "model_iter0.pkl"
+
+
+# --------------------------------------------------------------------------
+# RemoteAtomsHandler.from_manifest(): the base class evaluators are built on
+# gains the same manifest-based collect-only reconstruction ArrayScriptTask/
+# SingleScriptTask already have, instead of a plain collect_only=True
+# reconstruction that would still re-read/-shard the original trajectory
+# files (see AseCalculatorEvaluator/SinglePointHandler).
+# --------------------------------------------------------------------------
+
+FAKE_SINGLEPOINT_SCRIPT = """
+import sys
+from pathlib import Path
+
+calc = Path(sys.argv[1])
+(calc / "is_finished.info").write_text("done")
+"""
+
+
+def test_remote_atoms_handler_from_manifest_collects_without_resharding(
+    tmp_path,
+):
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    script = tmp_path / "fake_singlepoint.py"
+    script.write_text(FAKE_SINGLEPOINT_SCRIPT)
+    traj_file = tmp_path / "structures.extxyz"
+    ase.io.write(traj_file, [bulk("Cu") for _ in range(3)])
+    fs = LocalFileSystem()
+
+    local_savepath = tmp_path / "results"
+
+    # Submit via the real, purpose-built subclass (matching how
+    # AseCalculatorEvaluator actually uses it) ...
+    handler = SinglePointHandler(
+        traj_files=[str(traj_file)],
+        cluster_config=_direct_config(remote),
+        remote_fs=fs,
+        savepath=str(remote),
+        num_parallel=2,
+        python_script_path=str(script),
+        calc_config={},
+        local_savepath=local_savepath,
+        loop_time=0.2,
+        jobname="dft",
+    )
+    assert handler.num_array_tasks == 3
+    manifest_path = handler.detach()
+    TaskHandle.from_file(manifest_path).wait()
+
+    # ... but collect via the generic base class, exactly like
+    # ArrayScriptTask.from_manifest() -- no traj_files, no calc_config, no
+    # python_script_path needed at all.
+    resumed = RemoteAtomsHandler.from_manifest(manifest_path, remote_fs=fs)
+
+    # The whole point: no re-reading/-sharding happened.
+    assert resumed.shard_manager is None
+    assert resumed.traj_files is None
+    assert resumed.num_array_tasks == 3
+
+    assert resumed.finish_check()
+    resumed.collect_results()
+
+    from remote_handler.core.remote_env import CALCDIRS_DIRNAME
+
+    for i in range(3):
+        assert (
+            local_savepath / CALCDIRS_DIRNAME / str(i) / "is_finished.info"
+        ).exists()
+
+
+def test_remote_atoms_handler_from_manifest_rejects_subclasses(tmp_path):
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    traj_file = tmp_path / "structures.extxyz"
+    ase.io.write(traj_file, [bulk("Cu")])
+    fs = LocalFileSystem()
+
+    handler = SinglePointHandler(
+        traj_files=[str(traj_file)],
+        cluster_config=_direct_config(remote),
+        remote_fs=fs,
+        savepath=str(remote),
+        num_parallel=1,
+        python_script_path="unused.py",
+        calc_config={},
+        local_savepath=tmp_path / "results",
+        loop_time=0.2,
+        jobname="dft",
+        collect_only=False,
+    )
+    manifest_path = handler.write_manifest()
+
+    with pytest.raises(Exception):
+        SinglePointHandler.from_manifest(manifest_path, remote_fs=fs)
