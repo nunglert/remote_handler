@@ -93,7 +93,7 @@ grace = [
 # the same top-level `tensorpotential` package, so this extra and [grace]
 # CANNOT coexist in one environment; install this in its own dedicated env.
 ace_tensorpot_gpu = [
-    "tensorpotential @ git+https://github.com/ICAMS/TensorPotential.git",
+    "tensorpotential @ git+https://github.com/nunglert/TensorPotential",
     "tensorflow[and-cuda]",
 ]
 
