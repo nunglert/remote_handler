@@ -282,6 +282,180 @@ def test_manifest_write_failure_never_breaks_submit(tmp_path, monkeypatch):
     assert result["sum"] == 7
 
 
+# --------------------------------------------------------------------------
+# Full task reconstruction: ArrayScriptTask.from_manifest /
+# SingleScriptTask.from_manifest (collect_only, no re-allocation) -- distinct
+# from TaskHandle above, which only rebuilds an executor+fs, not a full task
+# with finish_check()/collect_results() semantics.
+# --------------------------------------------------------------------------
+
+
+def test_array_from_manifest_collects_without_reallocating(tmp_path):
+    """The strongest end-to-end check: two objects standing in for two
+    processes across a process boundary -- the second is built purely from
+    the manifest JSON, never sees the original task object, and does not
+    call allocate_data() before finish_check()/collect_results() succeed.
+
+    Also confirms from_manifest() does not block: it is a plain, synchronous
+    reconstruction -- waiting for the job is a separate step (TaskHandle, as
+    used here before reconstructing the full task).
+    """
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    script = tmp_path / "array.py"
+    script.write_text(ARRAY_SCRIPT)
+    fs = file_handler.LocalFileSystem()
+
+    n_shards = 3
+    inputs = [
+        tasks.DictJSON({"A": 10, "B": i}, "input.json", fs)
+        for i in range(n_shards)
+    ]
+
+    task = tasks.ArrayScriptTask(
+        local_savepath=tmp_path / "results",
+        cluster_config=_direct_config(remote),
+        remote_fs=fs,
+        python_script_file=script,
+        individual_ressources=[inputs],
+        logfile="array.log",
+        loop_time=0.2,
+        remote_savepath=str(remote),
+    )
+
+    manifest_path = task.detach()  # process 1: submit and return at once
+    TaskHandle.from_file(manifest_path).wait()  # await, generic handle
+
+    # process 2: full task reconstruction, purely from the manifest file.
+    resumed = tasks.ArrayScriptTask.from_manifest(manifest_path, remote_fs=fs)
+    assert resumed.num_array_tasks == n_shards
+    assert resumed.finish_check()  # no allocate_data() call anywhere above
+    resumed.collect_results()
+
+    from remote_handler.core.remote_env import CALCDIRS_DIRNAME
+
+    for i in range(n_shards):
+        shard_result = (
+            tmp_path / "results" / CALCDIRS_DIRNAME / str(i) / "result.json"
+        )
+        assert shard_result.exists(), f"missing result for shard {i}"
+        assert json.loads(shard_result.read_text())["sum"] == 10 + i
+
+
+def test_single_from_manifest_collects_without_reallocating(tmp_path):
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    script = tmp_path / "single.py"
+    script.write_text(SINGLE_SCRIPT)
+    input_file = tmp_path / "input.json"
+    input_file.write_text(json.dumps({"A": 1, "B": 2}))
+    fs = file_handler.LocalFileSystem()
+
+    task = tasks.SingleScriptTask(
+        script_file=script,
+        input_file=input_file,
+        local_savepath=tmp_path / "results",
+        cluster_config=_direct_config(remote),
+        remote_fs=fs,
+        logfile="single.log",
+        loop_time=0.2,
+        remote_savepath=str(remote / "calc"),
+    )
+
+    manifest_path = task.detach()
+    TaskHandle.from_file(manifest_path).wait()
+
+    resumed = tasks.SingleScriptTask.from_manifest(manifest_path, remote_fs=fs)
+    assert resumed.finish_check()
+    resumed.collect_results()
+
+    result = json.loads((tmp_path / "results" / "result.json").read_text())
+    assert result["sum"] == 3
+
+
+def test_array_from_manifest_rejects_single_manifest(tmp_path):
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    script = tmp_path / "single.py"
+    script.write_text(SINGLE_SCRIPT)
+    input_file = tmp_path / "input.json"
+    input_file.write_text(json.dumps({"A": 1, "B": 2}))
+    fs = file_handler.LocalFileSystem()
+
+    task = tasks.SingleScriptTask(
+        script_file=script,
+        input_file=input_file,
+        local_savepath=tmp_path / "results",
+        cluster_config=_direct_config(remote),
+        remote_fs=fs,
+        loop_time=0.2,
+        remote_savepath=str(remote / "calc"),
+    )
+    manifest_path = task.detach()
+
+    with pytest.raises(TaskError):
+        tasks.ArrayScriptTask.from_manifest(manifest_path, remote_fs=fs)
+
+
+def test_single_from_manifest_rejects_array_manifest(tmp_path):
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    script = tmp_path / "array.py"
+    script.write_text(ARRAY_SCRIPT)
+    fs = file_handler.LocalFileSystem()
+    inputs = [tasks.DictJSON({"A": 10, "B": 0}, "input.json", fs)]
+
+    task = tasks.ArrayScriptTask(
+        local_savepath=tmp_path / "results",
+        cluster_config=_direct_config(remote),
+        remote_fs=fs,
+        python_script_file=script,
+        individual_ressources=[inputs],
+        loop_time=0.2,
+        remote_savepath=str(remote),
+    )
+    manifest_path = task.detach()
+
+    with pytest.raises(TaskError):
+        tasks.SingleScriptTask.from_manifest(manifest_path, remote_fs=fs)
+
+
+def test_from_manifest_rejects_subclasses(tmp_path):
+    """from_manifest() is only for the two base classes -- a subclass (e.g.
+    a workflow handler) must reconstruct itself another way."""
+
+    class _NotABaseClass(tasks.ArrayScriptTask):
+        pass
+
+    with pytest.raises(TaskError):
+        _NotABaseClass.from_manifest(tmp_path / "unused.manifest.json")
+
+
+def test_from_manifest_rejects_unknown_extra_kwarg(tmp_path):
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    script = tmp_path / "array.py"
+    script.write_text(ARRAY_SCRIPT)
+    fs = file_handler.LocalFileSystem()
+    inputs = [tasks.DictJSON({"A": 10, "B": 0}, "input.json", fs)]
+
+    task = tasks.ArrayScriptTask(
+        local_savepath=tmp_path / "results",
+        cluster_config=_direct_config(remote),
+        remote_fs=fs,
+        python_script_file=script,
+        individual_ressources=[inputs],
+        loop_time=0.2,
+        remote_savepath=str(remote),
+    )
+    manifest_path = task.detach()
+
+    with pytest.raises(TaskError):
+        tasks.ArrayScriptTask.from_manifest(
+            manifest_path, remote_fs=fs, this_is_not_a_real_kwarg=True
+        )
+
+
 def test_detach_can_skip_remote_manifest(tmp_path):
     remote = tmp_path / "remote"
     remote.mkdir()

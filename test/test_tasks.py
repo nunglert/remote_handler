@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from remote_handler.core import file_handler, tasks
+from remote_handler.core.cluster_config import ClusterConfig
+from remote_handler.exceptions import TaskError
 
 SCRIPT_STR = """
 import sys
@@ -202,3 +204,170 @@ def test_ArrayScriptTask_simple(
         )
         with open(slurm_err, "r") as f:
             raise Exception(f.read())
+
+
+# --------------------------------------------------------------------------
+# Allocation-independent finish_check/collect_results for collect_only
+# ArrayScriptTask instances (no individual_ressources; num_array_tasks
+# either explicit or reconstructed elsewhere via from_manifest, see
+# test_manifest.py). Uses the scheduler-free "direct" backend on a
+# LocalFileSystem, so no sbatch/cluster is needed.
+# --------------------------------------------------------------------------
+
+
+def _direct_config(savepath):
+    return ClusterConfig(
+        remote_machine="local",
+        partition="p",
+        conda_env="",
+        conda_source="",
+        savepath=str(savepath),
+        template="unused.sh.j2",
+        executor="direct",
+    )
+
+
+def _make_finished_array_calcdirs(remote, jobname, n):
+    """Pre-populate <remote>/<jobname>/calcdirs/<i>/ as an already-finished
+    array run, without ever constructing/running a real ArrayScriptTask."""
+    from remote_handler.core.remote_env import CALCDIRS_DIRNAME
+
+    calcdir = remote / jobname / CALCDIRS_DIRNAME
+    for i in range(n):
+        d = calcdir / str(i)
+        d.mkdir(parents=True)
+        (d / "is_finished.info").write_text("done")
+        (d / "result.json").write_text(json.dumps({"i": i}))
+    return calcdir
+
+
+def test_array_collect_only_with_explicit_num_array_tasks(tmp_path):
+    """collect_only=True + num_array_tasks (no individual_ressources) is
+    enough for all_calcpaths/finish_check/collect_results -- no allocation
+    needed."""
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    fs = file_handler.LocalFileSystem()
+    n = 3
+    jobname = "job"
+    calcdir = _make_finished_array_calcdirs(remote, jobname, n)
+
+    task = tasks.ArrayScriptTask(
+        local_savepath=tmp_path / "results",
+        cluster_config=_direct_config(remote),
+        remote_fs=fs,
+        remote_savepath=str(remote),
+        jobname=jobname,
+        collect_only=True,
+        num_array_tasks=n,
+    )
+
+    assert task.all_calcpaths == [calcdir / str(i) for i in range(n)]
+    assert task.finish_check()
+
+    task.collect_results()
+    from remote_handler.core.remote_env import CALCDIRS_DIRNAME
+
+    for i in range(n):
+        result = (
+            tmp_path / "results" / CALCDIRS_DIRNAME / str(i) / "result.json"
+        )
+        assert json.loads(result.read_text())["i"] == i
+
+
+def test_array_collect_only_without_num_array_tasks_raises(tmp_path):
+    """No individual_ressources and no explicit num_array_tasks -> a clear
+    TaskError, not an AttributeError, from all_calcpaths/finish_check."""
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    fs = file_handler.LocalFileSystem()
+    jobname = "job"
+    _make_finished_array_calcdirs(remote, jobname, 2)
+
+    task = tasks.ArrayScriptTask(
+        local_savepath=tmp_path / "results",
+        cluster_config=_direct_config(remote),
+        remote_fs=fs,
+        remote_savepath=str(remote),
+        jobname=jobname,
+        collect_only=True,
+    )
+
+    with pytest.raises(TaskError):
+        task.all_calcpaths
+    with pytest.raises(TaskError):
+        task.finish_check()
+
+
+def test_array_num_array_tasks_mismatch_raises(tmp_path):
+    """An explicit num_array_tasks that disagrees with individual_ressources
+    is a construction-time TaskError, not a silently-wrong value."""
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    fs = file_handler.LocalFileSystem()
+    script = tmp_path / "array.py"
+    script.write_text("pass\n")
+    inputs = [tasks.DictJSON({"A": 1}, "input.json", fs) for _ in range(3)]
+
+    with pytest.raises(TaskError):
+        tasks.ArrayScriptTask(
+            local_savepath=tmp_path / "results",
+            cluster_config=_direct_config(remote),
+            remote_fs=fs,
+            python_script_file=script,
+            individual_ressources=[inputs],
+            remote_savepath=str(remote),
+            num_array_tasks=999,
+        )
+
+
+def test_array_num_array_tasks_explicit_matches_inferred(tmp_path):
+    """An explicit num_array_tasks that agrees with individual_ressources is
+    accepted (not just tolerated when they disagree)."""
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    fs = file_handler.LocalFileSystem()
+    script = tmp_path / "array.py"
+    script.write_text("pass\n")
+    inputs = [tasks.DictJSON({"A": 1}, "input.json", fs) for _ in range(3)]
+
+    task = tasks.ArrayScriptTask(
+        local_savepath=tmp_path / "results",
+        cluster_config=_direct_config(remote),
+        remote_fs=fs,
+        python_script_file=script,
+        individual_ressources=[inputs],
+        remote_savepath=str(remote),
+        num_array_tasks=3,
+    )
+    assert task.num_array_tasks == 3
+
+
+def test_single_collect_only_script_and_input_file_none(tmp_path):
+    """collect_only=True + script_file=None/input_file=None -- the shape
+    SingleScriptTask.from_manifest builds -- still supports finish_check and
+    collect_results against an already-finished calc dir."""
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    fs = file_handler.LocalFileSystem()
+    jobname = "job"
+    calcdir = remote / jobname
+    calcdir.mkdir(parents=True)
+    (calcdir / "is_finished.info").write_text("done")
+    (calcdir / "result.json").write_text(json.dumps({"sum": 42}))
+
+    task = tasks.SingleScriptTask(
+        script_file=None,
+        input_file=None,
+        local_savepath=tmp_path / "results",
+        cluster_config=_direct_config(remote),
+        remote_fs=fs,
+        remote_savepath=str(remote),
+        jobname=jobname,
+        collect_only=True,
+    )
+
+    assert task.finish_check()
+    task.collect_results()
+    result = json.loads((tmp_path / "results" / "result.json").read_text())
+    assert result["sum"] == 42

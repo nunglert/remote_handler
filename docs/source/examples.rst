@@ -99,3 +99,15 @@ directly:
 
 .. literalinclude:: examples/example_2_mace_training.py
    :language: python
+
+Example 3: Standalone submit/collect
+-------------------------------------
+
+Submit a DFT array and a MACE training array in one run and exit at once
+(``detach``/``submit_detached``), then reconstruct and collect both from a
+later, separate run -- e.g. an active-learning driver that submits before a
+laptop goes to sleep and collects the next morning. Like Examples 1--2, this
+is statically validated only (API-currency, no live cluster):
+
+.. literalinclude:: examples/example_3_standalone.py
+   :language: python

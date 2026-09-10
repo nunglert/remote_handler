@@ -98,6 +98,7 @@ class _MaceArrayTrainer(ModelTrainer):
         n_processors: int = 1,
         convert_to_jax: bool = False,
         jax_output_format: str = "pkl",
+        collect_only: bool = False,
     ):
         super().__init__()
         if training_script is None:
@@ -125,6 +126,7 @@ class _MaceArrayTrainer(ModelTrainer):
                 f"'{jax_output_format}'"
             )
         self.jax_output_format = jax_output_format
+        self.collect_only = collect_only
 
     # Hooks subclasses override --------------------------------------------
     def _extra_shared_input(self) -> dict:
@@ -188,27 +190,45 @@ class _MaceArrayTrainer(ModelTrainer):
 
     # Shared implementation -------------------------------------------------
     def update(
-        self, calcdir: Path, trainer_input: Path | list[Path], **kwargs
+        self,
+        calcdir: Path,
+        trainer_input: Optional[Path | list[Path]],
+        **kwargs,
     ) -> None:
         """Prepare the trainer for a new iteration.
 
         Args:
             calcdir: Directory for this AL iteration
-            trainer_input: Path(s) to database files with training data
+            trainer_input: Path(s) to database files with training data. Not
+                read when ``collect_only`` -- a second process reconstructing
+                an already-submitted array from its manifest needs none of
+                the original training data, so ``None`` is expected there.
             **kwargs: Additional parameters
         """
         self.train_dir = calcdir / "train"
         self.results_dir = self.train_dir / "results"
         os.makedirs(self.train_dir, exist_ok=True)
 
-        self.db_files = (
-            [trainer_input]
-            if isinstance(trainer_input, Path)
-            else trainer_input
-        )
+        if not self.collect_only:
+            self.db_files = (
+                [trainer_input]
+                if isinstance(trainer_input, Path)
+                else trainer_input
+            )
 
         # In stub mode, we don't need to create the task
         if self.stub:
+            return
+
+        if self.collect_only:
+            # Reconstruct the already-submitted array task from its manifest
+            # -- same resolved savepath/num_array_tasks, no re-allocation.
+            manifest_path = Path(str(self.results_dir) + ".manifest.json")
+            self.training_task = ArrayScriptTask.from_manifest(
+                manifest_path,
+                remote_fs=self.remote_fs,
+                python_script_file=self.training_script,
+            )
             return
 
         # Auto-resolve the remote run_train.py path if not given.
@@ -306,7 +326,8 @@ class _MaceArrayTrainer(ModelTrainer):
             logger.info("Running in stub mode - creating mock MACE models")
             return self._create_stub_outputs()
 
-        self.training_task.submit()
+        if not self.collect_only:
+            self.training_task.submit()
         if not self.training_task.finish_check():
             raise WorkflowError(
                 f"MACE {self._action} did not finish successfully (one or "
@@ -370,6 +391,13 @@ class MaceModelTrainer(_MaceArrayTrainer):
             (default; an opaque single-file pickle) or ``"bundle"`` (a
             directory with ``config.json`` + ``params.msgpack``, the canonical
             inspectable format mace-jax's loader / jaxrens consume).
+        collect_only: If True, ``update`` reconstructs the array task
+            submitted by an earlier, ``collect_only=False`` call (from the
+            manifest written beside ``<calcdir>/train/results``) instead of
+            allocating/submitting a new one, and ``get_trained_model`` skips
+            the (already-done) submission. ``trainer_input`` is not read in
+            this mode. Use this to collect a detached MACE training run from
+            a fresh process.
     """
 
     # Behaviour is entirely the base default (script mace_training.py, jobname
@@ -406,6 +434,13 @@ class MaceFinetuningTrainer(_MaceArrayTrainer):
             (default; an opaque single-file pickle) or ``"bundle"`` (a
             directory with ``config.json`` + ``params.msgpack``, the canonical
             inspectable format mace-jax's loader / jaxrens consume).
+        collect_only: If True, ``update`` reconstructs the array task
+            submitted by an earlier, ``collect_only=False`` call (from the
+            manifest written beside ``<calcdir>/train/results``) instead of
+            allocating/submitting a new one, and ``get_trained_model`` skips
+            the (already-done) submission. ``trainer_input`` is not read in
+            this mode. Use this to collect a detached MACE training run from
+            a fresh process.
     """
 
     _script_name = "mace_finetuning.py"
@@ -429,6 +464,7 @@ class MaceFinetuningTrainer(_MaceArrayTrainer):
         convert_to_jax: bool = False,
         n_processors: int = 1,
         jax_output_format: str = "pkl",
+        collect_only: bool = False,
     ):
         super().__init__(
             remote_fs=remote_fs,
@@ -444,6 +480,7 @@ class MaceFinetuningTrainer(_MaceArrayTrainer):
             n_processors=n_processors,
             convert_to_jax=convert_to_jax,
             jax_output_format=jax_output_format,
+            collect_only=collect_only,
         )
         self.foundation_model = foundation_model
 

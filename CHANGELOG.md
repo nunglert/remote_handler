@@ -9,6 +9,42 @@ The version is derived from git tags by `setuptools-scm` (tag `v0.2.0` →
 version `0.2.0`). To cut a release: add a dated section below, merge to `main`,
 then `git tag -a vX.Y.Z`.
 
+## [Unreleased]
+
+### Fixed
+- **Standalone collection of a `collect_only=True` array task no longer
+  crashes with `AttributeError`.** `ArrayScriptTask.all_calcpaths` was only
+  ever set as a side effect of `allocate_data()`, so `finish_check()` broke
+  for any `collect_only=True` task built in a fresh process that skipped
+  allocation — including `RemoteAtomsHandler`/`SinglePointHandler`/
+  `VASPHandler`/`ORCAHandler`. `all_calcpaths` is now a computed property
+  derived from `num_array_tasks` (explicit, or inferred from
+  `individual_ressources`), so it works identically whether or not
+  allocation happened.
+- **MACE trainers (`MaceModelTrainer`/`MaceFinetuningTrainer`) gained a
+  `collect_only` mode.** Previously `update()` always allocated a new array
+  and `get_trained_model()` always (re-)submitted, so a MACE training run
+  detached in one process had no way to be collected from another.
+
+### Added
+- **`ArrayScriptTask.from_manifest()` / `SingleScriptTask.from_manifest()`**
+  — reconstruct a full, `collect_only=True` task from the manifest written by
+  `detach()`/`write_manifest()`, without re-allocating or re-submitting.
+  Distinct from `TaskHandle` (which only rebuilds an executor+filesystem):
+  this rebuilds the actual task object, so `finish_check()`/
+  `collect_results()` work exactly as they did in the original process.
+- **`ArrayScriptTask(num_array_tasks=...)`** constructor argument — lets a
+  `collect_only=True` array task be built without `individual_ressources`
+  (which `from_manifest()` relies on). Passing it alongside
+  `individual_ressources` that disagree raises `TaskError` instead of
+  silently picking one.
+- **`submit_detached()`** on both task classes — the second half of
+  `detach()` (start the job, persist the manifest, return at once) without
+  the allocation step, for a caller that already allocated separately (e.g.
+  a MACE trainer's `update()`).
+- **`docs/source/examples/example_3_standalone.py`** — submit a DFT array and
+  a MACE training array in one run, collect both from a later, separate run.
+
 ## [0.6.0] — 2026-08-26
 
 Sampling moves out of `remote_handler`. Every concrete `Sampler` and the

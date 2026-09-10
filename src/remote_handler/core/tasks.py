@@ -1,3 +1,4 @@
+import inspect
 import logging
 import os
 import random
@@ -27,6 +28,28 @@ logger = logging.getLogger(__name__)
 # nesting so it stays correct if that layout ever changes.
 _ARRAY_TASK_RUN_SUBDIR = os.path.join(remote_env.CALCDIRS_DIRNAME, "0")
 SHARED_RESOURCE_PREFIX = os.path.relpath(os.curdir, _ARRAY_TASK_RUN_SUBDIR)
+
+
+def _finalize_manifest_kwargs(
+    cls: type, base_kwargs: dict, extra: dict
+) -> dict:
+    """Merge manifest-derived kwargs with caller-supplied ``extra`` overrides.
+
+    Used by ``from_manifest()`` classmethods to build the final constructor
+    call. Any ``extra`` key that is not a real parameter of ``cls.__init__``
+    is a typo and raises loudly; anything else (including a stale key that
+    ends up in ``base_kwargs``) is silently dropped rather than raising a
+    confusing ``TypeError`` from the constructor call.
+    """
+    sig_params = inspect.signature(cls.__init__).parameters
+    unknown = sorted(key for key in extra if key not in sig_params)
+    if unknown:
+        raise TaskError(
+            f"Unknown keyword argument(s) for {cls.__name__}.from_manifest(): "
+            f"{', '.join(unknown)}"
+        )
+    merged = {**base_kwargs, **extra}
+    return {key: value for key, value in merged.items() if key in sig_params}
 
 
 class RemoteTask(ABC):
@@ -572,18 +595,18 @@ class SingleScriptTask(RemoteTask):
         """
         return self._save_manifest(TASK_SINGLE, None, local_path, write_remote)
 
-    def detach(self, local_path=None, write_remote=True) -> Path:
-        """Allocate, start the job, persist a manifest, and return at once.
+    def submit_detached(self, local_path=None, write_remote=True) -> Path:
+        """Start the job and persist a manifest, without allocating first.
 
-        The detach-on-submit path: fire the remote job and hand back the
-        local manifest path without waiting, so submission feels like a local
-        backgrounded command. Resume with ``TaskHandle.from_file``.
+        The half of :meth:`detach` that starts after allocation; useful for a
+        caller that has already run ``allocate_data()`` itself (e.g. a
+        workflow actor that allocates as part of ``update()`` and only wants
+        to detach at submit time).
 
         Suppresses ``submit``'s own manifest write and writes exactly once here
         instead, so the ``local_path`` / ``write_remote`` arguments are honored
         (and the remote copy is not written twice).
         """
-        self.allocate_data()
         prev = self.write_manifest_on_submit
         self.write_manifest_on_submit = False
         try:
@@ -593,6 +616,70 @@ class SingleScriptTask(RemoteTask):
         return self.write_manifest(
             local_path=local_path, write_remote=write_remote
         )
+
+    def detach(self, local_path=None, write_remote=True) -> Path:
+        """Allocate, start the job, persist a manifest, and return at once.
+
+        The detach-on-submit path: fire the remote job and hand back the
+        local manifest path without waiting, so submission feels like a local
+        backgrounded command. Resume with ``TaskHandle.from_file``.
+        """
+        self.allocate_data()
+        return self.submit_detached(
+            local_path=local_path, write_remote=write_remote
+        )
+
+    @classmethod
+    def from_manifest(
+        cls,
+        manifest_path: os.PathLike,
+        remote_fs: Optional[FileSystemHandlerBase] = None,
+        **extra,
+    ) -> "SingleScriptTask":
+        """Reconstruct a collect-only task from a persisted manifest.
+
+        Rebuilds the task exactly as it ran (same resolved ``savepath``,
+        cluster config, and filesystem), without re-allocating or
+        re-submitting, so ``finish_check()`` / ``collect_results()`` can be
+        called on it in a fresh process. ``script_file``/``input_file`` are
+        never read in ``collect_only`` mode, so they are left ``None``.
+
+        Args:
+            manifest_path: Local ``*.manifest.json`` file written by
+                ``write_manifest``/``detach``.
+            remote_fs: Filesystem to use; rebuilt from the manifest if not
+                given.
+            **extra: Additional/overriding constructor kwargs (e.g.
+                ``logfile``); must be valid ``SingleScriptTask`` parameters.
+        """
+        if cls is not SingleScriptTask:
+            raise TaskError(
+                "SingleScriptTask.from_manifest() only reconstructs the base "
+                f"SingleScriptTask class, not {cls.__name__}."
+            )
+        manifest = TaskManifest.load(manifest_path)
+        if manifest.task_type != TASK_SINGLE:
+            raise TaskError(
+                f"Manifest at {manifest_path} is a {manifest.task_type!r} "
+                "task, not a single task."
+            )
+        fs = remote_fs or manifest.build_fs()
+        remote_savepath = Path(manifest.remote_savepath).parent
+        jobname = Path(manifest.remote_savepath).name
+
+        base_kwargs = dict(
+            script_file=None,
+            input_file=None,
+            local_savepath=manifest.local_savepath,
+            cluster_config=manifest.build_cluster_config(),
+            remote_fs=fs,
+            remote_savepath=remote_savepath,
+            jobname=jobname,
+            collect_only=True,
+            n_processors=manifest.n_processors,
+            loop_time=manifest.loop_time,
+        )
+        return cls(**_finalize_manifest_kwargs(cls, base_kwargs, extra))
 
 
 @dataclass
@@ -859,6 +946,11 @@ class ArrayScriptTask(RemoteTask):
             resume manifest right after submission (best-effort), so a driver
             crash during the wait does not orphan the running array. Set False
             to opt out.
+        num_array_tasks: Explicit number of array tasks. Only needed when
+            ``individual_ressources`` is empty (e.g. reconstructing a
+            ``collect_only`` task via :meth:`from_manifest`, where no
+            allocation happens); inferred from ``individual_ressources``
+            otherwise. Passing both must agree.
     """
 
     def __init__(
@@ -881,11 +973,31 @@ class ArrayScriptTask(RemoteTask):
         time_limit: Optional[str] = None,
         memory: Optional[str] = None,
         write_manifest_on_submit: bool = True,
+        num_array_tasks: Optional[int] = None,
     ):
         self.write_manifest_on_submit = write_manifest_on_submit
-        if individual_ressources:
-            # Save the number of individual jobs in the array
-            self.num_array_tasks = len(individual_ressources[0])
+
+        inferred_num_array_tasks = (
+            len(individual_ressources[0]) if individual_ressources else None
+        )
+        if (
+            num_array_tasks is not None
+            and inferred_num_array_tasks is not None
+            and num_array_tasks != inferred_num_array_tasks
+        ):
+            raise TaskError(
+                f"num_array_tasks={num_array_tasks} disagrees with the "
+                f"length of individual_ressources ({inferred_num_array_tasks})."
+            )
+        # Save the number of individual jobs in the array: the explicit
+        # argument wins, falling back to what individual_ressources implies,
+        # else left unknown (None) -- e.g. a collect_only reconstruction that
+        # was not told the count.
+        self.num_array_tasks = (
+            num_array_tasks
+            if num_array_tasks is not None
+            else inferred_num_array_tasks
+        )
 
         if remote_savepath is None:
             logger.info("Falling back to savepath from cluster_config")
@@ -1097,11 +1209,26 @@ class ArrayScriptTask(RemoteTask):
                     self.shared_ressources
                 )
 
-            self.all_calcpaths = (
-                self.file_allocator.allocate_individual_resources(
-                    self.individual_ressources, self.calcdir
-                )
+            self.file_allocator.allocate_individual_resources(
+                self.individual_ressources, self.calcdir
             )
+
+    @property
+    def all_calcpaths(self) -> list[Path]:
+        """The per-task calculation directories, ``calcdir/0``, ``calcdir/1``, ...
+
+        Computed from ``num_array_tasks`` rather than stored, so it works
+        equally whether this task just allocated its own directories or was
+        reconstructed via :meth:`from_manifest` without allocating at all --
+        as long as ``calcdir`` resolves to the same directory both times
+        (guaranteed by reusing the manifest's resolved ``remote_savepath``).
+        """
+        if self.num_array_tasks is None:
+            raise TaskError(
+                "num_array_tasks is unknown for this ArrayScriptTask; pass "
+                "it explicitly or via individual_ressources."
+            )
+        return [self.calcdir / str(i) for i in range(self.num_array_tasks)]
 
     def submit(self, only_start=False):
         """Submit the array job.
@@ -1142,12 +1269,13 @@ class ArrayScriptTask(RemoteTask):
             write_remote,
         )
 
-    def detach(self, local_path=None, write_remote=True) -> Path:
-        """Allocate, start the array job, persist manifest, return at once.
+    def submit_detached(self, local_path=None, write_remote=True) -> Path:
+        """Start the array job and persist a manifest, without allocating first.
 
-        See :meth:`SingleScriptTask.detach`.
+        See :meth:`SingleScriptTask.submit_detached`; useful when
+        ``allocate_data()`` has already run (e.g. a trainer that allocates
+        during ``update()`` and only wants to detach at submit time).
         """
-        self.allocate_data()
         prev = self.write_manifest_on_submit
         self.write_manifest_on_submit = False
         try:
@@ -1157,6 +1285,68 @@ class ArrayScriptTask(RemoteTask):
         return self.write_manifest(
             local_path=local_path, write_remote=write_remote
         )
+
+    def detach(self, local_path=None, write_remote=True) -> Path:
+        """Allocate, start the array job, persist manifest, return at once.
+
+        See :meth:`SingleScriptTask.detach`.
+        """
+        self.allocate_data()
+        return self.submit_detached(
+            local_path=local_path, write_remote=write_remote
+        )
+
+    @classmethod
+    def from_manifest(
+        cls,
+        manifest_path: os.PathLike,
+        remote_fs: Optional[FileSystemHandlerBase] = None,
+        **extra,
+    ) -> "ArrayScriptTask":
+        """Reconstruct a collect-only array task from a persisted manifest.
+
+        Rebuilds the task exactly as it ran (same resolved ``savepath``,
+        cluster config, filesystem, and ``num_array_tasks``), without
+        re-allocating or re-submitting, so ``finish_check()`` /
+        ``collect_results()`` can be called on it in a fresh process.
+
+        Args:
+            manifest_path: Local ``*.manifest.json`` file written by
+                ``write_manifest``/``detach``.
+            remote_fs: Filesystem to use; rebuilt from the manifest if not
+                given.
+            **extra: Additional/overriding constructor kwargs (e.g.
+                ``python_script_file``, ``logfile``); must be valid
+                ``ArrayScriptTask`` parameters.
+        """
+        if cls is not ArrayScriptTask:
+            raise TaskError(
+                "ArrayScriptTask.from_manifest() only reconstructs the base "
+                f"ArrayScriptTask class, not {cls.__name__}."
+            )
+        manifest = TaskManifest.load(manifest_path)
+        if manifest.task_type != TASK_ARRAY:
+            raise TaskError(
+                f"Manifest at {manifest_path} is a {manifest.task_type!r} "
+                "task, not an array task."
+            )
+        fs = remote_fs or manifest.build_fs()
+        remote_savepath = Path(manifest.remote_savepath).parent
+        jobname = Path(manifest.remote_savepath).name
+
+        base_kwargs = dict(
+            local_savepath=manifest.local_savepath,
+            cluster_config=manifest.build_cluster_config(),
+            remote_fs=fs,
+            remote_savepath=remote_savepath,
+            jobname=jobname,
+            collect_only=True,
+            n_processors=manifest.n_processors,
+            loop_time=manifest.loop_time,
+            num_parallel=manifest.num_parallel,
+            num_array_tasks=manifest.num_array_tasks,
+        )
+        return cls(**_finalize_manifest_kwargs(cls, base_kwargs, extra))
 
     def finish_check(self):
         """Check for the presence of the 'is_finished.info' file in each
