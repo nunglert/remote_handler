@@ -81,6 +81,21 @@ ace = [
 grace = [
     "tensorpotential>=0.6.1",
 ]
+# The "tensorpotential" package name is a naming collision, NOT the same
+# project as [grace]'s tensorpotential: pyace's tensorpot backend imports
+# an old, pre-reorganization API (tensorpotential.{potentials.ace, fit,
+# tensorpot, constants, utils.utilities}) that only exists in the
+# abandoned github.com/ICAMS/TensorPotential repo (last touched ~2024,
+# version 0.2.x, never published to PyPI). The actively-developed project
+# was renamed to github.com/ICAMS/grace-tensorpotential and is what
+# "tensorpotential" resolves to on PyPI today (0.6.x, [grace]'s GRACE
+# potentials) -- a completely redesigned, incompatible API. Both install to
+# the same top-level `tensorpotential` package, so this extra and [grace]
+# CANNOT coexist in one environment; install this in its own dedicated env.
+ace_tensorpot_gpu = [
+    "tensorpotential @ git+https://github.com/ICAMS/TensorPotential.git",
+    "tensorflow[and-cuda]",
+]
 
 all = [
     "remote_handler[dev,mace_freeze,quests,neuralil,mace_jax,steinhardt,grace,ace]"

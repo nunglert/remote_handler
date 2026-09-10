@@ -15,14 +15,21 @@ MACE's ``split_db``).
 """
 
 import logging
+import os
 import pathlib
 import subprocess
+import sysconfig
 from typing import Optional
 
 import ase.io
 import numpy as np
 import yaml
 from ase import Atoms
+
+#: ``backend.evaluator`` value that routes pacemaker through TensorFlow
+#: (GPU-capable) instead of its default CPU evaluator. See
+#: :func:`_tensorpot_gpu_ld_library_path`.
+_TENSORPOT_EVALUATOR = "tensorpot"
 
 
 def build_ace_dataframe(
@@ -132,6 +139,40 @@ def merge_ace_config_with_paths(
     return config
 
 
+def _tensorpot_gpu_ld_library_path() -> Optional[str]:
+    """Locate pip-installed NVIDIA CUDA libraries for TensorFlow's GPU path.
+
+    Fitting ACE potentials via pacemaker's ``tensorpot`` backend (the
+    ``ace_tensorpot_gpu`` extra) uses TensorFlow for GPU acceleration.
+    ``tensorflow[and-cuda]`` installs its CUDA runtime as separate
+    ``nvidia-*-cu12`` pip packages under ``site-packages/nvidia/*/lib``, but
+    -- unlike a conda-provided CUDA toolkit -- does not add those
+    directories to the dynamic linker's search path. Without them on
+    ``LD_LIBRARY_PATH``, TensorFlow silently falls back to CPU (a log
+    warning, not an error), silently defeating the entire point of this
+    backend. This looks them up from the *running* interpreter's own
+    site-packages (i.e. the same env pacemaker/tensorflow are installed
+    into), so :func:`run_ace_training` can inject them into the training
+    subprocess automatically -- no per-environment shell setup needed.
+
+    Returns:
+        A ``:``-joined string of lib directories, or ``None`` if none are
+        found (e.g. the CPU-only default ``pyace`` evaluator, or a conda-
+        provided CUDA toolkit that doesn't need this at all).
+    """
+    site_packages = pathlib.Path(sysconfig.get_paths()["purelib"])
+    nvidia_dir = site_packages / "nvidia"
+    if not nvidia_dir.is_dir():
+        return None
+
+    lib_dirs = sorted(
+        str(path) for path in nvidia_dir.glob("*/lib") if path.is_dir()
+    )
+    if not lib_dirs:
+        return None
+    return os.pathsep.join(lib_dirs)
+
+
 def run_ace_training(
     config_file: pathlib.Path,
     user_config_file: pathlib.Path,
@@ -162,6 +203,19 @@ def run_ace_training(
         logger: Logger used to write additional output to.
         **extra_config: Passed through to
             :func:`merge_ace_config_with_paths`.
+
+    Note:
+        If the merged config's ``backend.evaluator`` is ``"tensorpot"``
+        (GPU-accelerated fitting, the ``ace_tensorpot_gpu`` extra), use a
+        scipy-style ``fit.optimizer`` (``BFGS``/``L-BFGS-B``/``CG``/...),
+        not ``Adam``/``SGD``: with a TF-native optimizer the fit runs and
+        trains correctly but then crashes on completion
+        (``AttributeError: 'NoneType' object has no attribute 'x'``) --
+        pyace's ``fitadapter.py`` unconditionally reads ``self.res_opt.x``
+        after fitting, but ``tensorpotential``'s ``FitTensorPotential`` only
+        populates ``res_opt`` on its scipy-optimizer code path. This is an
+        upstream bug in that version combination, not something
+        remote_handler can work around from the config side.
     """
     final_config = merge_ace_config_with_paths(
         user_config_file=user_config_file,
@@ -185,11 +239,31 @@ def run_ace_training(
         "-o",
         str(output_path.resolve()),
     ]
+
+    env = os.environ.copy()
+    backend_config = final_config.get("backend") or {}
+    if backend_config.get("evaluator") == _TENSORPOT_EVALUATOR:
+        gpu_lib_path = _tensorpot_gpu_ld_library_path()
+        if gpu_lib_path:
+            existing = env.get("LD_LIBRARY_PATH")
+            env["LD_LIBRARY_PATH"] = (
+                f"{gpu_lib_path}{os.pathsep}{existing}"
+                if existing
+                else gpu_lib_path
+            )
+            if logger is not None:
+                logger.info(
+                    "tensorpot backend: prepending pip NVIDIA CUDA libs to "
+                    "LD_LIBRARY_PATH so TensorFlow can find the GPU: %s",
+                    gpu_lib_path,
+                )
+
     try:
         subprocess.run(
             cmd,
             check=True,
             cwd=str(storage_dir),
+            env=env,
             stderr=subprocess.PIPE,
             stdout=subprocess.PIPE,
         )

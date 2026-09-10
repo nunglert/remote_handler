@@ -1,3 +1,7 @@
+import os
+import subprocess
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 import yaml
@@ -5,7 +9,11 @@ from _capabilities import pandas_available
 from ase import Atoms
 from ase.calculators.singlepoint import SinglePointCalculator
 
-from remote_handler.scripts.ace.ace_utils import merge_ace_config_with_paths
+from remote_handler.scripts.ace.ace_utils import (
+    _tensorpot_gpu_ld_library_path,
+    merge_ace_config_with_paths,
+    run_ace_training,
+)
 
 requires_pandas = pytest.mark.skipif(
     not pandas_available(), reason="pandas not installed"
@@ -122,3 +130,86 @@ def test_merge_ace_config_preserves_user_test_size(tmp_path):
     )
 
     assert merged["data"]["test_size"] == 0.3
+
+
+def test_tensorpot_gpu_ld_library_path_none_without_nvidia_dir(tmp_path):
+    with patch(
+        "remote_handler.scripts.ace.ace_utils.sysconfig.get_paths",
+        return_value={"purelib": str(tmp_path)},
+    ):
+        assert _tensorpot_gpu_ld_library_path() is None
+
+
+def test_tensorpot_gpu_ld_library_path_finds_lib_dirs(tmp_path):
+    nvidia_dir = tmp_path / "nvidia"
+    (nvidia_dir / "cudnn" / "lib").mkdir(parents=True)
+    (nvidia_dir / "cublas" / "lib").mkdir(parents=True)
+    # Not a "lib" dir -- must be ignored.
+    (nvidia_dir / "cudnn" / "include").mkdir(parents=True)
+
+    with patch(
+        "remote_handler.scripts.ace.ace_utils.sysconfig.get_paths",
+        return_value={"purelib": str(tmp_path)},
+    ):
+        result = _tensorpot_gpu_ld_library_path()
+
+    assert result is not None
+    dirs = result.split(os.pathsep)
+    assert len(dirs) == 2
+    assert str(nvidia_dir / "cublas" / "lib") in dirs
+    assert str(nvidia_dir / "cudnn" / "lib") in dirs
+
+
+def _run_ace_training_capturing_env(tmp_path, backend):
+    """Call run_ace_training with subprocess.run mocked; return its env kwarg."""
+    config = {"potential": {}, "fit": {}}
+    if backend is not None:
+        config["backend"] = backend
+    user_config = tmp_path / "config.yaml"
+    user_config.write_text(yaml.safe_dump(config))
+
+    data_file = tmp_path / "train.pckl.gzip"
+    data_file.write_bytes(b"")
+    storage_dir = tmp_path / "storage"
+    storage_dir.mkdir()
+
+    with patch(
+        "remote_handler.scripts.ace.ace_utils.subprocess.run"
+    ) as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+        run_ace_training(
+            config_file=tmp_path / "merged_config.yaml",
+            user_config_file=user_config,
+            seed=1,
+            data_file=data_file,
+            storage_dir=storage_dir,
+            output_path=tmp_path / "models" / "test.yaml",
+            train_runner="pacemaker",
+        )
+
+    return mock_run.call_args.kwargs["env"]
+
+
+def test_run_ace_training_injects_ld_library_path_for_tensorpot(tmp_path):
+    nvidia_lib = tmp_path / "site-packages" / "nvidia" / "cudnn" / "lib"
+    nvidia_lib.mkdir(parents=True)
+
+    with patch(
+        "remote_handler.scripts.ace.ace_utils.sysconfig.get_paths",
+        return_value={"purelib": str(tmp_path / "site-packages")},
+    ):
+        env = _run_ace_training_capturing_env(
+            tmp_path, backend={"evaluator": "tensorpot"}
+        )
+
+    assert str(nvidia_lib) in env["LD_LIBRARY_PATH"]
+
+
+def test_run_ace_training_leaves_env_alone_for_default_backend(tmp_path):
+    # No user-specified backend -> merge_ace_config_with_paths defaults to
+    # the CPU "pyace" evaluator, which never needs LD_LIBRARY_PATH touched.
+    env = _run_ace_training_capturing_env(tmp_path, backend=None)
+
+    assert env.get("LD_LIBRARY_PATH") == os.environ.get("LD_LIBRARY_PATH")
