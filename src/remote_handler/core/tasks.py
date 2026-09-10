@@ -86,6 +86,14 @@ class RemoteTask(ABC):
 
         self.collect_only = collect_only
 
+        # Optional post-collect hook a subclass/project can register (set
+        # these attributes before submit()/detach()) -- see the "finalizer"
+        # section of the ``manifest`` module docstring. Picked up by
+        # ``_build_manifest`` so ``remote_handler collect`` can reproduce
+        # domain-specific assembly for a job resumed in a fresh process.
+        self.finalizer: Optional[str] = None
+        self.finalizer_kwargs: dict = {}
+
         if savepath is not None:
             # Erase trailing slash if present
             savepath = Path(savepath)
@@ -261,6 +269,8 @@ class RemoteTask(ABC):
             loop_time=self.loop_time,
             num_parallel=getattr(executor, "num_parallel", 10),
             num_array_tasks=num_array_tasks,
+            finalizer=self.finalizer,
+            finalizer_kwargs=dict(self.finalizer_kwargs or {}),
         )
 
     def _save_manifest(

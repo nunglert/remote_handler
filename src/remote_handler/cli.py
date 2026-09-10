@@ -975,6 +975,15 @@ def cmd_collect(args: argparse.Namespace) -> int:
         print(f"[FAIL] collection failed: {exc}", file=sys.stderr)
         return 1
     print(f"  collected results to {local}")
+    if handle.manifest.finalizer:
+        if handle.finalizer_error is not None:
+            print(
+                f"  [WARN] finalizer '{handle.manifest.finalizer}' failed: "
+                f"{handle.finalizer_error}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"  finalized: {handle.finalized_output}")
     return 0
 
 
