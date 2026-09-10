@@ -3,6 +3,7 @@ import os
 import shutil
 import time
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -371,3 +372,127 @@ def test_single_collect_only_script_and_input_file_none(tmp_path):
     task.collect_results()
     result = json.loads((tmp_path / "results" / "result.json").read_text())
     assert result["sum"] == 42
+
+
+# ---------------------------------------------------------------------------
+# DetachableTaskMixin: pure-logic unit tests, mocking away the actual task
+# classes. Real end-to-end round trips through it already exist (MACE/
+# NeuralilIL trainers and AseCalculatorEvaluator in
+# test/workflows/test_standalone_collect.py and test_emt_evaluator.py); these
+# instead pin down the mixin's own branching in isolation -- what gets
+# called, with what, in each of collect_only True/False -- independent of
+# any concrete actor.
+# ---------------------------------------------------------------------------
+
+
+class _Actor(tasks.DetachableTaskMixin):
+    """Minimal stand-in for a trainer/evaluator: just the two attributes
+    DetachableTaskMixin actually reads."""
+
+    def __init__(self, collect_only, remote_fs=None):
+        self.collect_only = collect_only
+        self.remote_fs = remote_fs
+
+
+def _fake_task_cls():
+    """A fresh fake task class per test, recording from_manifest() calls on
+    itself rather than a shared/class-level list."""
+
+    class _FakeTask:
+        from_manifest_calls = []
+
+        @classmethod
+        def from_manifest(cls, manifest_path, remote_fs=None, **extra):
+            cls.from_manifest_calls.append((manifest_path, remote_fs, extra))
+            return "resumed-task"
+
+    return _FakeTask
+
+
+def test_manifest_path_is_deterministic_from_results_dir(tmp_path):
+    actor = _Actor(collect_only=False)
+    results_dir = tmp_path / "iter0" / "train" / "results"
+    assert actor.manifest_path(results_dir) == Path(
+        str(results_dir) + ".manifest.json"
+    )
+
+
+def test_build_or_resume_task_builds_and_allocates_when_not_collect_only(
+    tmp_path,
+):
+    actor = _Actor(collect_only=False)
+    built_task = MagicMock()
+    build_task = MagicMock(return_value=built_task)
+
+    result = actor.build_or_resume_task(
+        _fake_task_cls(), tmp_path / "results", build_task
+    )
+
+    build_task.assert_called_once_with()
+    built_task.allocate_data.assert_called_once_with()
+    assert result is built_task
+
+
+def test_build_or_resume_task_resumes_from_manifest_when_collect_only(
+    tmp_path,
+):
+    fs = object()
+    actor = _Actor(collect_only=True, remote_fs=fs)
+    build_task = MagicMock()
+    fake_cls = _fake_task_cls()
+    results_dir = tmp_path / "results"
+
+    result = actor.build_or_resume_task(
+        fake_cls, results_dir, build_task, extra_kwarg="value"
+    )
+
+    # The whole point of collect_only: never touch build_task -- it may
+    # resolve a remote train-runner path or need the original input data,
+    # neither of which a pure collect call should require.
+    build_task.assert_not_called()
+    assert result == "resumed-task"
+
+    [(manifest_path, remote_fs, extra)] = fake_cls.from_manifest_calls
+    assert manifest_path == actor.manifest_path(results_dir)
+    assert remote_fs is fs
+    assert extra == {"extra_kwarg": "value"}
+
+
+def test_build_or_resume_array_task_dispatches_to_ArrayScriptTask(tmp_path):
+    actor = _Actor(collect_only=True, remote_fs=object())
+    with patch.object(tasks.ArrayScriptTask, "from_manifest") as mocked:
+        mocked.return_value = "array-task"
+        result = actor.build_or_resume_array_task(
+            tmp_path / "results", MagicMock()
+        )
+    mocked.assert_called_once()
+    assert result == "array-task"
+
+
+def test_build_or_resume_single_task_dispatches_to_SingleScriptTask(
+    tmp_path,
+):
+    actor = _Actor(collect_only=True, remote_fs=object())
+    with patch.object(tasks.SingleScriptTask, "from_manifest") as mocked:
+        mocked.return_value = "single-task"
+        result = actor.build_or_resume_single_task(
+            tmp_path / "results", MagicMock()
+        )
+    mocked.assert_called_once()
+    assert result == "single-task"
+
+
+def test_submit_if_needed_submits_when_not_collect_only():
+    actor = _Actor(collect_only=False)
+    task = MagicMock()
+    actor.submit_if_needed(task)
+    task.submit.assert_called_once_with()
+
+
+def test_submit_if_needed_skips_submit_when_collect_only():
+    """The other half of the point: a collect_only actor must never
+    re-submit a job that another process already started."""
+    actor = _Actor(collect_only=True)
+    task = MagicMock()
+    actor.submit_if_needed(task)
+    task.submit.assert_not_called()
