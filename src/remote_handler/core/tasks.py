@@ -1405,6 +1405,64 @@ class DetachableTaskMixin:
     collect_only: bool
     remote_fs: FileSystemHandlerBase
 
+    #: Folder name under ``calcdir`` this actor stages its work in (e.g.
+    #: ``"train"``, ``"training"``, ``"dft"``) -- set this once per
+    #: concrete class, alongside its other per-subclass constants (like
+    #: ``_script_name``/``_jobname``), instead of writing
+    #: ``calcdir / "train"`` (or similar) as a string literal in both
+    #: ``update()`` and :meth:`pending_manifest`. Left empty here (rather
+    #: than a made-up default) so forgetting to set it fails loudly via
+    #: :meth:`iteration_dir`, not silently via some plausible-looking guess.
+    _iteration_subdir: str = ""
+
+    #: Folder name under :attr:`_iteration_subdir` this actor's task
+    #: results are collected into. The same for every current actor
+    #: (hence one shared default), but still a class attribute -- not a
+    #: string literal repeated in :meth:`results_dir_for` -- for the exact
+    #: same reason as :attr:`_iteration_subdir`.
+    _results_subdir: str = "results"
+
+    def iteration_dir(self, calcdir: os.PathLike) -> Path:
+        """This iteration's working directory, ``calcdir / _iteration_subdir``.
+
+        Computed from ``calcdir`` alone (never from instance state like
+        ``self.results_dir``), so it gives the same answer whether called
+        from ``update()`` while building this iteration's task, or from
+        :meth:`pending_manifest` *before* ``update()`` has ever run --
+        which is the whole point of the latter.
+        """
+        if not self._iteration_subdir:
+            raise NotImplementedError(
+                f"{type(self).__name__} must set _iteration_subdir."
+            )
+        return Path(calcdir) / self._iteration_subdir
+
+    def results_dir_for(self, calcdir: os.PathLike) -> Path:
+        """This iteration's ``results_dir``, i.e. where this actor's task
+        is built with ``local_savepath=`` and where :meth:`manifest_path`
+        then looks for a manifest. Single source of truth for both
+        ``update()`` (which assigns its result to ``self.results_dir``)
+        and :meth:`pending_manifest`.
+        """
+        return self.iteration_dir(calcdir) / self._results_subdir
+
+    def pending_manifest(self, calcdir: os.PathLike) -> Optional[Path]:
+        """Default ``pending_manifest`` for any actor that sets
+        :attr:`_iteration_subdir` -- overrides the ``Sampler``/
+        ``GroundTruthEvaluator``/``ModelTrainer`` ABCs' own default (always
+        ``None``) via normal MRO resolution, since this mixin is listed
+        first (``class Foo(DetachableTaskMixin, ModelTrainer)``). See
+        ``ModelTrainer.pending_manifest`` for the full rationale.
+
+        Returns ``None`` (reattach unsupported, the ABC default) rather
+        than raising when ``_iteration_subdir`` isn't set, unlike
+        :meth:`iteration_dir` -- an actor that hasn't wired this up yet
+        should just not support reattach, not crash the whole loop.
+        """
+        if not self._iteration_subdir:
+            return None
+        return self.manifest_path(self.results_dir_for(calcdir))
+
     def manifest_path(self, results_dir: os.PathLike) -> Path:
         """Where ``write_manifest``/``detach`` puts this task's manifest.
 

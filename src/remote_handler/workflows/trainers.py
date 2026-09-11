@@ -116,6 +116,7 @@ class _MaceArrayTrainer(DetachableTaskMixin, ModelTrainer):
     _jobname = "train"  # SLURM job name
     _action = "training"  # "MACE {action} did not finish ..."
     _participle = "trained"  # "No models were successfully {participle}"
+    _iteration_subdir = "train"  # calcdir/train -- see DetachableTaskMixin
 
     def __init__(
         self,
@@ -239,8 +240,8 @@ class _MaceArrayTrainer(DetachableTaskMixin, ModelTrainer):
                 the original training data, so ``None`` is expected there.
             **kwargs: Additional parameters
         """
-        self.train_dir = calcdir / "train"
-        self.results_dir = self.train_dir / "results"
+        self.train_dir = self.iteration_dir(calcdir)
+        self.results_dir = self.results_dir_for(calcdir)
         os.makedirs(self.train_dir, exist_ok=True)
 
         if not self.collect_only:
@@ -572,6 +573,7 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
     _jobname = "train"  # SLURM job name
     _tool_label = "Ensemble"  # e.g. "ACE", "GRACE"; used in log/error text
     _participle = "trained"  # "No models were successfully {participle}"
+    _iteration_subdir = "train"  # calcdir/train -- see DetachableTaskMixin
 
     def __init__(
         self,
@@ -660,8 +662,8 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
                 read when ``collect_only`` -- see ``MaceModelTrainer``.
             **kwargs: Additional parameters
         """
-        self.train_dir = calcdir / "train"
-        self.results_dir = self.train_dir / "results"
+        self.train_dir = self.iteration_dir(calcdir)
+        self.results_dir = self.results_dir_for(calcdir)
         os.makedirs(self.train_dir, exist_ok=True)
 
         if not self.collect_only:
@@ -989,6 +991,10 @@ class NeuralilILTrainer(DetachableTaskMixin, ModelTrainer):
             from a fresh process.
     """
 
+    _iteration_subdir = (
+        "training"  # calcdir/training -- see DetachableTaskMixin
+    )
+
     default_training_kwargs: dict = {
         "r_cut": 4.0,
         "training_fraction": 0.75,
@@ -1078,8 +1084,8 @@ class NeuralilILTrainer(DetachableTaskMixin, ModelTrainer):
                 read when ``collect_only`` -- see ``MaceModelTrainer``.
             **kwargs: Additional parameters
         """
-        self.train_dir = Path(calcdir) / "training"
-        self.results_dir = self.train_dir / "results"
+        self.train_dir = self.iteration_dir(calcdir)
+        self.results_dir = self.results_dir_for(calcdir)
         os.makedirs(self.train_dir, exist_ok=True)
 
         if not self.collect_only:

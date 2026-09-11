@@ -5,6 +5,7 @@ import shutil
 import sys
 from abc import ABC, abstractmethod
 from collections.abc import MutableMapping
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Literal, Optional
 
@@ -15,6 +16,33 @@ from ase import Atoms
 from remote_handler.exceptions import WorkflowError
 
 logger = logging.getLogger(__name__)
+
+
+def _default_pending_manifest(self, calcdir: Path) -> Optional[Path]:
+    """Default ``pending_manifest`` implementation: reattach unsupported.
+
+    Path to a manifest from a previous, interrupted attempt at this
+    iteration -- if this actor can detect one -- ``None`` otherwise.
+
+    Used by ``ActiveLearningHandler``/``StagedActiveLearningHandler`` to
+    reattach to an already-submitted job after the *driving process* (not
+    necessarily the job itself) dies -- a dropped SSH session, a killed
+    local process, a closed laptop -- instead of blindly resubmitting a
+    duplicate while the original may still be running (or already
+    finished) on the cluster. An actor built on
+    ``remote_handler.core.tasks.DetachableTaskMixin`` typically overrides
+    this with something like
+    ``self.manifest_path(calcdir / "train" / "results")``, matching its own
+    ``update()``'s ``results_dir`` convention -- see ``_MaceArrayTrainer``
+    for the pattern.
+
+    This default (unsupported, always ``None``) keeps the hook fully
+    backward compatible: any existing actor -- including every concrete
+    ``Sampler``, which lives outside this package in downstream repos --
+    automatically inherits it and is simply never reattached to, exactly
+    today's behaviour. It is intentionally not ``@abstractmethod``.
+    """
+    return None
 
 
 class Sampler(ABC):
@@ -46,6 +74,8 @@ class Sampler(ABC):
         for upcoming `GroundTruthEvaluator` step."""
         pass
 
+    pending_manifest = _default_pending_manifest
+
 
 class GroundTruthEvaluator(ABC):
     @abstractmethod
@@ -76,6 +106,8 @@ class GroundTruthEvaluator(ABC):
         for upcoming `ModelTrainer` step."""
         pass
 
+    pending_manifest = _default_pending_manifest
+
 
 class ModelTrainer(ABC):
     @abstractmethod
@@ -102,6 +134,8 @@ class ModelTrainer(ABC):
         """Function returns a `JsonDict` object containing necessary information
         for upcoming `Sampler` step"""
         pass
+
+    pending_manifest = _default_pending_manifest
 
 
 class Selector(ABC):
@@ -145,6 +179,8 @@ class Selector(ABC):
         """Function returns the path(s) to the selected configurations for
         the upcoming `GroundTruthEvaluator` step."""
         pass
+
+    pending_manifest = _default_pending_manifest
 
 
 def append_or_extend(item, append_list):
@@ -772,6 +808,48 @@ class ActiveLearningHandler(ABC):
         with open(self.progress_file, "w") as f:
             json.dump(self.progress, f, indent=2)
 
+    @contextmanager
+    def _reattach_if_pending(self, actor):
+        """Reattach ``actor`` to an already-submitted job for this
+        iteration, if one exists, instead of letting it resubmit.
+
+        Calls ``actor.pending_manifest(self.current_iter_dir)`` (see the
+        actor ABCs) -- if it returns a path that exists on disk, a previous
+        attempt at this exact step got far enough to submit before the
+        *driving process* died (dropped connection, killed session), so
+        this temporarily flips ``actor.collect_only = True`` for the
+        duration of the ``with`` block: the actor's own ``update()``
+        (built on ``DetachableTaskMixin``) then reconstructs the task from
+        that manifest and skips resubmission, rather than duplicating an
+        already-running (or already-finished) job. Restores the actor's
+        original ``collect_only`` afterward unconditionally, so the next
+        iteration's fresh submission is unaffected.
+
+        A ``None``/missing manifest, or an actor with no ``collect_only``
+        attribute at all, is today's behaviour: no-op, normal fresh
+        submission.
+        """
+        manifest = actor.pending_manifest(self.current_iter_dir)
+        reattach = (
+            manifest is not None
+            and manifest.exists()
+            and hasattr(actor, "collect_only")
+        )
+        if reattach:
+            logger.info(
+                "Found a pending manifest for %s at %s -- reattaching "
+                "instead of resubmitting.",
+                type(actor).__name__,
+                manifest,
+            )
+            original_collect_only = actor.collect_only
+            actor.collect_only = True
+        try:
+            yield reattach
+        finally:
+            if reattach:
+                actor.collect_only = original_collect_only
+
     def sample(self, **kwargs) -> None:
         """Runs the Sampler, requiring `self.sampler_in` and updating
         `self.evaluator_in`
@@ -786,8 +864,9 @@ class ActiveLearningHandler(ABC):
             if len(self.sampler_in) == 1
             else [self.calchome / p for p in self.sampler_in]
         )
-        self.sampler.update(self.current_iter_dir, input_arg, **kwargs)
-        sampled_configs = self.sampler.get_sampled_configs()
+        with self._reattach_if_pending(self.sampler):
+            self.sampler.update(self.current_iter_dir, input_arg, **kwargs)
+            sampled_configs = self.sampler.get_sampled_configs()
         sampled_configs = (
             [sampled_configs]
             if isinstance(sampled_configs, Path)
@@ -837,8 +916,9 @@ class ActiveLearningHandler(ABC):
             else [self.calchome / p for p in self.evaluator_in]
         )
 
-        self.evaluator.update(self.current_iter_dir, input_arg, **kwargs)
-        evaluated_configs = self.evaluator.get_evaluated_configs()
+        with self._reattach_if_pending(self.evaluator):
+            self.evaluator.update(self.current_iter_dir, input_arg, **kwargs)
+            evaluated_configs = self.evaluator.get_evaluated_configs()
         evaluated_configs = (
             [evaluated_configs]
             if isinstance(evaluated_configs, Path)
@@ -887,12 +967,13 @@ class ActiveLearningHandler(ABC):
             if len(self.trainer_in) == 1
             else [self.calchome / p for p in self.trainer_in]
         )
-        self.trainer.update(
-            self.current_iter_dir,
-            input_arg,
-            **kwargs,
-        )
-        results_model_file = self.trainer.get_trained_model()
+        with self._reattach_if_pending(self.trainer):
+            self.trainer.update(
+                self.current_iter_dir,
+                input_arg,
+                **kwargs,
+            )
+            results_model_file = self.trainer.get_trained_model()
         results_model_file = (
             [results_model_file]
             if isinstance(results_model_file, Path)

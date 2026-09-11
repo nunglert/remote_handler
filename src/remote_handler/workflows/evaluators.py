@@ -77,6 +77,7 @@ class AseCalculatorEvaluator(DetachableTaskMixin, GroundTruthEvaluator):
     # setup (modules / paths). Presets override it (e.g. VASP -> "vasp"); the
     # generic base and pure-ASE presets (EMT) inject nothing.
     _environment_key: Optional[str] = None
+    _iteration_subdir = "dft"  # calcdir/dft -- see DetachableTaskMixin
 
     def __init__(
         self,
@@ -128,8 +129,8 @@ class AseCalculatorEvaluator(DetachableTaskMixin, GroundTruthEvaluator):
                 the original input, so ``None`` is expected there.
             **kwargs: Additional parameters.
         """
-        self.dft_dir = Path(calcdir) / "dft"
-        self.results_dir = self.dft_dir / "results"
+        self.dft_dir = self.iteration_dir(calcdir)
+        self.results_dir = self.results_dir_for(calcdir)
         os.makedirs(self.dft_dir, exist_ok=True)
 
         if not self.collect_only:
