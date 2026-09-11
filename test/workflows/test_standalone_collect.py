@@ -26,6 +26,7 @@ from remote_handler.core.manifest import TaskHandle
 from remote_handler.core.tasks import ArrayScriptTask
 from remote_handler.workflows.dft_runner import SinglePointHandler
 from remote_handler.workflows.trainers import (
+    AceModelTrainer,
     MaceFinetuningTrainer,
     MaceModelTrainer,
     NeuralilILTrainer,
@@ -266,6 +267,59 @@ def test_mace_finetuning_trainer_forwards_collect_only(tmp_path):
     assert len(model_paths) == 2
     for p in model_paths:
         assert p.exists()
+
+
+# --------------------------------------------------------------------------
+# AceModelTrainer: the _EnsembleArrayTrainer family (Ace/Grace) gets the
+# same collect_only treatment as _MaceArrayTrainer, via the same mixin.
+# --------------------------------------------------------------------------
+
+FAKE_ACE_TRAIN_SCRIPT = """
+import json, sys
+from pathlib import Path
+
+calc = Path(sys.argv[1])
+data = json.load(open(calc / "input_train.json"))
+models_dir = calc / "models"
+models_dir.mkdir(parents=True, exist_ok=True)
+with open(models_dir / f"{data['model_name']}.yaml", "w") as f:
+    f.write(f"seed: {data['seed']}\\n")
+
+(calc / "is_finished.info").write_text("done")
+"""
+
+
+def test_ace_model_trainer_collect_only_round_trip(tmp_path):
+    remote, script, config_file, db_file, fs = _mace_setup(tmp_path)
+    script.write_text(FAKE_ACE_TRAIN_SCRIPT)
+    calcdir = tmp_path / "iter0"
+
+    def build(collect_only):
+        return AceModelTrainer(
+            remote_fs=fs,
+            cluster_config=_direct_config(remote),
+            config_file=str(config_file),
+            training_script=str(script),
+            remote_train_runner="unused_pacemaker",
+            num_models=2,
+            loop_time=0.2,
+            collect_only=collect_only,
+        )
+
+    trainer1 = build(collect_only=False)
+    trainer1.update(calcdir, [db_file])
+    manifest_path = trainer1.training_task.submit_detached()
+    TaskHandle.from_file(manifest_path).wait()
+
+    trainer2 = build(collect_only=True)
+    assert trainer2.collect_only is True
+    trainer2.update(calcdir, None)
+    model_paths = trainer2.get_trained_model()
+
+    assert len(model_paths) == 2
+    for p in model_paths:
+        assert p.exists()
+        assert p.suffix == ".yaml"
 
 
 # --------------------------------------------------------------------------

@@ -548,7 +548,7 @@ class MaceFinetuningTrainer(_MaceArrayTrainer):
         return jax_path
 
 
-class _EnsembleArrayTrainer(ModelTrainer):
+class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
     """Shared machinery for training an ensemble of models via array jobs.
 
     A generic sibling of ``_MaceArrayTrainer``: same array-job orchestration
@@ -586,6 +586,7 @@ class _EnsembleArrayTrainer(ModelTrainer):
         loop_time: float = 30,
         stub: bool = False,
         n_processors: int = 1,
+        collect_only: bool = False,
     ):
         super().__init__()
         if training_script is None:
@@ -606,6 +607,7 @@ class _EnsembleArrayTrainer(ModelTrainer):
         # (``--gres=gpu:n``). One model per job -> one GPU by default.
         self.n_processors = n_processors
         self.model_name = "Model"  # Default model name
+        self.collect_only = collect_only
 
     # Hooks subclasses override --------------------------------------------
     def _resolve_train_runner(self) -> str:
@@ -645,84 +647,94 @@ class _EnsembleArrayTrainer(ModelTrainer):
 
     # Shared implementation -------------------------------------------------
     def update(
-        self, calcdir: Path, trainer_input: Path | list[Path], **kwargs
+        self,
+        calcdir: Path,
+        trainer_input: Optional[Path | list[Path]],
+        **kwargs,
     ) -> None:
         """Prepare the trainer for a new iteration.
 
         Args:
             calcdir: Directory for this AL iteration
-            trainer_input: Path(s) to database files with training data
+            trainer_input: Path(s) to database files with training data. Not
+                read when ``collect_only`` -- see ``MaceModelTrainer``.
             **kwargs: Additional parameters
         """
         self.train_dir = calcdir / "train"
         self.results_dir = self.train_dir / "results"
         os.makedirs(self.train_dir, exist_ok=True)
 
-        self.db_files = (
-            [trainer_input]
-            if isinstance(trainer_input, Path)
-            else trainer_input
-        )
+        if not self.collect_only:
+            self.db_files = (
+                [trainer_input]
+                if isinstance(trainer_input, Path)
+                else trainer_input
+            )
 
         # In stub mode, we don't need to create the task
         if self.stub:
             return
 
-        # Auto-resolve the remote training executable if not given.
-        if self.remote_train_runner is None:
-            self.remote_train_runner = self._resolve_train_runner()
+        def _build_training_task() -> ArrayScriptTask:
+            # Auto-resolve the remote training executable if not given.
+            if self.remote_train_runner is None:
+                self.remote_train_runner = self._resolve_train_runner()
 
-        # Shared resources live in rootpath/, but scripts run in a subdir of
-        # it; reference them via SHARED_RESOURCE_PREFIX so each script resolves
-        # them relative to its own calcpath.
-        script_input_shared = {
-            "database_files": [
-                f"{SHARED_RESOURCE_PREFIX}/{Path(p).name}"
-                for p in self.db_files
-            ],
-            "config_file": (
-                f"{SHARED_RESOURCE_PREFIX}/{Path(self.config_file).name}"
-            ),
-            "model_name": self.model_name,
-            "validation_fraction": self.validation_fraction,
-            "train_runner": Path(self.remote_train_runner).as_posix(),
-            **self._extra_shared_input(),
-        }
+            # Shared resources live in rootpath/, but scripts run in a
+            # subdir of it; reference them via SHARED_RESOURCE_PREFIX so
+            # each script resolves them relative to its own calcpath.
+            script_input_shared = {
+                "database_files": [
+                    f"{SHARED_RESOURCE_PREFIX}/{Path(p).name}"
+                    for p in self.db_files
+                ],
+                "config_file": (
+                    f"{SHARED_RESOURCE_PREFIX}/{Path(self.config_file).name}"
+                ),
+                "model_name": self.model_name,
+                "validation_fraction": self.validation_fraction,
+                "train_runner": Path(self.remote_train_runner).as_posix(),
+                **self._extra_shared_input(),
+            }
 
-        # Create individual input files with different seeds
-        individual_resources = [
-            [
-                DictJSON(
-                    content=script_input_shared
-                    | {"seed": np.random.randint(1e6)},
-                    filename="input_train.json",
-                    remote_fs=self.remote_fs,
-                )
-                for i in range(self.num_models)
+            # Create individual input files with different seeds
+            individual_resources = [
+                [
+                    DictJSON(
+                        content=script_input_shared
+                        | {"seed": np.random.randint(1e6)},
+                        filename="input_train.json",
+                        remote_fs=self.remote_fs,
+                    )
+                    for i in range(self.num_models)
+                ]
             ]
-        ]
 
-        self.training_task = ArrayScriptTask(
-            cluster_config=self.cluster_config,
-            local_savepath=self.results_dir,
-            remote_fs=self.remote_fs,
+            return ArrayScriptTask(
+                cluster_config=self.cluster_config,
+                local_savepath=self.results_dir,
+                remote_fs=self.remote_fs,
+                python_script_file=self.training_script,
+                individual_ressources=individual_resources,
+                shared_ressources=(
+                    [self.config_file]
+                    + self._extra_shared_resources()
+                    + self.db_files
+                ),
+                logfile="train.log",
+                remote_savepath=self.remote_savepath,
+                collect_only=False,
+                num_parallel=min(self.num_models, 5),
+                loop_time=self.loop_time,
+                jobname=self._jobname,
+                n_processors=self.n_processors,
+            )
+
+        self.training_task = self.build_or_resume_array_task(
+            self.results_dir,
+            _build_training_task,
             python_script_file=self.training_script,
-            individual_ressources=individual_resources,
-            shared_ressources=(
-                [self.config_file]
-                + self._extra_shared_resources()
-                + self.db_files
-            ),
-            logfile="train.log",
-            remote_savepath=self.remote_savepath,
-            collect_only=False,
-            num_parallel=min(self.num_models, 5),
-            loop_time=self.loop_time,
-            jobname=self._jobname,
-            n_processors=self.n_processors,
         )
-
-        self.training_task.allocate_data()
 
     def _create_stub_outputs(self) -> list[Path]:
         """Create mock per-job model artifacts for testing."""
@@ -759,7 +771,7 @@ class _EnsembleArrayTrainer(ModelTrainer):
             )
             return self._create_stub_outputs()
 
-        self.training_task.submit()
+        self.submit_if_needed(self.training_task)
         if not self.training_task.finish_check():
             raise WorkflowError(
                 f"{self._tool_label} training did not finish successfully "
@@ -890,6 +902,13 @@ class AceModelTrainer(_AceArrayTrainer):
         remote_savepath: Path on remote machine for calculation files
         loop_time: Interval (seconds) to poll for job completion
         stub: If True, creates mock model outputs without training
+        collect_only: If True, ``update`` reconstructs the array task
+            submitted by an earlier, ``collect_only=False`` call (from the
+            manifest written beside ``<calcdir>/train/results``) instead of
+            allocating/submitting a new one, and ``get_trained_model`` skips
+            the (already-done) submission. ``trainer_input`` is not read in
+            this mode. Use this to collect a detached ACE training run from
+            a fresh process.
     """
 
     # Behaviour is entirely the base default (script ace_training.py,
@@ -924,6 +943,13 @@ class GraceModelTrainer(_GraceArrayTrainer):
         remote_savepath: Path on remote machine for calculation files
         loop_time: Interval (seconds) to poll for job completion
         stub: If True, creates mock model outputs without training
+        collect_only: If True, ``update`` reconstructs the array task
+            submitted by an earlier, ``collect_only=False`` call (from the
+            manifest written beside ``<calcdir>/train/results``) instead of
+            allocating/submitting a new one, and ``get_trained_model`` skips
+            the (already-done) submission. ``trainer_input`` is not read in
+            this mode. Use this to collect a detached GRACE training run
+            from a fresh process.
     """
 
     # Behaviour is entirely the base default (script grace_training.py,
