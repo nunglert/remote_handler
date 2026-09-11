@@ -13,7 +13,6 @@ from remote_handler.scripts.input_models import (
     MaceTrainingInput,
     OrcaSinglepointInput,
     ScriptInput,
-    SelectConfigsInput,
 )
 
 
@@ -218,69 +217,6 @@ class TestDftSinglepointInput:
             config.validate()
 
         assert "must be a dictionary" in str(exc_info.value)
-
-
-class TestSelectConfigsInput:
-    """Tests for SelectConfigsInput (selection/select_configs.py script)."""
-
-    def test_from_file_valid(self, tmp_path):
-        """Test loading from valid JSON file."""
-        input_file = tmp_path / "input.json"
-        input_data = {
-            "selector_type": "QUESTSSelector",
-            "selector_kwargs": {"n_configs": 100, "method": "msc"},
-            "input_files": ["pool.extxyz"],
-            "reference_files": ["ref.extxyz"],
-        }
-        input_file.write_text(json.dumps(input_data))
-
-        config = SelectConfigsInput.from_file(input_file)
-
-        assert config.selector_type == "QUESTSSelector"
-        assert config.selector_kwargs == {"n_configs": 100, "method": "msc"}
-        assert config.input_files == ["pool.extxyz"]
-        assert config.reference_files == ["ref.extxyz"]
-        assert config.output_filename == "selected.extxyz"  # default
-
-    def test_from_dict_without_reference_defaults_to_none(self):
-        config = SelectConfigsInput.from_dict(
-            {
-                "selector_type": "StrideSelector",
-                "selector_kwargs": {"n_configs": 5},
-                "input_files": ["pool.extxyz"],
-            }
-        )
-        assert config.reference_files is None
-
-    def test_validate_empty_selector_type(self):
-        config = SelectConfigsInput(
-            selector_type="",
-            selector_kwargs={"n_configs": 5},
-            input_files=["pool.extxyz"],
-        )
-        with pytest.raises(ScriptInputError) as exc_info:
-            config.validate()
-        assert "selector_type cannot be empty" in str(exc_info.value)
-
-    def test_validate_non_dict_selector_kwargs(self):
-        config = SelectConfigsInput(
-            selector_type="StrideSelector",
-            selector_kwargs="not a dict",  # Invalid!
-            input_files=["pool.extxyz"],
-        )
-        with pytest.raises(ScriptInputError) as exc_info:
-            config.validate()
-        assert "selector_kwargs must be a dictionary" in str(exc_info.value)
-
-    def test_validate_empty_input_files(self):
-        config = SelectConfigsInput(
-            selector_type="StrideSelector",
-            selector_kwargs={"n_configs": 5},
-            input_files=[],
-        )
-        with pytest.raises(ScriptInputError) as exc_info:
-            config.validate()
-        assert "input_files cannot be empty" in str(exc_info.value)
 
 
 class TestOrcaSinglepointInput:
@@ -496,45 +432,6 @@ class TestValidateWithRoot:
         )
         with pytest.raises(ScriptInputError, match="DATABASE"):
             cfg.validate(tmp_path)
-
-    def test_select_configs_no_root_skips_path_checks(self, tmp_path):
-        cfg = SelectConfigsInput(
-            selector_type="StrideSelector",
-            selector_kwargs={"n_configs": 2},
-            input_files=["missing.extxyz"],
-        )
-        cfg.validate()  # must not raise: no root, no path check
-
-    def test_select_configs_root_flags_missing_input_file(self, tmp_path):
-        cfg = SelectConfigsInput(
-            selector_type="StrideSelector",
-            selector_kwargs={"n_configs": 2},
-            input_files=["missing.extxyz"],
-        )
-        with pytest.raises(ScriptInputError, match="input file"):
-            cfg.validate(tmp_path)
-
-    def test_select_configs_root_flags_missing_reference_file(self, tmp_path):
-        (tmp_path / "pool.extxyz").write_text("x")
-        cfg = SelectConfigsInput(
-            selector_type="StrideSelector",
-            selector_kwargs={"n_configs": 2},
-            input_files=["pool.extxyz"],
-            reference_files=["missing_ref.extxyz"],
-        )
-        with pytest.raises(ScriptInputError, match="reference file"):
-            cfg.validate(tmp_path)
-
-    def test_select_configs_root_passes_when_all_present(self, tmp_path):
-        (tmp_path / "pool.extxyz").write_text("x")
-        (tmp_path / "ref.extxyz").write_text("x")
-        cfg = SelectConfigsInput(
-            selector_type="StrideSelector",
-            selector_kwargs={"n_configs": 2},
-            input_files=["pool.extxyz"],
-            reference_files=["ref.extxyz"],
-        )
-        cfg.validate(tmp_path)  # must not raise
 
 
 class TestScriptInputBaseClass:

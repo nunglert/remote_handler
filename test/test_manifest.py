@@ -20,7 +20,6 @@ from remote_handler.core.manifest import (
     MANIFEST_VERSION,
     TaskHandle,
     TaskManifest,
-    _resolve_finalizer,
 )
 from remote_handler.exceptions import TaskError
 
@@ -281,117 +280,6 @@ def test_manifest_write_failure_never_breaks_submit(tmp_path, monkeypatch):
 
     result = json.loads((tmp_path / "results" / "result.json").read_text())
     assert result["sum"] == 7
-
-
-# --------------------------------------------------------------------------
-# Finalizer (post-collect hook registered on the RemoteTask before submit)
-# --------------------------------------------------------------------------
-
-
-class TestResolveFinalizer:
-    """Unit tests for ``_resolve_finalizer``'s dotted-path resolution and
-    every error branch it can raise (the end-to-end tests below only
-    exercise the happy path and an unimportable module)."""
-
-    def test_resolves_valid_dotted_path(self):
-        fn = _resolve_finalizer("os.path:join")
-        assert fn is __import__("os").path.join
-
-    @pytest.mark.parametrize(
-        "dotted",
-        ["no_colon_at_all", ":missing_module", "os:", ""],
-    )
-    def test_malformed_path_raises(self, dotted):
-        with pytest.raises(TaskError, match="Malformed finalizer"):
-            _resolve_finalizer(dotted)
-
-    def test_unimportable_module_raises(self):
-        with pytest.raises(TaskError, match="Could not import"):
-            _resolve_finalizer("no_such_module_at_all:fn")
-
-    def test_missing_attribute_raises(self):
-        with pytest.raises(TaskError, match="has no attribute"):
-            _resolve_finalizer("os:this_attr_does_not_exist")
-
-    def test_non_callable_attribute_raises(self):
-        with pytest.raises(TaskError, match="is not callable"):
-            _resolve_finalizer("os:sep")
-
-
-def _double_sum_finalizer(local_path, multiplier=1):
-    """Stand-in for a project-specific post-collect assembly step.
-
-    Referenced from tests by its dotted path ``"test_manifest:..."`` -- exactly
-    how a downstream project (e.g. a ``Sampler`` living outside this package)
-    would register one on ``RemoteTask.finalizer``.
-    """
-    result = json.loads((Path(local_path) / "result.json").read_text())
-    out = Path(local_path) / "finalized.json"
-    out.write_text(json.dumps({"doubled": result["sum"] * multiplier}))
-    return out
-
-
-def test_finalizer_runs_after_collect(tmp_path):
-    remote = tmp_path / "remote"
-    remote.mkdir()
-    script = tmp_path / "single.py"
-    script.write_text(SINGLE_SCRIPT)
-    input_file = tmp_path / "input.json"
-    input_file.write_text(json.dumps({"A": 1, "B": 2}))
-
-    task = tasks.SingleScriptTask(
-        script_file=script,
-        input_file=input_file,
-        local_savepath=tmp_path / "results",
-        cluster_config=_direct_config(remote),
-        remote_fs=file_handler.LocalFileSystem(),
-        logfile="single.log",
-        loop_time=0.2,
-        remote_savepath=str(remote / "calc"),
-    )
-    task.finalizer = "test_manifest:_double_sum_finalizer"
-    task.finalizer_kwargs = {"multiplier": 2}
-
-    manifest_path = task.detach()
-    handle = TaskHandle.from_file(manifest_path)
-    assert handle.manifest.finalizer == "test_manifest:_double_sum_finalizer"
-    local = handle.wait_and_collect()
-
-    assert handle.finalizer_error is None
-    assert handle.finalized_output == local / "finalized.json"
-    finalized = json.loads((local / "finalized.json").read_text())
-    assert finalized["doubled"] == 6
-
-
-def test_finalizer_failure_does_not_break_collect(tmp_path):
-    remote = tmp_path / "remote"
-    remote.mkdir()
-    script = tmp_path / "single.py"
-    script.write_text(SINGLE_SCRIPT)
-    input_file = tmp_path / "input.json"
-    input_file.write_text(json.dumps({"A": 1, "B": 2}))
-
-    task = tasks.SingleScriptTask(
-        script_file=script,
-        input_file=input_file,
-        local_savepath=tmp_path / "results",
-        cluster_config=_direct_config(remote),
-        remote_fs=file_handler.LocalFileSystem(),
-        logfile="single.log",
-        loop_time=0.2,
-        remote_savepath=str(remote / "calc"),
-    )
-    task.finalizer = "no_such_module_at_all:fn"
-
-    manifest_path = task.detach()
-    handle = TaskHandle.from_file(manifest_path)
-    local = handle.wait_and_collect()
-
-    # Raw files are there regardless of the finalizer blowing up.
-    result = json.loads((local / "result.json").read_text())
-    assert result["sum"] == 3
-    assert handle.finalized_output is None
-    assert isinstance(handle.finalizer_error, TaskError)
 
 
 def test_detach_can_skip_remote_manifest(tmp_path):

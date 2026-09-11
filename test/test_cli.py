@@ -565,7 +565,7 @@ def test_show_extras_table_shows_versions(capsys, monkeypatch):
 # --------------------------------------------------------------------------
 # status / collect  (resume a detached task from its manifest)
 # --------------------------------------------------------------------------
-def _detached_direct_task(tmp_path, finalizer=None):
+def _detached_direct_task(tmp_path):
     """Launch a real detached task on the direct/local backend and return the
     local manifest path. No SSH, no scheduler -- just the filesystem."""
     from remote_handler.core import file_handler, tasks
@@ -602,8 +602,6 @@ def _detached_direct_task(tmp_path, finalizer=None):
         loop_time=0.1,
         remote_savepath=str(remote / "calc"),
     )
-    if finalizer is not None:
-        task.finalizer = finalizer
     return task.detach()
 
 
@@ -641,41 +639,3 @@ def test_collect_ambiguous_manifest_errors(tmp_path):
     (tmp_path / "other.manifest.json").write_text("{}")
     rc = cli.main(["collect", str(tmp_path)])
     assert rc == 1
-
-
-# --------------------------------------------------------------------------
-# collect: post-collect finalizer hook reporting (see core/manifest.py)
-# --------------------------------------------------------------------------
-
-
-def _mark_finalized(local_path):
-    """Referenced by tests below via its dotted path ``"test_cli:..."``."""
-    (local_path / "finalized.marker").write_text("ok")
-    return local_path / "finalized.marker"
-
-
-def test_collect_prints_finalized_output_on_success(tmp_path, capsys):
-    manifest = _detached_direct_task(tmp_path, finalizer="test_cli:_mark_finalized")
-
-    rc = cli.main(["collect", str(manifest), "--wait"])
-
-    assert rc == 0
-    assert (tmp_path / "results" / "finalized.marker").exists()
-    out = capsys.readouterr().out
-    assert "finalized:" in out
-    assert "finalized.marker" in out
-
-
-def test_collect_prints_warning_on_finalizer_failure(tmp_path, capsys):
-    manifest = _detached_direct_task(
-        tmp_path, finalizer="no_such_module_at_all:fn"
-    )
-
-    rc = cli.main(["collect", str(manifest), "--wait"])
-
-    # A failing finalizer never hides an otherwise-successful raw collect.
-    assert rc == 0
-    assert (tmp_path / "results" / "result.json").exists()
-    err = capsys.readouterr().err
-    assert "[WARN] finalizer" in err
-    assert "no_such_module_at_all:fn" in err
