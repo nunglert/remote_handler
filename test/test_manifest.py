@@ -20,6 +20,7 @@ from remote_handler.core.manifest import (
     MANIFEST_VERSION,
     TaskHandle,
     TaskManifest,
+    _resolve_finalizer,
 )
 from remote_handler.exceptions import TaskError
 
@@ -285,6 +286,36 @@ def test_manifest_write_failure_never_breaks_submit(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------
 # Finalizer (post-collect hook registered on the RemoteTask before submit)
 # --------------------------------------------------------------------------
+
+
+class TestResolveFinalizer:
+    """Unit tests for ``_resolve_finalizer``'s dotted-path resolution and
+    every error branch it can raise (the end-to-end tests below only
+    exercise the happy path and an unimportable module)."""
+
+    def test_resolves_valid_dotted_path(self):
+        fn = _resolve_finalizer("os.path:join")
+        assert fn is __import__("os").path.join
+
+    @pytest.mark.parametrize(
+        "dotted",
+        ["no_colon_at_all", ":missing_module", "os:", ""],
+    )
+    def test_malformed_path_raises(self, dotted):
+        with pytest.raises(TaskError, match="Malformed finalizer"):
+            _resolve_finalizer(dotted)
+
+    def test_unimportable_module_raises(self):
+        with pytest.raises(TaskError, match="Could not import"):
+            _resolve_finalizer("no_such_module_at_all:fn")
+
+    def test_missing_attribute_raises(self):
+        with pytest.raises(TaskError, match="has no attribute"):
+            _resolve_finalizer("os:this_attr_does_not_exist")
+
+    def test_non_callable_attribute_raises(self):
+        with pytest.raises(TaskError, match="is not callable"):
+            _resolve_finalizer("os:sep")
 
 
 def _double_sum_finalizer(local_path, multiplier=1):
