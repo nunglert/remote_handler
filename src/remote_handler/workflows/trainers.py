@@ -20,6 +20,7 @@ from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.core.tasks import (
     SHARED_RESOURCE_PREFIX,
     ArrayScriptTask,
+    DetachableTaskMixin,
     DictJSON,
     SingleScriptTask,
 )
@@ -60,7 +61,7 @@ def _resolve_mace_train_runner(remote_fs, cluster_config):
     return path
 
 
-class _MaceArrayTrainer(ModelTrainer):
+class _MaceArrayTrainer(DetachableTaskMixin, ModelTrainer):
     """Shared machinery for the MACE array trainers.
 
     ``MaceModelTrainer`` (train from scratch) and ``MaceFinetuningTrainer``
@@ -98,6 +99,7 @@ class _MaceArrayTrainer(ModelTrainer):
         n_processors: int = 1,
         convert_to_jax: bool = False,
         jax_output_format: str = "pkl",
+        collect_only: bool = False,
     ):
         super().__init__()
         if training_script is None:
@@ -125,6 +127,7 @@ class _MaceArrayTrainer(ModelTrainer):
                 f"'{jax_output_format}'"
             )
         self.jax_output_format = jax_output_format
+        self.collect_only = collect_only
 
     # Hooks subclasses override --------------------------------------------
     def _extra_shared_input(self) -> dict:
@@ -188,87 +191,99 @@ class _MaceArrayTrainer(ModelTrainer):
 
     # Shared implementation -------------------------------------------------
     def update(
-        self, calcdir: Path, trainer_input: Path | list[Path], **kwargs
+        self,
+        calcdir: Path,
+        trainer_input: Optional[Path | list[Path]],
+        **kwargs,
     ) -> None:
         """Prepare the trainer for a new iteration.
 
         Args:
             calcdir: Directory for this AL iteration
-            trainer_input: Path(s) to database files with training data
+            trainer_input: Path(s) to database files with training data. Not
+                read when ``collect_only`` -- a second process reconstructing
+                an already-submitted array from its manifest needs none of
+                the original training data, so ``None`` is expected there.
             **kwargs: Additional parameters
         """
         self.train_dir = calcdir / "train"
         self.results_dir = self.train_dir / "results"
         os.makedirs(self.train_dir, exist_ok=True)
 
-        self.db_files = (
-            [trainer_input]
-            if isinstance(trainer_input, Path)
-            else trainer_input
-        )
+        if not self.collect_only:
+            self.db_files = (
+                [trainer_input]
+                if isinstance(trainer_input, Path)
+                else trainer_input
+            )
 
         # In stub mode, we don't need to create the task
         if self.stub:
             return
 
-        # Auto-resolve the remote run_train.py path if not given.
-        if self.remote_mace_train_runner is None:
-            self.remote_mace_train_runner = _resolve_mace_train_runner(
-                self.remote_fs, self.cluster_config
-            )
-        # Shared resources live in rootpath/, but scripts run in a subdir of
-        # it; reference them via SHARED_RESOURCE_PREFIX so each script resolves
-        # them relative to its own calcpath.
-        script_input_shared = {
-            "database_files": [
-                f"{SHARED_RESOURCE_PREFIX}/{Path(p).name}"
-                for p in self.db_files
-            ],
-            "config_file": (
-                f"{SHARED_RESOURCE_PREFIX}/{Path(self.config_file).name}"
-            ),
-            "model_name": self.model_name,
-            "validation_fraction": self.validation_fraction,
-            "train_runner": Path(self.remote_mace_train_runner).as_posix(),
-            "convert_to_jax": self.convert_to_jax,
-            "jax_output_format": self.jax_output_format,
-            **self._extra_shared_input(),
-        }
-
-        # Create individual input files with different seeds
-        individual_resources = [
-            [
-                DictJSON(
-                    content=script_input_shared
-                    | {"seed": np.random.randint(1e6)},
-                    filename="input_train.json",
-                    remote_fs=self.remote_fs,
+        def _build_training_task() -> ArrayScriptTask:
+            # Auto-resolve the remote run_train.py path if not given.
+            if self.remote_mace_train_runner is None:
+                self.remote_mace_train_runner = _resolve_mace_train_runner(
+                    self.remote_fs, self.cluster_config
                 )
-                for i in range(self.num_models)
+            # Shared resources live in rootpath/, but scripts run in a
+            # subdir of it; reference them via SHARED_RESOURCE_PREFIX so
+            # each script resolves them relative to its own calcpath.
+            script_input_shared = {
+                "database_files": [
+                    f"{SHARED_RESOURCE_PREFIX}/{Path(p).name}"
+                    for p in self.db_files
+                ],
+                "config_file": (
+                    f"{SHARED_RESOURCE_PREFIX}/{Path(self.config_file).name}"
+                ),
+                "model_name": self.model_name,
+                "validation_fraction": self.validation_fraction,
+                "train_runner": Path(self.remote_mace_train_runner).as_posix(),
+                "convert_to_jax": self.convert_to_jax,
+                "jax_output_format": self.jax_output_format,
+                **self._extra_shared_input(),
+            }
+
+            # Create individual input files with different seeds
+            individual_resources = [
+                [
+                    DictJSON(
+                        content=script_input_shared
+                        | {"seed": np.random.randint(1e6)},
+                        filename="input_train.json",
+                        remote_fs=self.remote_fs,
+                    )
+                    for i in range(self.num_models)
+                ]
             ]
-        ]
 
-        self.training_task = ArrayScriptTask(
-            cluster_config=self.cluster_config,
-            local_savepath=self.results_dir,
-            remote_fs=self.remote_fs,
+            return ArrayScriptTask(
+                cluster_config=self.cluster_config,
+                local_savepath=self.results_dir,
+                remote_fs=self.remote_fs,
+                python_script_file=self.training_script,
+                individual_ressources=individual_resources,
+                shared_ressources=(
+                    [self.config_file]
+                    + self._extra_shared_resources()
+                    + self.db_files
+                ),
+                logfile="train.log",
+                remote_savepath=self.remote_savepath,
+                collect_only=False,
+                num_parallel=min(self.num_models, 5),
+                loop_time=self.loop_time,
+                jobname=self._jobname,
+                n_processors=self.n_processors,
+            )
+
+        self.training_task = self.build_or_resume_array_task(
+            self.results_dir,
+            _build_training_task,
             python_script_file=self.training_script,
-            individual_ressources=individual_resources,
-            shared_ressources=(
-                [self.config_file]
-                + self._extra_shared_resources()
-                + self.db_files
-            ),
-            logfile="train.log",
-            remote_savepath=self.remote_savepath,
-            collect_only=False,
-            num_parallel=min(self.num_models, 5),
-            loop_time=self.loop_time,
-            jobname=self._jobname,
-            n_processors=self.n_processors,
         )
-
-        self.training_task.allocate_data()
 
     def _create_stub_outputs(self) -> list[Path]:
         """Create mock per-job model files (and artifacts) for testing."""
@@ -306,7 +321,7 @@ class _MaceArrayTrainer(ModelTrainer):
             logger.info("Running in stub mode - creating mock MACE models")
             return self._create_stub_outputs()
 
-        self.training_task.submit()
+        self.submit_if_needed(self.training_task)
         if not self.training_task.finish_check():
             raise WorkflowError(
                 f"MACE {self._action} did not finish successfully (one or "
@@ -370,6 +385,13 @@ class MaceModelTrainer(_MaceArrayTrainer):
             (default; an opaque single-file pickle) or ``"bundle"`` (a
             directory with ``config.json`` + ``params.msgpack``, the canonical
             inspectable format mace-jax's loader / jaxrens consume).
+        collect_only: If True, ``update`` reconstructs the array task
+            submitted by an earlier, ``collect_only=False`` call (from the
+            manifest written beside ``<calcdir>/train/results``) instead of
+            allocating/submitting a new one, and ``get_trained_model`` skips
+            the (already-done) submission. ``trainer_input`` is not read in
+            this mode. Use this to collect a detached MACE training run from
+            a fresh process.
     """
 
     # Behaviour is entirely the base default (script mace_training.py, jobname
@@ -406,6 +428,13 @@ class MaceFinetuningTrainer(_MaceArrayTrainer):
             (default; an opaque single-file pickle) or ``"bundle"`` (a
             directory with ``config.json`` + ``params.msgpack``, the canonical
             inspectable format mace-jax's loader / jaxrens consume).
+        collect_only: If True, ``update`` reconstructs the array task
+            submitted by an earlier, ``collect_only=False`` call (from the
+            manifest written beside ``<calcdir>/train/results``) instead of
+            allocating/submitting a new one, and ``get_trained_model`` skips
+            the (already-done) submission. ``trainer_input`` is not read in
+            this mode. Use this to collect a detached MACE training run from
+            a fresh process.
     """
 
     _script_name = "mace_finetuning.py"
@@ -429,6 +458,7 @@ class MaceFinetuningTrainer(_MaceArrayTrainer):
         convert_to_jax: bool = False,
         n_processors: int = 1,
         jax_output_format: str = "pkl",
+        collect_only: bool = False,
     ):
         super().__init__(
             remote_fs=remote_fs,
@@ -444,6 +474,7 @@ class MaceFinetuningTrainer(_MaceArrayTrainer):
             n_processors=n_processors,
             convert_to_jax=convert_to_jax,
             jax_output_format=jax_output_format,
+            collect_only=collect_only,
         )
         self.foundation_model = foundation_model
 
@@ -484,7 +515,7 @@ class MaceFinetuningTrainer(_MaceArrayTrainer):
         return jax_path
 
 
-class NeuralilILTrainer(ModelTrainer):
+class NeuralilILTrainer(DetachableTaskMixin, ModelTrainer):
     """
     Trainer for NeuralIL models using JAXNEST framework.
 
@@ -507,6 +538,13 @@ class NeuralilILTrainer(ModelTrainer):
         config_file: Optional path to a YAML file of hyperparameters, layered
             on the built-in defaults (mirrors ``MaceModelTrainer``'s
             ``config_file``). Overridden by anything in ``training_kwargs``.
+        collect_only: If True, ``update`` reconstructs the task submitted by
+            an earlier, ``collect_only=False`` call (from the manifest
+            written beside ``<calcdir>/training/results``) instead of
+            allocating/submitting a new one, and ``get_trained_model`` skips
+            the (already-done) submission. ``trainer_input`` is not read in
+            this mode. Use this to collect a detached NeuralIL training run
+            from a fresh process.
     """
 
     default_training_kwargs: dict = {
@@ -546,6 +584,7 @@ class NeuralilILTrainer(ModelTrainer):
         stub: bool = False,
         loop_time: float = 30,
         config_file: Optional[os.PathLike] = None,
+        collect_only: bool = False,
     ):
         super().__init__()
         if training_script is None:
@@ -554,6 +593,7 @@ class NeuralilILTrainer(ModelTrainer):
             )
         self.training_script = training_script
         self.cluster_config = cluster_config
+        self.collect_only = collect_only
         self.config_file = config_file
 
         # Layer the hyperparameters: defaults < config_file (YAML) <
@@ -584,7 +624,7 @@ class NeuralilILTrainer(ModelTrainer):
     def update(
         self,
         calcdir: os.PathLike,
-        trainer_input: Path | list[os.PathLike],
+        trainer_input: Optional[Path | list[os.PathLike]],
         **kwargs,
     ) -> None:
         """
@@ -592,29 +632,43 @@ class NeuralilILTrainer(ModelTrainer):
 
         Args:
             calcdir: Directory for this AL iteration
-            trainer_input: Path(s) to database files with training data
+            trainer_input: Path(s) to database files with training data. Not
+                read when ``collect_only`` -- see ``MaceModelTrainer``.
             **kwargs: Additional parameters
         """
         self.train_dir = Path(calcdir) / "training"
         self.results_dir = self.train_dir / "results"
         os.makedirs(self.train_dir, exist_ok=True)
 
-        self.db_files = (
-            [trainer_input]
-            if isinstance(trainer_input, Path)
-            else trainer_input
-        )
+        if not self.collect_only:
+            self.db_files = (
+                [trainer_input]
+                if isinstance(trainer_input, Path)
+                else trainer_input
+            )
+
+        # The remote pickle filename is deterministic from calcdir alone
+        # (``model_<iteration>.pkl``), so it is computed here, unconditionally
+        # -- not inside the build step below -- meaning a collect_only=True
+        # trainer (which never runs that build step at all) still knows
+        # where get_trained_model() should look, instead of depending on
+        # self.training_kwargs["pickle_file_name"], which is only ever set
+        # as a side effect of building the task in the *original* process.
         it = str(calcdir).split("/")[-1]
+        self.pickle_filename = f"model_{it}.pkl"
 
         # In stub mode, we don't need to create the task
-        if not self.stub:
+        if self.stub:
+            return
+
+        def _build_training_task() -> SingleScriptTask:
             # Create JSON input file for the training script inside this
             # iteration's training directory.
             self.input_file = self.train_dir / "input_nnff.json"
             with open(self.input_file, "w") as f:
                 json.dump(self.training_kwargs, f)
 
-            self.train_task = SingleScriptTask(
+            task = SingleScriptTask(
                 cluster_config=self.cluster_config,
                 script_file=self.training_script,
                 input_file=self.input_file,
@@ -630,24 +684,30 @@ class NeuralilILTrainer(ModelTrainer):
 
             # Prepare training configuration
             # Copy database files to remote
-            remote_dbs = []
-            for db_file in self.db_files:
-                remote_dbs.append(str(self.train_task.copy_file(db_file)))
+            remote_dbs = [
+                str(task.copy_file(db_file)) for db_file in self.db_files
+            ]
 
             with open(self.input_file, "r") as f:
                 self.training_kwargs = json.load(f)
 
             self.training_kwargs["structure_databases"] = remote_dbs
-            self.training_kwargs["filepath"] = str(self.train_task.calcdir)
+            self.training_kwargs["filepath"] = str(task.calcdir)
             self.training_kwargs["pickle_file_name"] = str(
-                self.train_task.calcdir / f"model_{it}.pkl"
+                task.calcdir / self.pickle_filename
             )
 
             # Write JSON input file to remote
             with open(self.input_file, "w") as f:
                 json.dump(self.training_kwargs, f)
-            # Allocate data (copies script and writes jobfile)
-            self.train_task.allocate_data()
+            return task
+
+        # Allocation (copies script and writes jobfile) happens inside
+        # build_or_resume_single_task, uniformly for every non-collect_only
+        # caller -- see DetachableTaskMixin.
+        self.train_task = self.build_or_resume_single_task(
+            self.results_dir, _build_training_task
+        )
 
     def _create_stub_outputs(self) -> Path:
         """
@@ -704,17 +764,20 @@ class NeuralilILTrainer(ModelTrainer):
             logger.info("Running in stub mode - creating mock NeuralIL model")
             model_file = self._create_stub_outputs()
         else:
-            # Run actual training
-            self.train_task.run()
+            # Submit (unless collect_only -- already submitted in another
+            # process), wait, then collect -- rather than the single
+            # task.run() convenience call, which unconditionally re-runs
+            # allocate_data() and would be wrong for a collect_only task.
+            self.submit_if_needed(self.train_task)
 
             if not self.train_task.finish_check():
                 raise WorkflowError("Training did not complete successfully")
+            self.train_task.collect_results()
 
-            # Get model file path from training kwargs
-            model_file = (
-                self.results_dir
-                / os.path.split(self.training_kwargs["pickle_file_name"])[-1]
-            )
+            # self.pickle_filename (set in update(), independent of
+            # self.training_kwargs) is what makes this correct in
+            # collect_only mode too -- see update()'s docstring note.
+            model_file = self.results_dir / self.pickle_filename
 
             if not os.path.exists(model_file):
                 raise WorkflowError(f"Model file not found: {model_file}")

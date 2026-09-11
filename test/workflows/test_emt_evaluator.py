@@ -105,6 +105,72 @@ def test_collect_results_preserves_forces_on_constrained_atoms(tmp_path):
     np.testing.assert_allclose(collected[0].arrays["REF_forces"], forces)
 
 
+def test_emt_evaluator_collect_only_round_trip(
+    tmp_path, direct_python_on_path
+):
+    """update()/get_evaluated_configs() with collect_only=True reconstruct
+    (via RemoteAtomsHandler.from_manifest) and collect an array submitted by
+    an earlier, separate EMTEvaluator instance -- no evaluator_input needed.
+    """
+    configs = [
+        Atoms(
+            "Cu2",
+            positions=[[0, 0, 0], [2.55, 0, 0]],
+            cell=[8, 8, 8],
+            pbc=True,
+        ),
+        Atoms("Cu", positions=[[0, 0, 0]], cell=[8, 8, 8], pbc=True),
+    ]
+    traj = tmp_path / "configs.extxyz"
+    ase.io.write(traj, configs)
+
+    savepath = tmp_path / "save"
+    savepath.mkdir()
+    cluster_config = ClusterConfig(
+        remote_machine="local",
+        partition="p",
+        conda_env="",
+        conda_source="",
+        savepath=str(savepath),
+        template="unused.sh.j2",
+        executor="direct",
+    )
+    calcdir = tmp_path / "iter0"
+    calcdir.mkdir()
+
+    def build(collect_only):
+        return EMTEvaluator(
+            remote_fs=LocalFileSystem(),
+            cluster_config=cluster_config,
+            num_parallel=2,
+            remote_savepath=savepath,
+            loop_time=0.2,
+            collect_only=collect_only,
+        )
+
+    evaluator1 = build(collect_only=False)
+    evaluator1.update(calcdir, traj)
+    manifest_path = evaluator1.handler.submit_detached()
+
+    from remote_handler.core.manifest import TaskHandle
+
+    TaskHandle.from_file(manifest_path).wait()
+
+    evaluator2 = build(collect_only=True)
+    assert evaluator2.collect_only is True
+    evaluator2.update(calcdir, None)
+    assert evaluator2.handler.shard_manager is None  # no re-reading traj
+
+    output_path = evaluator2.get_evaluated_configs()
+
+    labelled = ase.io.read(output_path, index=":")
+    assert len(labelled) == 2
+    for at in labelled:
+        assert "REF_energy" in at.info
+        assert np.isfinite(at.info["REF_energy"])
+        assert at.arrays["REF_forces"].shape == (len(at), 3)
+
+
 def test_emt_evaluator_stub(tmp_path):
     """Stub mode short-circuits compute and still produces labelled output."""
     cluster_config = ClusterConfig(

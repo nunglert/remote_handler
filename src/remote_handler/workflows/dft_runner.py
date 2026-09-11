@@ -252,24 +252,6 @@ class SinglePointHandler(RemoteAtomsHandler):
         # Shape (num_obj, num_tasks) expected by the array task.
         self.individual_ressources = [config_files, atoms_batches]
 
-    def finish_check(self, required_fraction: float = 0.8):
-        """Check the fraction of jobs that wrote ``is_finished.info``.
-
-        Args:
-            required_fraction: Minimum success fraction to return True.
-        """
-        assert self.all_calcpaths, "There are no calcpaths to check!"
-
-        num_converged = 0
-        for calcpath in self.all_calcpaths:
-            if self.remote_fs.exists(Path(calcpath) / "is_finished.info"):
-                num_converged += 1
-
-        finished_fraction = num_converged / len(self.all_calcpaths)
-        if finished_fraction < 0.5:
-            logger.warning("More than 50% of the submitted runs failed..")
-        return finished_fraction >= required_fraction
-
     def run(self):
         """Allocate inputs, submit the array, and collect results."""
         self.allocate_data()

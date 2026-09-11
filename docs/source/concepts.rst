@@ -92,6 +92,32 @@ many shards, one per sub-directory). Crucially, a task describes *what* to run
 -- it does **not** know *how* the job is actually launched. That is the
 executor's job.
 
+The lifecycle above assumes one long-lived process drives the whole run. A
+task can equally be **detached and collected later, from a different
+process** -- the same shape, split across a process boundary:
+
+.. mermaid::
+
+   sequenceDiagram
+       participant P1 as process 1
+       participant FS as remote_fs
+       participant P2 as process 2 (later)
+       P1->>FS: allocate_data()
+       P1->>FS: submit(only_start=True)  -- detach()
+       P1-->>P1: write_manifest()  -- task_manifest.json
+       Note over P1,P2: process 1 exits, job keeps running on the target
+       P2->>FS: TaskHandle.from_file(...).wait()
+       P2->>FS: ArrayScriptTask.from_manifest(...)  -- collect_only, no re-allocation
+       P2->>FS: finish_check() / collect_results()
+
+``ArrayScriptTask.from_manifest`` / ``SingleScriptTask.from_manifest``
+reconstruct the *full* task object -- not just an executor handle -- from the
+manifest written by ``detach``/``write_manifest``: same resolved
+``remote_savepath``, cluster config, and (for arrays) ``num_array_tasks``, so
+``finish_check()`` and ``collect_results()`` behave exactly as they would in
+the original process, without ever calling ``allocate_data()`` again. See
+:doc:`cli` for the lower-level ``TaskHandle``/manifest CLI this builds on.
+
 Executors: the pluggable backend seam
 -------------------------------------
 
