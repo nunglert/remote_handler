@@ -78,6 +78,13 @@ test:
   coverage: '/^TOTAL.+?(\d+\%)$/'
   artifacts:
     when: always
+    # coverage.xml/report.xml listed under both `paths` (so `needs:
+    # artifacts: true` in the diff-coverage job actually gets the file --
+    # `reports:`-only artifacts aren't reliably fetched that way) and
+    # `reports` (for GitLab's own coverage-visualization/test-summary UI).
+    paths:
+      - coverage.xml
+      - report.xml
     reports:
       junit: report.xml
       coverage_report:
