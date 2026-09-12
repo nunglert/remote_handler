@@ -134,6 +134,33 @@ def resolve_remote_module_file(remote_fs, conda_source, conda_env, module):
     return None
 
 
+def resolve_remote_executable(remote_fs, conda_source, conda_env, executable):
+    """Locate a console script's path in the *remote* conda env, or ``None``.
+
+    Runs ``command -v <executable>`` on the machine ``remote_fs`` points at,
+    inside the env named by ``conda_source``/``conda_env`` -- the CLI-tool
+    counterpart of :func:`resolve_remote_module_file` (which probes a
+    *python module*, e.g. for MACE's ``mace.cli.run_train``). Some ML tools
+    -- pacemaker, gracemaker -- ship as bare console scripts rather than
+    importable modules, so their runner must be resolved this way instead.
+    Works uniformly for a real cluster (SSH) and a local ``direct`` run
+    (subprocess). Returns ``None`` if the executable is absent or the probe
+    fails.
+    """
+    activation = conda_activation_script(conda_source, conda_env)
+    cmd = f"{activation}\ncommand -v {executable}"
+    try:
+        result = remote_fs.run_command(cmd)
+    except Exception:  # noqa: BLE001 - any transport failure -> not resolved
+        logger.debug("Remote executable probe failed for %s.", executable)
+        return None
+    if result.returncode == 0:
+        path = (result.stdout or "").strip().splitlines()
+        if path and path[-1]:
+            return path[-1]
+    return None
+
+
 def validate_conda_on_fs(
     conda_source, conda_env, remote_fs, *, remote_machine, conda_env_dir=None
 ):

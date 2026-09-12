@@ -1,0 +1,11 @@
+# Minimal illustrative config -- see pacemaker's own docs for the full
+# schema. "data" and "seed" are injected per job, not set here.
+potential:
+  deltaSplineBins: 0.001
+  elements: [Cu]
+fit:
+  loss:
+    kappa: 0.3
+  maxiter: 200
+backend:
+  evaluator: tensorpot

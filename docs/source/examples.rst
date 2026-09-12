@@ -17,8 +17,9 @@ They come in two flavours:
   :doc:`cli`); adapt the aliases, paths and resources to your own setup before
   running.
 
-The conceptual roles (sampler / selector / evaluator / trainer) are explained
-in :doc:`concepts`.
+The conceptual roles (sampler / selector / evaluator / trainer) and the
+:class:`~remote_handler.workflows.staged_active_learning.StagedActiveLearningHandler`
+that wires them together are explained in :doc:`active_learning`.
 
 Run it now: a full loop with no cluster
 ---------------------------------------
@@ -110,4 +111,38 @@ laptop goes to sleep and collects the next morning. Like Examples 1--2, this
 is statically validated only (API-currency, no live cluster):
 
 .. literalinclude:: examples/example_3_standalone.py
+   :language: python
+
+Example 4: Ground-truth labelling with ORCA
+---------------------------------------------
+
+The same evaluator shape as Example 1, swapping VASP for ORCA:
+
+.. literalinclude:: examples/example_4_orca.py
+   :language: python
+
+Example 5: Training a NeuralIL model
+--------------------------------------
+
+The same trainer shape as Example 2, for the JAXNEST-based NeuralIL model:
+
+.. literalinclude:: examples/example_5_neuralil.py
+   :language: python
+
+Example 6: Training an ACE force field
+------------------------------------------
+
+The same ensemble-array trainer shape as Example 2, fitting an ACE
+potential (``pacemaker``) instead of MACE:
+
+.. literalinclude:: examples/example_6_ace.py
+   :language: python
+
+Example 7: Training a GRACE force field
+-------------------------------------------
+
+The same ensemble-array trainer shape as Example 2, fitting a GRACE
+potential (``gracemaker``) instead of MACE:
+
+.. literalinclude:: examples/example_7_grace.py
    :language: python

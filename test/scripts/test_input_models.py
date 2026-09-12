@@ -8,7 +8,9 @@ import pytest
 from remote_handler.exceptions import ScriptInputError
 from remote_handler.processing import OptimizeArgs, ProcessTrajInput, RdfArgs
 from remote_handler.scripts.input_models import (
+    AceTrainingInput,
     DftSinglepointInput,
+    GraceTrainingInput,
     MaceFinetuningInput,
     MaceTrainingInput,
     OrcaSinglepointInput,
@@ -166,6 +168,109 @@ class TestMaceTrainingInput:
             config.validate()
 
         assert "cannot be empty" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("input_cls", [AceTrainingInput, GraceTrainingInput])
+class TestAceGraceTrainingInput:
+    """Tests for AceTrainingInput/GraceTrainingInput (identical shape)."""
+
+    def test_from_file_valid(self, tmp_path, input_cls):
+        config_yaml = tmp_path / "config.yaml"
+        config_yaml.write_text("potential: {}\nfit: {}")
+
+        input_file = tmp_path / "input.json"
+        input_data = {
+            "database_files": ["data.xyz"],
+            "train_runner": "pacemaker",
+            "config_file": str(config_yaml),
+            "model_name": "test_model",
+            "seed": 42,
+            "validation_fraction": 0.2,
+        }
+        input_file.write_text(json.dumps(input_data))
+
+        config = input_cls.from_file(input_file)
+
+        assert config.database_files == ["data.xyz"]
+        assert config.train_runner == Path("pacemaker")
+        assert config.config_file == config_yaml
+        assert config.model_name == "test_model"
+        assert config.seed == 42
+        assert config.validation_fraction == 0.2
+
+    def test_validate_empty_database_files(self, tmp_path, input_cls):
+        config_yaml = tmp_path / "config.yaml"
+        config_yaml.write_text("potential: {}")
+
+        config = input_cls(
+            database_files=[],
+            train_runner=Path("runner"),
+            config_file=config_yaml,
+            model_name="test",
+            seed=42,
+        )
+
+        with pytest.raises(ScriptInputError, match="cannot be empty"):
+            config.validate()
+
+    def test_validate_invalid_validation_fraction(self, tmp_path, input_cls):
+        config_yaml = tmp_path / "config.yaml"
+        config_yaml.write_text("potential: {}")
+
+        config = input_cls(
+            database_files=["data.xyz"],
+            train_runner=Path("runner"),
+            config_file=config_yaml,
+            model_name="test",
+            seed=42,
+            validation_fraction=1.5,
+        )
+
+        with pytest.raises(ScriptInputError, match="between 0 and 1"):
+            config.validate()
+
+    def test_validate_empty_model_name(self, tmp_path, input_cls):
+        config_yaml = tmp_path / "config.yaml"
+        config_yaml.write_text("potential: {}")
+
+        config = input_cls(
+            database_files=["data.xyz"],
+            train_runner=Path("runner"),
+            config_file=config_yaml,
+            model_name="",
+            seed=42,
+        )
+
+        with pytest.raises(ScriptInputError, match="cannot be empty"):
+            config.validate()
+
+    def test_root_flags_missing_data_file(self, tmp_path, input_cls):
+        (tmp_path / "config.yaml").write_text("potential: {}")
+        config = input_cls.from_dict(
+            dict(
+                database_files=["db.xyz"],
+                train_runner="runner",
+                config_file="config.yaml",
+                model_name="m",
+                seed=0,
+            )
+        )
+        with pytest.raises(ScriptInputError, match="database file"):
+            config.validate(tmp_path)  # db.xyz missing
+
+    def test_root_passes_when_all_present(self, tmp_path, input_cls):
+        (tmp_path / "db.xyz").write_text("x")
+        (tmp_path / "config.yaml").write_text("potential: {}")
+        config = input_cls.from_dict(
+            dict(
+                database_files=["db.xyz"],
+                train_runner="runner",
+                config_file="config.yaml",
+                model_name="m",
+                seed=0,
+            )
+        )
+        config.validate(tmp_path)  # must not raise
 
 
 class TestDftSinglepointInput:

@@ -3,6 +3,7 @@ import logging
 import os
 import random
 import string
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -1405,6 +1406,64 @@ class DetachableTaskMixin:
     collect_only: bool
     remote_fs: FileSystemHandlerBase
 
+    #: Folder name under ``calcdir`` this actor stages its work in (e.g.
+    #: ``"train"``, ``"training"``, ``"dft"``) -- set this once per
+    #: concrete class, alongside its other per-subclass constants (like
+    #: ``_script_name``/``_jobname``), instead of writing
+    #: ``calcdir / "train"`` (or similar) as a string literal in both
+    #: ``update()`` and :meth:`pending_manifest`. Left empty here (rather
+    #: than a made-up default) so forgetting to set it fails loudly via
+    #: :meth:`iteration_dir`, not silently via some plausible-looking guess.
+    _iteration_subdir: str = ""
+
+    #: Folder name under :attr:`_iteration_subdir` this actor's task
+    #: results are collected into. The same for every current actor
+    #: (hence one shared default), but still a class attribute -- not a
+    #: string literal repeated in :meth:`results_dir_for` -- for the exact
+    #: same reason as :attr:`_iteration_subdir`.
+    _results_subdir: str = "results"
+
+    def iteration_dir(self, calcdir: os.PathLike) -> Path:
+        """This iteration's working directory, ``calcdir / _iteration_subdir``.
+
+        Computed from ``calcdir`` alone (never from instance state like
+        ``self.results_dir``), so it gives the same answer whether called
+        from ``update()`` while building this iteration's task, or from
+        :meth:`pending_manifest` *before* ``update()`` has ever run --
+        which is the whole point of the latter.
+        """
+        if not self._iteration_subdir:
+            raise NotImplementedError(
+                f"{type(self).__name__} must set _iteration_subdir."
+            )
+        return Path(calcdir) / self._iteration_subdir
+
+    def results_dir_for(self, calcdir: os.PathLike) -> Path:
+        """This iteration's ``results_dir``, i.e. where this actor's task
+        is built with ``local_savepath=`` and where :meth:`manifest_path`
+        then looks for a manifest. Single source of truth for both
+        ``update()`` (which assigns its result to ``self.results_dir``)
+        and :meth:`pending_manifest`.
+        """
+        return self.iteration_dir(calcdir) / self._results_subdir
+
+    def pending_manifest(self, calcdir: os.PathLike) -> Optional[Path]:
+        """Default ``pending_manifest`` for any actor that sets
+        :attr:`_iteration_subdir` -- overrides the ``Sampler``/
+        ``GroundTruthEvaluator``/``ModelTrainer`` ABCs' own default (always
+        ``None``) via normal MRO resolution, since this mixin is listed
+        first (``class Foo(DetachableTaskMixin, ModelTrainer)``). See
+        ``ModelTrainer.pending_manifest`` for the full rationale.
+
+        Returns ``None`` (reattach unsupported, the ABC default) rather
+        than raising when ``_iteration_subdir`` isn't set, unlike
+        :meth:`iteration_dir` -- an actor that hasn't wired this up yet
+        should just not support reattach, not crash the whole loop.
+        """
+        if not self._iteration_subdir:
+            return None
+        return self.manifest_path(self.results_dir_for(calcdir))
+
     def manifest_path(self, results_dir: os.PathLike) -> Path:
         """Where ``write_manifest``/``detach`` puts this task's manifest.
 
@@ -1487,3 +1546,78 @@ class DetachableTaskMixin:
         """Submit ``task``, unless it was already submitted in another process."""
         if not self.collect_only:
             task.submit()
+
+    def wait_if_needed(
+        self,
+        task: "RemoteTask",
+        *,
+        finish_check: Optional[Callable[[], bool]] = None,
+        poll_interval: Optional[float] = None,
+        max_wait: Optional[float] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Require -- or, when reattached, wait for -- ``task``'s completion.
+
+        ``finish_check`` defaults to ``task.finish_check`` (no args); pass
+        e.g. ``lambda: task.finish_check(required_fraction)`` for the
+        array/fraction variant. Called with no arguments either way.
+
+        Non-``collect_only``: ``task.submit()`` (via ``submit_if_needed``,
+        called *before* this) already blocked -- via the executor's own
+        queue-/sentinel-based wait -- until the job left the queue. So a
+        single ``finish_check()`` here is correct: if the marker is missing
+        now, the job is done one way or another (successfully or not), not
+        still running, and this raises immediately rather than polling for
+        a marker that will never appear.
+
+        ``collect_only`` (reattached): no scheduler job id is ever
+        re-attached (``*.from_manifest`` doesn't call ``executor.attach()``
+        -- reattachment here is purely file-based), so there is no
+        queue-based wait to lean on. This polls ``finish_check()`` every
+        ``poll_interval`` seconds (default: ``task.loop_time`` if present,
+        else 30.0) until it succeeds or ``max_wait`` seconds have elapsed
+        (``None``, the default, means wait forever -- matching
+        ``ConnectionPolicy``'s convention).
+
+        Args:
+            error_message: Used verbatim as the exception message for the
+                non-``collect_only`` immediate failure; also the prefix of
+                the message raised when ``collect_only`` polling exceeds
+                ``max_wait``. Defaults to a generic message naming the task
+                type.
+
+        Raises:
+            TaskError: If the job never finishes within ``max_wait``, or
+                immediately in the non-``collect_only`` case.
+        """
+        check = finish_check or task.finish_check
+        message = error_message or (
+            f"{type(task).__name__} did not finish successfully."
+        )
+
+        if not self.collect_only:
+            if not check():
+                raise TaskError(message)
+            return
+
+        interval = (
+            poll_interval
+            if poll_interval is not None
+            else getattr(task, "loop_time", 30.0)
+        )
+        start = time.monotonic()
+        while not check():
+            elapsed = time.monotonic() - start
+            if max_wait is not None and elapsed >= max_wait:
+                raise TaskError(
+                    f"{message} (reattached job still not finished after "
+                    f"waiting {elapsed:.0f}s, exceeding max_wait="
+                    f"{max_wait}s)."
+                )
+            logger.info(
+                "Reattached task not finished yet (waited %.0fs); polling "
+                "again in %.0fs.",
+                elapsed,
+                interval,
+            )
+            time.sleep(interval)

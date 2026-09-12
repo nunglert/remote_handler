@@ -17,6 +17,7 @@ live in the sibling ``_markers.py`` (skip infrastructure, a separate concern).
 
 import importlib.util
 import os
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -123,3 +124,44 @@ def neuralil_available() -> bool:
         return importlib.util.find_spec("neuralil") is not None
     except Exception:
         return False
+
+
+def pandas_available() -> bool:
+    """True if pandas is importable (needed by ``ace_utils.build_ace_dataframe``)."""
+    try:
+        return importlib.util.find_spec("pandas") is not None
+    except Exception:
+        return False
+
+
+# --------------------------------------------------------------------------
+# ACE / GRACE training tool probes
+# --------------------------------------------------------------------------
+# pacemaker (ACE) and gracemaker (GRACE) both ship as bare console scripts
+# (see ``core.remote_env.resolve_remote_executable``), not importable python
+# modules the way MACE's ``mace.cli.run_train`` is -- so locate them via
+# ``shutil.which`` rather than an import probe.
+def ace_available() -> bool:
+    """True if pacemaker's python package (``pyace``) is importable."""
+    try:
+        return importlib.util.find_spec("pyace") is not None
+    except Exception:
+        return False
+
+
+def ace_train_runner_script() -> Optional[str]:
+    """Path to the local ``pacemaker`` executable, or None."""
+    return shutil.which("pacemaker")
+
+
+def grace_available() -> bool:
+    """True if gracemaker's python package (``tensorpotential``) is importable."""
+    try:
+        return importlib.util.find_spec("tensorpotential") is not None
+    except Exception:
+        return False
+
+
+def grace_train_runner_script() -> Optional[str]:
+    """Path to the local ``gracemaker`` executable, or None."""
+    return shutil.which("gracemaker")

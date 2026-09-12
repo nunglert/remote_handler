@@ -9,7 +9,7 @@ The version is derived from git tags by `setuptools-scm` (tag `v0.2.0` →
 version `0.2.0`). To cut a release: add a dated section below, merge to `main`,
 then `git tag -a vX.Y.Z`.
 
-## [Unreleased]
+## [0.7.0] — 2026-09-12
 
 ### Fixed
 - **Standalone collection of a `collect_only=True` array task no longer
@@ -44,6 +44,54 @@ then `git tag -a vX.Y.Z`.
   a MACE trainer's `update()`).
 - **`docs/source/examples/example_3_standalone.py`** — submit a DFT array and
   a MACE training array in one run, collect both from a later, separate run.
+- **`AceModelTrainer` / `GraceModelTrainer`** — ensemble-array trainers
+  fitting ACE (`pacemaker`) / GRACE (`gracemaker`) potentials, the same
+  shape as `MaceModelTrainer`. New `ace` / `grace` install extras (they
+  cannot coexist in one environment — both resolve to a top-level
+  `tensorpotential` package, but from two unrelated projects; see the
+  comments in `pyproject.toml`), plus `ace_tensorpot_gpu` for the
+  GPU-accelerated `pacemaker` backend.
+- **Crash-resume now reattaches to an already-submitted job instead of
+  resubmitting a duplicate**, closing the gap where a *driver* restart
+  mid-iteration (not just between iterations) orphaned a still-running job
+  on the cluster. `Sampler` / `Selector` / `GroundTruthEvaluator` /
+  `ModelTrainer` gained a `pending_manifest()` hook (default: reattach
+  unsupported, so every existing actor keeps today's behaviour);
+  `ActiveLearningHandler` and `StagedActiveLearningHandler` both gained a
+  `_reattach_if_pending()` helper that flips a pending actor to
+  `collect_only` for one step when it finds one (duck-typed for the
+  latter, so a stage actor need not subclass the actor ABCs at all — see
+  `StagedActiveLearningHandler`'s module docstring). `DetachableTaskMixin`
+  gained `submit_if_needed()` / `wait_if_needed()` so an actor's `update()`
+  waits correctly either way — a single immediate `finish_check()` when
+  freshly submitted, or polling until done (or an optional `max_wait`) when
+  reattached — and every `DetachableTaskMixin` actor (the MACE/ACE/GRACE/
+  NeuralilIL trainers, the VASP/ORCA/EMT evaluators) gained a matching
+  `reattach_max_wait` constructor kwarg.
+- **`docs/source/active_learning.rst`** — a dedicated page for the
+  active-learning loop: the four actor interfaces, `StagedActiveLearningHandler`'s
+  stage/ring/DAG model and resume, and every shipped evaluator/trainer/
+  selector with an unfoldable, signature-checked usage example (a real
+  minimal config file for the trainers that need one). `docs/source/examples.rst`
+  gained matching Examples 4–7 (ORCA, NeuralilIL, ACE, GRACE).
+
+### Changed
+- **`MaceModelTrainer` / `MaceFinetuningTrainer` / `AceModelTrainer` /
+  `GraceModelTrainer` now share one `_EnsembleArrayTrainer` base** (was a
+  MACE-only `_MaceArrayTrainer`), so the three ensemble-array trainers
+  duplicate only their tool-specific hooks (train-runner resolution,
+  artifact naming, stub scaffolding) instead of the whole submit/poll/
+  collect machinery. Public signatures unaffected.
+- **`docs/source/concepts.rst`'s active-learning section is now a short
+  teaser** pointing at the new `active_learning.rst`, instead of the only
+  place the loop was documented.
+
+### Deprecated
+- **`ActiveLearningHandler`** — raises a `DeprecationWarning` on
+  construction and will be removed in a future release. It hardcodes the
+  fixed sampler/evaluator/trainer triple with no selector stage; use
+  `StagedActiveLearningHandler` instead (`from_actors(...)` is a drop-in
+  replacement for this constructor).
 
 ## [0.6.0] — 2026-08-26
 

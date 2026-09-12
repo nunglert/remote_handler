@@ -11,6 +11,7 @@ computational workflows involving atomic simulations, DFT calculations, and acti
 
    installation
    concepts
+   active_learning
    cli
    quickstart
    api/index
