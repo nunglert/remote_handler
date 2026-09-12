@@ -185,6 +185,110 @@ def _mace_setup(tmp_path):
     return remote, script, config_file, db_file, LocalFileSystem()
 
 
+FAKE_SLOW_TRAIN_SCRIPT = """
+import json, sys, pickle, time
+from pathlib import Path
+
+calc = Path(sys.argv[1])
+data = json.load(open(calc / "input_train.json"))
+time.sleep(0.6)
+models_dir = calc / "models"
+models_dir.mkdir(parents=True, exist_ok=True)
+with open(models_dir / f"{data['model_name']}.model", "wb") as f:
+    pickle.dump({"seed": data["seed"]}, f)
+(calc / "is_finished.info").write_text("done")
+"""
+
+
+def test_get_trained_model_waits_for_still_running_reattached_job(tmp_path):
+    """Regression for the gap ``DetachableTaskMixin.wait_if_needed`` fixes:
+    reattaching (``collect_only=True``) to a job that is still genuinely
+    running on the cluster must wait for it, not raise immediately just
+    because the ``is_finished.info`` marker isn't there *yet* -- unlike a
+    freshly-submitted task, a reattached one never re-attaches the
+    scheduler's own blocking wait (see the mixin's docstring)."""
+    remote, script, config_file, db_file, fs = _mace_setup(tmp_path)
+    script.write_text(FAKE_SLOW_TRAIN_SCRIPT)
+    calcdir = tmp_path / "iter0"
+
+    trainer1 = MaceModelTrainer(
+        remote_fs=fs,
+        cluster_config=_direct_config(remote),
+        config_file=str(config_file),
+        training_script=str(script),
+        remote_mace_train_runner="unused_run_train.py",
+        num_models=1,
+        loop_time=0.1,
+    )
+    trainer1.update(calcdir, [db_file])
+    # Detach without waiting -- the job is launched and left running in the
+    # background, exactly as after a dropped connection.
+    trainer1.training_task.submit_detached()
+
+    trainer2 = MaceModelTrainer(
+        remote_fs=fs,
+        cluster_config=_direct_config(remote),
+        config_file=str(config_file),
+        training_script=str(script),
+        remote_mace_train_runner="unused_run_train.py",
+        num_models=1,
+        loop_time=0.1,
+        collect_only=True,
+    )
+    trainer2.update(calcdir, None)
+
+    # The background job is still sleeping at this point. A one-shot
+    # finish_check() would raise here; wait_if_needed() must poll instead.
+    model_paths = trainer2.get_trained_model()
+
+    assert len(model_paths) == 1
+    assert model_paths[0].exists()
+
+
+FAKE_STUCK_TRAIN_SCRIPT = """
+import time
+time.sleep(60)
+"""
+
+
+def test_get_trained_model_reattach_max_wait_bounds_a_stuck_job(tmp_path):
+    """``reattach_max_wait`` must give up on a genuinely-stuck reattach
+    rather than block the driver forever."""
+    from remote_handler.exceptions import TaskError
+
+    remote, script, config_file, db_file, fs = _mace_setup(tmp_path)
+    script.write_text(FAKE_STUCK_TRAIN_SCRIPT)
+    calcdir = tmp_path / "iter0"
+
+    trainer1 = MaceModelTrainer(
+        remote_fs=fs,
+        cluster_config=_direct_config(remote),
+        config_file=str(config_file),
+        training_script=str(script),
+        remote_mace_train_runner="unused_run_train.py",
+        num_models=1,
+        loop_time=0.1,
+    )
+    trainer1.update(calcdir, [db_file])
+    trainer1.training_task.submit_detached()
+
+    trainer2 = MaceModelTrainer(
+        remote_fs=fs,
+        cluster_config=_direct_config(remote),
+        config_file=str(config_file),
+        training_script=str(script),
+        remote_mace_train_runner="unused_run_train.py",
+        num_models=1,
+        loop_time=0.1,
+        collect_only=True,
+        reattach_max_wait=0.3,
+    )
+    trainer2.update(calcdir, None)
+
+    with pytest.raises(TaskError, match="did not finish"):
+        trainer2.get_trained_model()
+
+
 @pytest.mark.parametrize(
     "convert_to_jax,jax_output_format",
     [(False, "pkl"), (True, "pkl"), (True, "bundle")],

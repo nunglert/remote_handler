@@ -3,6 +3,7 @@ import logging
 import os
 import random
 import string
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -1545,3 +1546,78 @@ class DetachableTaskMixin:
         """Submit ``task``, unless it was already submitted in another process."""
         if not self.collect_only:
             task.submit()
+
+    def wait_if_needed(
+        self,
+        task: "RemoteTask",
+        *,
+        finish_check: Optional[Callable[[], bool]] = None,
+        poll_interval: Optional[float] = None,
+        max_wait: Optional[float] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Require -- or, when reattached, wait for -- ``task``'s completion.
+
+        ``finish_check`` defaults to ``task.finish_check`` (no args); pass
+        e.g. ``lambda: task.finish_check(required_fraction)`` for the
+        array/fraction variant. Called with no arguments either way.
+
+        Non-``collect_only``: ``task.submit()`` (via ``submit_if_needed``,
+        called *before* this) already blocked -- via the executor's own
+        queue-/sentinel-based wait -- until the job left the queue. So a
+        single ``finish_check()`` here is correct: if the marker is missing
+        now, the job is done one way or another (successfully or not), not
+        still running, and this raises immediately rather than polling for
+        a marker that will never appear.
+
+        ``collect_only`` (reattached): no scheduler job id is ever
+        re-attached (``*.from_manifest`` doesn't call ``executor.attach()``
+        -- reattachment here is purely file-based), so there is no
+        queue-based wait to lean on. This polls ``finish_check()`` every
+        ``poll_interval`` seconds (default: ``task.loop_time`` if present,
+        else 30.0) until it succeeds or ``max_wait`` seconds have elapsed
+        (``None``, the default, means wait forever -- matching
+        ``ConnectionPolicy``'s convention).
+
+        Args:
+            error_message: Used verbatim as the exception message for the
+                non-``collect_only`` immediate failure; also the prefix of
+                the message raised when ``collect_only`` polling exceeds
+                ``max_wait``. Defaults to a generic message naming the task
+                type.
+
+        Raises:
+            TaskError: If the job never finishes within ``max_wait``, or
+                immediately in the non-``collect_only`` case.
+        """
+        check = finish_check or task.finish_check
+        message = error_message or (
+            f"{type(task).__name__} did not finish successfully."
+        )
+
+        if not self.collect_only:
+            if not check():
+                raise TaskError(message)
+            return
+
+        interval = (
+            poll_interval
+            if poll_interval is not None
+            else getattr(task, "loop_time", 30.0)
+        )
+        start = time.monotonic()
+        while not check():
+            elapsed = time.monotonic() - start
+            if max_wait is not None and elapsed >= max_wait:
+                raise TaskError(
+                    f"{message} (reattached job still not finished after "
+                    f"waiting {elapsed:.0f}s, exceeding max_wait="
+                    f"{max_wait}s)."
+                )
+            logger.info(
+                "Reattached task not finished yet (waited %.0fs); polling "
+                "again in %.0fs.",
+                elapsed,
+                interval,
+            )
+            time.sleep(interval)

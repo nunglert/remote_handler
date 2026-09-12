@@ -23,7 +23,6 @@ from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.core.tasks import DetachableTaskMixin
 from remote_handler.core.utils import grep
-from remote_handler.exceptions import WorkflowError
 
 from .active_learning_base import GroundTruthEvaluator
 
@@ -71,6 +70,9 @@ class AseCalculatorEvaluator(DetachableTaskMixin, GroundTruthEvaluator):
             skips the (already-done) submission. ``evaluator_input`` is not
             read in this mode. Use this to collect a detached evaluation run
             from a fresh process.
+        reattach_max_wait: Only used when ``collect_only``: how long (in
+            seconds) to wait for the reattached job to finish before giving
+            up. ``None`` (default) waits forever.
     """
 
     # Key into ``ClusterConfig.environment`` for this calculator's cluster
@@ -94,6 +96,7 @@ class AseCalculatorEvaluator(DetachableTaskMixin, GroundTruthEvaluator):
         slurm_header_add: str = "",
         time_limit: Optional[str] = None,
         collect_only: bool = False,
+        reattach_max_wait: Optional[float] = None,
     ):
         super().__init__()
         self.singlepoint_script = singlepoint_script
@@ -111,6 +114,7 @@ class AseCalculatorEvaluator(DetachableTaskMixin, GroundTruthEvaluator):
         self.slurm_header_add = slurm_header_add
         self.time_limit = time_limit
         self.collect_only = collect_only
+        self.reattach_max_wait = reattach_max_wait
         self.handler = None
 
     def update(
@@ -192,7 +196,9 @@ class AseCalculatorEvaluator(DetachableTaskMixin, GroundTruthEvaluator):
             Path to the ``.extxyz`` of evaluated configurations.
 
         Raises:
-            WorkflowError: If fewer than ``required_fraction`` jobs succeed.
+            TaskError: If fewer than ``required_fraction`` jobs succeed (or,
+                when ``collect_only``, if that doesn't happen within
+                ``reattach_max_wait``).
         """
         if self.stub:
             logger.info("Running in stub mode - creating mock outputs")
@@ -203,12 +209,18 @@ class AseCalculatorEvaluator(DetachableTaskMixin, GroundTruthEvaluator):
             # handler.run() convenience call, which unconditionally re-runs
             # allocate_data() and would be wrong for a collect_only handler.
             self.submit_if_needed(self.handler)
-            if not self.handler.finish_check(self.required_fraction):
-                raise WorkflowError(
+            self.wait_if_needed(
+                self.handler,
+                finish_check=lambda: self.handler.finish_check(
+                    self.required_fraction
+                ),
+                max_wait=self.reattach_max_wait,
+                error_message=(
                     f"Less than {self.required_fraction * 100}% ran "
-                    "successfully. Something probably went wrong. Otherwise, "
-                    "lower the required_fraction parameter."
-                )
+                    "successfully. Something probably went wrong. "
+                    "Otherwise, lower the required_fraction parameter."
+                ),
+            )
             self.handler.collect_results()
             all_ats = self._collect_results()
 
@@ -292,6 +304,9 @@ class VASPEvaluator(AseCalculatorEvaluator):
             an earlier, ``collect_only=False`` call instead of
             allocating/submitting a new one. See
             ``AseCalculatorEvaluator``'s docstring.
+        reattach_max_wait: Only used when ``collect_only``: how long (in
+            seconds) to wait for the reattached job to finish before giving
+            up. ``None`` (default) waits forever.
     """
 
     _environment_key = "vasp"
@@ -313,6 +328,7 @@ class VASPEvaluator(AseCalculatorEvaluator):
         incar_config_file: Optional[os.PathLike] = None,
         time_limit: Optional[str] = None,
         collect_only: bool = False,
+        reattach_max_wait: Optional[float] = None,
     ):
         from remote_handler.workflows.dft_runner import resolve_incar_kwargs
 
@@ -340,6 +356,7 @@ class VASPEvaluator(AseCalculatorEvaluator):
             slurm_header_add=slurm_header_add,
             time_limit=time_limit,
             collect_only=collect_only,
+            reattach_max_wait=reattach_max_wait,
         )
 
     @property
@@ -372,6 +389,9 @@ class ORCAEvaluator(AseCalculatorEvaluator):
             an earlier, ``collect_only=False`` call instead of
             allocating/submitting a new one. See
             ``AseCalculatorEvaluator``'s docstring.
+        reattach_max_wait: Only used when ``collect_only``: how long (in
+            seconds) to wait for the reattached job to finish before giving
+            up. ``None`` (default) waits forever.
     """
 
     _environment_key = "orca"
@@ -392,6 +412,7 @@ class ORCAEvaluator(AseCalculatorEvaluator):
         slurm_header_add: str = "",
         time_limit: Optional[str] = None,
         collect_only: bool = False,
+        reattach_max_wait: Optional[float] = None,
     ):
         if singlepoint_script is None:
             singlepoint_script = str(_SCRIPTS_DIR / "orca_singlepoint.py")
@@ -415,6 +436,7 @@ class ORCAEvaluator(AseCalculatorEvaluator):
             slurm_header_add=slurm_header_add,
             time_limit=time_limit,
             collect_only=collect_only,
+            reattach_max_wait=reattach_max_wait,
         )
 
     @property
@@ -448,6 +470,9 @@ class EMTEvaluator(AseCalculatorEvaluator):
             an earlier, ``collect_only=False`` call instead of
             allocating/submitting a new one. See
             ``AseCalculatorEvaluator``'s docstring.
+        reattach_max_wait: Only used when ``collect_only``: how long (in
+            seconds) to wait for the reattached job to finish before giving
+            up. ``None`` (default) waits forever.
     """
 
     def __init__(
@@ -465,6 +490,7 @@ class EMTEvaluator(AseCalculatorEvaluator):
         slurm_header_add: str = "",
         time_limit: Optional[str] = None,
         collect_only: bool = False,
+        reattach_max_wait: Optional[float] = None,
     ):
         if singlepoint_script is None:
             singlepoint_script = str(_SCRIPTS_DIR / "ase_singlepoint.py")
@@ -486,4 +512,5 @@ class EMTEvaluator(AseCalculatorEvaluator):
             slurm_header_add=slurm_header_add,
             time_limit=time_limit,
             collect_only=collect_only,
+            reattach_max_wait=reattach_max_wait,
         )

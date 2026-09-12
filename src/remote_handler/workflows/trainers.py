@@ -137,6 +137,7 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
         stub: bool = False,
         n_processors: int = 1,
         collect_only: bool = False,
+        reattach_max_wait: Optional[float] = None,
     ):
         super().__init__()
         if training_script is None:
@@ -158,6 +159,7 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
         self.n_processors = n_processors
         self.model_name = "Model"  # Default model name
         self.collect_only = collect_only
+        self.reattach_max_wait = reattach_max_wait
 
     # Hooks subclasses override --------------------------------------------
     def _resolve_train_runner(self) -> str:
@@ -315,8 +317,10 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
         """Run the array job and collect the per-model artifacts.
 
         Raises:
-            WorkflowError: If the job left no ``is_finished.info`` marker, or
-                no model artifacts were produced.
+            TaskError: If the job left no ``is_finished.info`` marker (or,
+                when ``collect_only``, if that doesn't happen within
+                ``reattach_max_wait``).
+            WorkflowError: If no model artifacts were produced.
         """
         if self.stub:
             logger.info(
@@ -325,13 +329,16 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
             return self._create_stub_outputs()
 
         self.submit_if_needed(self.training_task)
-        if not self.training_task.finish_check():
-            raise WorkflowError(
+        self.wait_if_needed(
+            self.training_task,
+            max_wait=self.reattach_max_wait,
+            error_message=(
                 f"{self._tool_label} {self._action} did not finish "
                 "successfully (one or more array tasks left no "
                 "is_finished.info marker). Check the training logs in: "
                 f"{self.results_dir}"
-            )
+            ),
+        )
         self.training_task.collect_results()
 
         artifact = self._artifact_name()
@@ -403,6 +410,7 @@ class _MaceArrayTrainer(_EnsembleArrayTrainer):
         convert_to_jax: bool = False,
         jax_output_format: str = "pkl",
         collect_only: bool = False,
+        reattach_max_wait: Optional[float] = None,
     ):
         super().__init__(
             remote_fs=remote_fs,
@@ -417,6 +425,7 @@ class _MaceArrayTrainer(_EnsembleArrayTrainer):
             stub=stub,
             n_processors=n_processors,
             collect_only=collect_only,
+            reattach_max_wait=reattach_max_wait,
         )
         # When convert_to_jax: "pkl" (default, opaque) or "bundle" (a directory
         # with config.json + params.msgpack -- mace-jax's canonical format).
@@ -528,6 +537,9 @@ class MaceModelTrainer(_MaceArrayTrainer):
             the (already-done) submission. ``trainer_input`` is not read in
             this mode. Use this to collect a detached MACE training run from
             a fresh process.
+        reattach_max_wait: Only used when ``collect_only``: how long (in
+            seconds) to wait for the reattached job to finish before giving
+            up. ``None`` (default) waits forever.
     """
 
     # Behaviour is entirely the base default (script mace_training.py, jobname
@@ -571,6 +583,9 @@ class MaceFinetuningTrainer(_MaceArrayTrainer):
             the (already-done) submission. ``trainer_input`` is not read in
             this mode. Use this to collect a detached MACE training run from
             a fresh process.
+        reattach_max_wait: Only used when ``collect_only``: how long (in
+            seconds) to wait for the reattached job to finish before giving
+            up. ``None`` (default) waits forever.
     """
 
     _script_name = "mace_finetuning.py"
@@ -595,6 +610,7 @@ class MaceFinetuningTrainer(_MaceArrayTrainer):
         n_processors: int = 1,
         jax_output_format: str = "pkl",
         collect_only: bool = False,
+        reattach_max_wait: Optional[float] = None,
     ):
         super().__init__(
             remote_fs=remote_fs,
@@ -611,6 +627,7 @@ class MaceFinetuningTrainer(_MaceArrayTrainer):
             convert_to_jax=convert_to_jax,
             jax_output_format=jax_output_format,
             collect_only=collect_only,
+            reattach_max_wait=reattach_max_wait,
         )
         self.foundation_model = foundation_model
 
@@ -740,6 +757,9 @@ class AceModelTrainer(_AceArrayTrainer):
             the (already-done) submission. ``trainer_input`` is not read in
             this mode. Use this to collect a detached ACE training run from
             a fresh process.
+        reattach_max_wait: Only used when ``collect_only``: how long (in
+            seconds) to wait for the reattached job to finish before giving
+            up. ``None`` (default) waits forever.
     """
 
     # Behaviour is entirely the base default (script ace_training.py,
@@ -781,6 +801,9 @@ class GraceModelTrainer(_GraceArrayTrainer):
             the (already-done) submission. ``trainer_input`` is not read in
             this mode. Use this to collect a detached GRACE training run
             from a fresh process.
+        reattach_max_wait: Only used when ``collect_only``: how long (in
+            seconds) to wait for the reattached job to finish before giving
+            up. ``None`` (default) waits forever.
     """
 
     # Behaviour is entirely the base default (script grace_training.py,
@@ -818,6 +841,9 @@ class NeuralilILTrainer(DetachableTaskMixin, ModelTrainer):
             the (already-done) submission. ``trainer_input`` is not read in
             this mode. Use this to collect a detached NeuralIL training run
             from a fresh process.
+        reattach_max_wait: Only used when ``collect_only``: how long (in
+            seconds) to wait for the reattached job to finish before giving
+            up. ``None`` (default) waits forever.
     """
 
     _iteration_subdir = (
@@ -862,6 +888,7 @@ class NeuralilILTrainer(DetachableTaskMixin, ModelTrainer):
         loop_time: float = 30,
         config_file: Optional[os.PathLike] = None,
         collect_only: bool = False,
+        reattach_max_wait: Optional[float] = None,
     ):
         super().__init__()
         if training_script is None:
@@ -871,6 +898,7 @@ class NeuralilILTrainer(DetachableTaskMixin, ModelTrainer):
         self.training_script = training_script
         self.cluster_config = cluster_config
         self.collect_only = collect_only
+        self.reattach_max_wait = reattach_max_wait
         self.config_file = config_file
 
         # Layer the hyperparameters: defaults < config_file (YAML) <
@@ -1034,7 +1062,9 @@ class NeuralilILTrainer(DetachableTaskMixin, ModelTrainer):
             Path to trained model file
 
         Raises:
-            Exception: If training doesn't complete successfully
+            TaskError: If training doesn't complete successfully (or, when
+                ``collect_only``, if that doesn't happen within
+                ``reattach_max_wait``).
         """
         if self.stub:
             # In stub mode, create mock output directly
@@ -1047,8 +1077,11 @@ class NeuralilILTrainer(DetachableTaskMixin, ModelTrainer):
             # allocate_data() and would be wrong for a collect_only task.
             self.submit_if_needed(self.train_task)
 
-            if not self.train_task.finish_check():
-                raise WorkflowError("Training did not complete successfully")
+            self.wait_if_needed(
+                self.train_task,
+                max_wait=self.reattach_max_wait,
+                error_message="Training did not complete successfully",
+            )
             self.train_task.collect_results()
 
             # self.pickle_filename (set in update(), independent of
