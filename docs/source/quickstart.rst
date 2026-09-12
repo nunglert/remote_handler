@@ -165,13 +165,14 @@ Active Learning Workflows
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``remote_handler`` provides the orchestration loop
-(:class:`~remote_handler.workflows.active_learning_base.ActiveLearningHandler`)
-and the ``Sampler`` / ``Evaluator`` / ``Trainer`` interfaces, together with
-concrete evaluators (VASP/ORCA) and trainers (MACE/NeuralIL).
+(:class:`~remote_handler.workflows.staged_active_learning.StagedActiveLearningHandler`)
+and the ``Sampler`` / ``Selector`` / ``Evaluator`` / ``Trainer`` interfaces,
+together with concrete evaluators (VASP/ORCA) and trainers (MACE/NeuralIL).
 
 **Concrete samplers are not shipped here** -- they live in downstream project
 repositories that build on the ``Sampler`` interface (for example
 ``jaxrens_active_learning`` and ``lammps_active_learning``). A full run wires a
-sampler, an evaluator and a trainer into an ``ActiveLearningHandler`` and drives
-the Sampler -> Evaluator -> Trainer loop; see :doc:`examples` for runnable
-end-to-end references.
+sampler, an optional selector, an evaluator and a trainer into a
+``StagedActiveLearningHandler`` and drives the loop; see :doc:`active_learning`
+for the actor interfaces and :doc:`examples` for runnable end-to-end
+references.

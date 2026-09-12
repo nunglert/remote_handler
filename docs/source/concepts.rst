@@ -148,8 +148,8 @@ completion sentinel -- no scheduler required. Cluster JSONs without an
 The active-learning loop
 ------------------------
 
-The ``workflows`` layer composes tasks into the active-learning cycle. Three
-roles, each an abstract actor, hand artifacts to the next:
+The ``workflows`` layer composes tasks into the active-learning cycle. At its
+core, three roles hand artifacts to the next:
 
 .. mermaid::
 
@@ -158,23 +158,15 @@ roles, each an abstract actor, hand artifacts to the next:
        Eval -->|"labelled configs (DFT)"| Trainer["ModelTrainer"]
        Trainer -->|"retrained MLFF model"| Sampler
 
-- :class:`~remote_handler.workflows.active_learning_base.Sampler` proposes new
-  candidate configurations.
-- :class:`~remote_handler.workflows.active_learning_base.GroundTruthEvaluator`
-  labels them with ground truth (DFT via VASP/ORCA).
-- :class:`~remote_handler.workflows.active_learning_base.ModelTrainer` retrains
-  the force field on the accumulated data; the new model feeds the next
-  sampler.
-
-Each actor can run on a *different* machine, and each typically does its work by
-constructing and running a ``RemoteTask``. The loop itself is driven by
-:class:`~remote_handler.workflows.active_learning_base.ActiveLearningHandler`,
-which owns the **bookkeeping**: it writes a ``calchome/`` tree (one numbered
-directory per iteration) and an ``AL_progress.json`` cache recording every
-output path. That cache is what makes the loop **resumable** -- a crashed
-run picks up at the actor it left off, rather than recomputing. A
-:class:`~remote_handler.workflows.active_learning_base.Schedule` can vary each
-actor's behaviour from one iteration to the next.
+Each actor can run on a *different* machine, and each typically does its work
+by constructing and running a ``RemoteTask``. In practice the loop usually
+grows a fourth role -- a ``Selector`` that filters a sampler's candidates
+before they are sent for (expensive) ground-truth labelling -- and the
+pipeline is driven by the flexible, stage-based
+:class:`~remote_handler.workflows.staged_active_learning.StagedActiveLearningHandler`,
+which owns the bookkeeping (a resumable ``AL_progress.json`` cache) generically
+over any list of stages. See :doc:`active_learning` for the full picture,
+including the actor interfaces and how stages compose.
 
 Configuration
 -------------
@@ -246,6 +238,7 @@ Where to go next
 ----------------
 
 - :doc:`installation` -- install the host driver and the right extras.
+- :doc:`active_learning` -- the actor interfaces and the staged AL loop.
 - :doc:`cli` -- configure clusters and diagnose your setup.
 - :doc:`quickstart` -- a first end-to-end run.
 - :doc:`api/index` -- the concrete classes behind every concept above.

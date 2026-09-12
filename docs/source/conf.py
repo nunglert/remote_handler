@@ -80,3 +80,10 @@ intersphinx_mapping = {
 # Type hints configuration
 autodoc_typehints = "description"
 autodoc_typehints_description_target = "documented"
+
+# Mermaid diagrams: the extension's own default CSS forces every diagram's
+# SVG into a fixed 500px-tall box, which letterboxes our short, wide
+# flowcharts with large empty margins above/below. "auto" lets each diagram
+# render at its natural aspect ratio instead (the same technique the
+# extension itself uses for its fullscreen view).
+mermaid_height = "auto"

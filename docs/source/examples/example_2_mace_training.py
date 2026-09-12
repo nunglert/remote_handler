@@ -1,8 +1,8 @@
 """Example 2 -- Training a MACE force field.
 
 Configure a ``MaceModelTrainer`` and run one training step. In a full run the
-``ActiveLearningHandler`` (Example 4) calls ``update`` / ``get_trained_model``
-for you each iteration; here we drive a single step directly.
+``StagedActiveLearningHandler`` calls ``update`` / ``get_trained_model`` for
+you each iteration; here we drive a single step directly.
 
 Included verbatim by ``docs/source/examples.rst`` and signature-checked by
 ``test/test_examples.py``.

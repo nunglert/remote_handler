@@ -17,8 +17,9 @@ They come in two flavours:
   :doc:`cli`); adapt the aliases, paths and resources to your own setup before
   running.
 
-The conceptual roles (sampler / selector / evaluator / trainer) are explained
-in :doc:`concepts`.
+The conceptual roles (sampler / selector / evaluator / trainer) and the
+:class:`~remote_handler.workflows.staged_active_learning.StagedActiveLearningHandler`
+that wires them together are explained in :doc:`active_learning`.
 
 Run it now: a full loop with no cluster
 ---------------------------------------

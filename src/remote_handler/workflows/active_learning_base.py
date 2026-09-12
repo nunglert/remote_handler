@@ -3,6 +3,7 @@ import logging
 import os
 import shutil
 import sys
+import warnings
 from abc import ABC, abstractmethod
 from collections.abc import MutableMapping
 from contextlib import contextmanager
@@ -447,6 +448,15 @@ class ActiveLearningHandler(ABC):
     functionality to resume broken runs by caching the current progress and
     at which point to enter/exit the cycle.
 
+    .. deprecated::
+        Use `StagedActiveLearningHandler`
+        (``remote_handler.workflows.staged_active_learning``) instead. It
+        supports the same three-actor shape via
+        ``StagedActiveLearningHandler.from_actors(...)``, adds a first-class
+        `Selector` stage, and generalizes to an arbitrary stage list.
+        `ActiveLearningHandler` will be removed in a future release;
+        instantiating it now raises a `DeprecationWarning`.
+
     Args:
         sampler: A `Sampler` instance for sampling new configurations.
         evaluator: A `GroundTruthEvaluator` instance for running DFT.
@@ -583,6 +593,16 @@ class ActiveLearningHandler(ABC):
         evaluator_output_extension: str = "extxyz",
         trainer_output_extension: str = "pkl",
     ) -> None:
+        warnings.warn(
+            "ActiveLearningHandler is deprecated and will be removed in a "
+            "future release; it hardcodes the fixed sampler/evaluator/"
+            "trainer triple and has no selector stage. Use "
+            "StagedActiveLearningHandler (workflows.staged_active_learning) "
+            "instead -- StagedActiveLearningHandler.from_actors(...) is a "
+            "drop-in replacement for this constructor.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__()
         # Main objects of the AL loop
         self.sampler = sampler
