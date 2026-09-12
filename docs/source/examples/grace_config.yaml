@@ -1,0 +1,8 @@
+# Minimal illustrative config -- see gracemaker's own docs for the full
+# schema. "data" and "seed" are injected per job, not set here.
+cutoff: 5.0
+potential:
+  elements: [Cu]
+fit:
+  loss: huber
+  maxiter: 200

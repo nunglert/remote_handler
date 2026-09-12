@@ -1,0 +1,43 @@
+/* "Usage example" disclosure widgets nested inside bullet-list items (see
+ * active_learning.rst's "Provided actors"). Without this they inherit the
+ * list item's own text flow and read as just another bullet line, blurring
+ * the list structure. Give them their own boxed, indented block instead, so
+ * they read as an attached-but-distinct aside. */
+.rst-content li > details {
+    display: block;
+    clear: both;
+    margin: 0.6em 0 0.9em 0;
+    padding: 0.2em 1em 0.9em 1em;
+    border-left: 3px solid #a4c2d6;
+    background: rgba(41, 128, 185, 0.05);
+    border-radius: 0 3px 3px 0;
+}
+
+.rst-content li > details > summary {
+    cursor: pointer;
+    padding: 0.5em 0;
+    font-size: 0.9em;
+    font-weight: 700;
+    color: #2980b9;
+    list-style: none;
+}
+
+.rst-content li > details > summary::-webkit-details-marker {
+    display: none;
+}
+
+.rst-content li > details > summary::before {
+    content: "\25B8  ";
+}
+
+.rst-content li > details[open] > summary::before {
+    content: "\25BE  ";
+}
+
+.rst-content li > details > summary:hover {
+    text-decoration: underline;
+}
+
+.rst-content li > details > .highlight {
+    margin-top: 0.4em;
+}

@@ -1,0 +1,8 @@
+model: MACE
+r_max: 5.0
+num_channels: 128
+max_L: 1
+max_ell: 3
+E0s: average
+batch_size: 10
+max_num_epochs: 200

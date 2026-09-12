@@ -21,14 +21,10 @@ Included verbatim by ``docs/source/examples.rst`` and signature-checked by
 import sys
 from pathlib import Path
 
-import remote_handler
 from remote_handler.core import ClusterConfig
 from remote_handler.core.file_handler import RemoteFileSystem
 from remote_handler.workflows.dft_runner import VASPHandler
 from remote_handler.workflows.trainers import MaceModelTrainer
-
-# The DFT/MACE payloads shipped with the package (sent to and run remotely).
-SCRIPTS = Path(remote_handler.__file__).parent / "scripts"
 
 MACE_CALCDIR = Path("mace_run/0/training")
 
@@ -74,7 +70,6 @@ if __name__ == "__main__":
         traj_files=["selected_structures.extxyz"],
         cluster_config=config,
         remote_fs=remote_fs,
-        python_script_path=str(SCRIPTS / "dft_singlepoint.py"),
         savepath="/scratch/me/vasp",
         num_parallel=10,
         n_processors=16,
@@ -90,12 +85,7 @@ if __name__ == "__main__":
     mace_kwargs = dict(
         remote_fs=remote_fs,
         cluster_config=config,
-        training_script=str(SCRIPTS / "mace" / "mace_training.py"),
         config_file="config/mace_config.yaml",
-        remote_mace_train_runner=(
-            "/home/me/miniconda3/envs/mace/lib/python3.10/"
-            "site-packages/mace/cli/run_train.py"
-        ),
         num_models=3,
     )
 

@@ -48,20 +48,243 @@ sampler's temperature or a selector's ``n_configs``), and the optional
 already-submitted job instead of resubmitting after the driving process dies
 -- see :doc:`concepts` for that detach/reattach lifecycle.
 
-Two ways to get a ``Selector``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Most selection logic is a pure, host-side strategy -- score or filter a list
-of ``ase.Atoms``, no remote job needed. That shape lives in
-:mod:`remote_handler.workflows.selectors` as the
-:class:`~remote_handler.workflows.selectors.ConfigSelector` interface
-(``select(configs, reference=None) -> list[Atoms]``), with concrete
-strategies such as stride, uncertainty, novelty (QUESTS) and pipelines of
-several selectors -- see :doc:`api/index` for the full list.
-:class:`~remote_handler.workflows.staged_active_learning.SelectorActor` wraps
-any ``ConfigSelector`` into a ``Selector`` actor, so it slots into the loop
-unchanged. Implement the ``Selector`` ABC directly only when selection needs
-its own execution.
+Provided actors
+-----------------
+
+``remote_handler`` ships concrete actors for three of the four roles --
+evaluation, training and selection -- so a project typically only has to
+write its own ``Sampler`` (see :doc:`concepts`'s "one repository per
+project"). All support a ``stub=True`` mode that produces mock outputs
+without running anything, for exercising a loop's wiring before paying for
+real compute. Full parameters are in :doc:`api/index`.
+
+Each entry below unfolds into a short, real usage snippet -- collapsed by
+default so this stays an index, not a second examples page.
+
+Evaluators (:mod:`remote_handler.workflows.evaluators`)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- :class:`~remote_handler.workflows.evaluators.AseCalculatorEvaluator` --
+  single-point labelling with any ASE calculator; the base the other three
+  are presets of.
+
+- :class:`~remote_handler.workflows.evaluators.VASPEvaluator` -- DFT ground
+  truth via VASP. **Requires:** VASP itself, installed on the target
+  cluster -- a licensed code, not shipped with ``remote_handler``.
+
+  .. raw:: html
+
+     <details><summary>Usage example</summary>
+
+  .. literalinclude:: examples/example_1_dft.py
+     :language: python
+     :lines: 22-40
+
+  .. raw:: html
+
+     </details>
+
+- :class:`~remote_handler.workflows.evaluators.ORCAEvaluator` -- DFT ground
+  truth via ORCA. **Requires:** ORCA itself, installed on the target
+  cluster -- also not shipped with ``remote_handler``.
+
+  .. raw:: html
+
+     <details><summary>Usage example</summary>
+
+  .. literalinclude:: examples/example_4_orca.py
+     :language: python
+     :lines: 25-36
+
+  .. raw:: html
+
+     </details>
+
+- :class:`~remote_handler.workflows.evaluators.EMTEvaluator` -- ASE's EMT
+  potential; cheap ground truth for testing a loop end-to-end, not for
+  production labelling.
+
+  .. raw:: html
+
+     <details><summary>Usage example</summary>
+
+  .. literalinclude:: ../../examples/local_emt_AL/run_al.py
+     :language: python
+     :lines: 87-93
+
+  .. raw:: html
+
+     </details>
+
+Trainers (:mod:`remote_handler.workflows.trainers`)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- :class:`~remote_handler.workflows.trainers.MaceModelTrainer` -- trains an
+  ensemble of MACE models (one array job, one seed per shard). **Requires:**
+  MACE (``mace-torch``) installed in the *remote* conda env this trainer
+  targets; add ``convert_to_jax=True`` to also emit a mace-jax bundle per
+  model (needs ``mace-jax`` there too).
+
+  .. raw:: html
+
+     <details><summary>Usage example</summary>
+
+  **Config** (``mace_config.yaml``):
+
+  .. literalinclude:: examples/mace_config.yaml
+     :language: yaml
+
+  **Usage:**
+
+  .. literalinclude:: examples/example_2_mace_training.py
+     :language: python
+     :lines: 26-40
+
+  .. raw:: html
+
+     </details>
+
+- :class:`~remote_handler.workflows.trainers.MaceFinetuningTrainer` -- like
+  ``MaceModelTrainer``, but finetunes from a staged foundation model instead
+  of training from scratch (same requirements and ``convert_to_jax``
+  support).
+
+- :class:`~remote_handler.workflows.trainers.AceModelTrainer` -- the same
+  ensemble-array shape as ``MaceModelTrainer``, fitting an ACE potential with
+  ``pacemaker`` instead. **Requires:** ``pacemaker`` installed in the
+  *remote* conda env (see the ``ace`` extra for the pieces needed to test
+  this locally -- it cannot coexist with the ``grace`` extra in one
+  environment).
+
+  .. raw:: html
+
+     <details><summary>Usage example</summary>
+
+  **Config** (``ace_config.yaml``):
+
+  .. literalinclude:: examples/ace_config.yaml
+     :language: yaml
+
+  **Usage:**
+
+  .. literalinclude:: examples/example_6_ace.py
+     :language: python
+     :lines: 25-38
+
+  .. raw:: html
+
+     </details>
+
+- :class:`~remote_handler.workflows.trainers.GraceModelTrainer` -- the same
+  ensemble-array shape as ``MaceModelTrainer``, fitting a GRACE potential
+  with ``gracemaker`` instead. **Requires:** ``gracemaker`` installed in the
+  *remote* conda env (see the ``grace`` extra for the pieces needed to test
+  this locally -- it cannot coexist with the ``ace`` extra in one
+  environment).
+
+  .. raw:: html
+
+     <details><summary>Usage example</summary>
+
+  **Config** (``grace_config.yaml``):
+
+  .. literalinclude:: examples/grace_config.yaml
+     :language: yaml
+
+  **Usage:**
+
+  .. literalinclude:: examples/example_7_grace.py
+     :language: python
+     :lines: 25-38
+
+  .. raw:: html
+
+     </details>
+
+- :class:`~remote_handler.workflows.trainers.NeuralilILTrainer` -- trains
+  NeuralIL models via JAXNEST. **Requires:** the NeuralIL/JAXNEST stack
+  installed in the *remote* conda env (see the ``neuralil`` extra).
+
+  .. raw:: html
+
+     <details><summary>Usage example</summary>
+
+  .. literalinclude:: examples/example_5_neuralil.py
+     :language: python
+     :lines: 25-33
+
+  .. raw:: html
+
+     </details>
+
+Selectors (:mod:`remote_handler.workflows.selectors`)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Pure ``ConfigSelector`` strategies (see "Two ways to get a ``Selector``"
+above) -- wrap any of these in
+:class:`~remote_handler.workflows.staged_active_learning.SelectorActor`:
+
+- :class:`~remote_handler.workflows.selectors.StrideSelector` -- fixed,
+  deterministic evenly-spaced subsampling.
+
+  .. raw:: html
+
+     <details><summary>Usage example</summary>
+
+  .. literalinclude:: ../../src/remote_handler/workflows/selectors.py
+     :language: pycon
+     :lines: 16-18
+     :dedent: 4
+
+  .. raw:: html
+
+     </details>
+
+- :class:`~remote_handler.workflows.selectors.RandomSelector` -- uniform
+  random subsampling.
+- :class:`~remote_handler.workflows.selectors.LastFrameSelector` -- the last
+  frame of each group (e.g. trajectory), for grouped input.
+- :class:`~remote_handler.workflows.selectors.UncertaintySelector` -- ranks
+  by a committee/ensemble's energy and/or force uncertainty, already stored
+  on the ``Atoms``.
+
+- :class:`~remote_handler.workflows.selectors.QUESTSSelector` -- structural
+  diversity (no reference) or novelty relative to a reference dataset (with
+  one), via QUESTS information entropy. **Requires:** the ``quests`` package
+  installed *locally* (``pip install remote_handler[quests]``), since
+  selection runs on the host, not the cluster. This is the selector behind
+  ``from_actors``'s ``selector_reference_from``.
+
+  .. raw:: html
+
+     <details><summary>Usage example</summary>
+
+  .. literalinclude:: ../../src/remote_handler/workflows/selectors.py
+     :language: pycon
+     :lines: 20-23
+     :dedent: 4
+
+  .. raw:: html
+
+     </details>
+
+- :class:`~remote_handler.workflows.selectors.PipelineSelector` -- chains
+  several selectors, e.g. an uncertainty pre-filter followed by
+  QUESTS diversity.
+
+  .. raw:: html
+
+     <details><summary>Usage example</summary>
+
+  .. literalinclude:: ../../src/remote_handler/workflows/selectors.py
+     :language: pycon
+     :lines: 564-568
+     :dedent: 8
+
+  .. raw:: html
+
+     </details>
 
 Stages: a pipeline, not a fixed triple
 ----------------------------------------
