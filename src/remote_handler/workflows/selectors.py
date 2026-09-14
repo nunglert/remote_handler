@@ -401,14 +401,19 @@ class UniformForceSelector(ConfigSelector):
             np.mean(np.linalg.norm(at.arrays["forces"], axis=-1)) for at in flat
         ])
 
-        # Create bins and assign configurations to bins
+        # Create bins and assign configurations to bins. np.digitize puts a
+        # value exactly at the top bin edge one index past the last valid
+        # bin, so clamp it back in -- otherwise the config(s) with the
+        # pool's maximum force magnitude would be silently dropped from
+        # every bin instead of landing in the last one.
         bins = np.linspace(avg_forces.min(), avg_forces.max(), self.n_bins + 1)
         bin_indices = np.digitize(avg_forces, bins) - 1  # Bin indices start from 0
+        bin_indices = np.clip(bin_indices, 0, self.n_bins - 1)
 
         n_empty_bins = np.sum([np.sum(bin_indices == i) == 0 for i in range(self.n_bins)])
-        selected = []
+        selected_indices: list[int] = []
         configs_per_bin = self.n_configs // (self.n_bins - n_empty_bins) if self.n_bins - n_empty_bins > 0 else 0
-        
+
         if configs_per_bin == 0:
             logger.warning(
                 "UniformForceSelector: All bins are empty"
@@ -416,34 +421,49 @@ class UniformForceSelector(ConfigSelector):
             return []
 
         for bin_idx in range(self.n_bins):
-            bin_mask = bin_indices == bin_idx
-            bin_configs = [flat[i] for i in range(n_total) if bin_mask[i]]
+            bin_member_indices = [
+                i for i in range(n_total) if bin_indices[i] == bin_idx
+            ]
 
-            if len(bin_configs) == 0:
+            if not bin_member_indices:
                 continue  # Skip empty bins
-            
-            if len(bin_configs) > configs_per_bin:
-                # Randomly sample from the bin if there are more configs than needed
-                selected.extend(np.random.choice(bin_configs, configs_per_bin, replace=False))
+
+            if len(bin_member_indices) > configs_per_bin:
+                # Randomly sample from the bin if there are more configs than
+                # needed. Sampled by index -- np.random.choice needs a
+                # 1-D array of scalars, not a list of Atoms objects.
+                chosen = np.random.choice(
+                    bin_member_indices, configs_per_bin, replace=False
+                )
+                selected_indices.extend(int(i) for i in chosen)
             else:
-                selected.extend(bin_configs)
-        
-        if len(selected) < self.n_configs and not self.force_n_configs:
+                selected_indices.extend(bin_member_indices)
+
+        if len(selected_indices) < self.n_configs and not self.force_n_configs:
             logger.warning(
-                f"UniformForceSelector: Only {len(selected)} configurations selected, "
+                f"UniformForceSelector: Only {len(selected_indices)} configurations selected, "
                 f"less than requested {self.n_configs} due to almost empty bins."
                 f"set force_n_configs=True to force selection of n_configs."
             )
-        elif len(selected) < self.n_configs and self.force_n_configs:
+        elif len(selected_indices) < self.n_configs and self.force_n_configs:
             # If force_n_configs is True, fill the remaining slots with random selections
-            remaining = self.n_configs - len(selected)
-            remaining_configs = [at for at in flat if at not in selected]
-            if len(remaining_configs) > 0:
-                selected.extend(np.random.choice(remaining_configs, min(remaining, len(remaining_configs)), replace=False))
+            remaining = self.n_configs - len(selected_indices)
+            already_selected = set(selected_indices)
+            remaining_indices = [
+                i for i in range(n_total) if i not in already_selected
+            ]
+            if remaining_indices:
+                chosen = np.random.choice(
+                    remaining_indices,
+                    min(remaining, len(remaining_indices)),
+                    replace=False,
+                )
+                selected_indices.extend(int(i) for i in chosen)
             logger.info(
-                f"UniformForceSelector: randomly selected {min(remaining, len(remaining_configs))} additional configurations to meet n_configs."
+                f"UniformForceSelector: randomly selected {min(remaining, len(remaining_indices))} additional configurations to meet n_configs."
             )
 
+        selected = [flat[i] for i in selected_indices]
         logger.info(
             f"UniformForceSelector: Selected {len(selected)} configurations from {self.n_bins} bins."
         )

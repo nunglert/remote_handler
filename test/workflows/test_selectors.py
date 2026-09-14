@@ -536,59 +536,54 @@ class TestForceFilterSelector:
 # ---------------------------------------------------------------------------
 # UniformForceSelector
 #
-# np.digitize (right=False, the default) places a value exactly equal to
-# the top bin edge at index n_bins -- outside range(n_bins) -- so the pool's
-# single maximum-magnitude config is always silently excluded from every
-# bin the selector actually iterates over. Several tests below pin down
-# this (and other) surprising-but-current behaviour rather than the
-# selector's stated intent; see the docstrings for what each documents.
+# Two fixed bugs worth keeping in mind when reading these tests:
+#   * Per-bin (and force_n_configs top-up) subsampling used to call
+#     np.random.choice directly on a list of Atoms objects instead of on
+#     their indices; since Atoms is itself sized/iterable, numpy's array
+#     construction failed with "a must be 1-dimensional" for any pool
+#     large enough to need real subsampling. Fixed by sampling indices and
+#     mapping back to Atoms afterwards.
+#   * np.digitize (right=False, the default) places a value exactly equal
+#     to the top bin edge one index past the last valid bin, so the
+#     config(s) with the pool's maximum force magnitude used to be
+#     silently dropped. Fixed by clipping the digitized indices into
+#     [0, n_bins - 1] -- the max now lands in the last bin like it should.
 # ---------------------------------------------------------------------------
 class TestUniformForceSelector:
-    def test_oversubscribed_bin_raises_valueerror(self):
-        """BUG: whenever a bin has more candidates than its per-bin cap,
-        the selector does ``np.random.choice(bin_configs, configs_per_bin,
-        replace=False)`` directly on a list of ``Atoms`` objects instead of
-        on their indices. ``Atoms`` is itself iterable/sized, so numpy's
-        array construction fails with 'a must be 1-dimensional' -- this
-        crashes for essentially any pool large enough to need real
-        per-bin subsampling, which is the selector's whole reason to
-        exist. 20 configs over 5 bins (4 per bin) with configs_per_bin=2
-        triggers it."""
+    def test_selects_up_to_n_configs_across_bins(self):
+        """20 configs spread over [0, 9.99) into 5 bins (4-5 per bin,
+        including the max at the top edge). configs_per_bin = 10 // 5 = 2,
+        so exactly 10 are selected (which bin members get picked is
+        random when a bin exceeds its cap, but the total count isn't)."""
         magnitudes = list(np.linspace(0, 9.99, 20))
-        configs = _make_force_atoms(magnitudes)
         selector = UniformForceSelector(n_configs=10, n_bins=5)
-        with pytest.raises(ValueError, match="1-dimensional"):
-            selector.select(configs)
+        for _ in range(5):  # re-run to also guard against flaky sampling
+            result = selector.select(_make_force_atoms(magnitudes))
+            assert len(result) == 10
 
-    def test_max_value_at_bin_edge_is_dropped(self):
-        """np.digitize (right=False, the default) places a value exactly
-        equal to the top bin edge at index n_bins -- outside
-        range(n_bins) -- so the single config whose force equals the pool
-        maximum is silently excluded, regardless of how much room its bin
-        has. This case has one config per bin (no oversubscription), so
-        it doesn't hit the np.random.choice crash above."""
+    def test_max_value_lands_in_the_last_bin(self):
+        """The config whose force equals the pool maximum is included,
+        via the last bin -- not dropped. One config per bin (no
+        oversubscription), so every one of the 5 is kept."""
         magnitudes = [0.0, 2.5, 5.0, 7.5, 10.0]  # 10.0 is the pool max
         configs = _make_force_atoms(magnitudes)
         selector = UniformForceSelector(n_configs=5, n_bins=5)
         result = selector.select(configs)
         selected_indices = {at.info["index"] for at in result}
-        assert len(result) == 4
-        assert 4 not in selected_indices  # index 4 == magnitude 10.0
+        assert len(result) == 5
+        assert selected_indices == {0, 1, 2, 3, 4}
 
     def test_empty_bins_excluded_from_configs_per_bin(self):
-        """Two clusters with a gap: the empty middle bin doesn't count
-        towards the configs_per_bin division (denominator shrinks from
-        n_bins to the number of non-empty bins). Kept at one config per
-        bin to stay clear of the oversubscription crash."""
-        magnitudes = [0.0, 4.5, 9.0]  # 9.0 is the pool max -> dropped
-        configs = _make_force_atoms(magnitudes)
-        selector = UniformForceSelector(n_configs=3, n_bins=3)
-        result = selector.select(configs)
-        # 2 non-empty bins (the 3rd sits empty once the max is dropped) ->
-        # configs_per_bin = 3 // 2 = 1 each -> 2 selected total.
-        assert len(result) == 2
-        selected_indices = {at.info["index"] for at in result}
-        assert 2 not in selected_indices  # index 2 == magnitude 9.0
+        """Two clusters of 3 with a gap: 3 of the 5 bins are empty and
+        don't count towards the configs_per_bin division (denominator
+        shrinks from n_bins=5 to the 2 non-empty bins) -> 4 // 2 = 2 per
+        bin, capped from 3 each -> 4 selected total, deterministically,
+        even though which 2-of-3 per cluster is random."""
+        magnitudes = [0.0, 0.1, 0.2, 9.0, 9.1, 9.2]
+        selector = UniformForceSelector(n_configs=4, n_bins=5)
+        for _ in range(5):
+            result = selector.select(_make_force_atoms(magnitudes))
+            assert len(result) == 4
 
     def test_configs_per_bin_zero_returns_empty(self):
         """n_configs smaller than the number of non-empty bins rounds
@@ -600,57 +595,54 @@ class TestUniformForceSelector:
         selector = UniformForceSelector(n_configs=2, n_bins=5)
         assert selector.select(configs) == []
 
-    def test_uniform_magnitudes_selects_nothing_even_with_force_n_configs(
-        self,
-    ):
+    def test_uniform_magnitudes_all_land_in_the_last_bin(self):
         """When every candidate has the exact same average force, min ==
-        max collapses every bin edge to the same value and every config
-        lands in np.digitize's out-of-range bin -- so all in-range bins
-        register as empty and the selector returns [] before the
-        force_n_configs top-up logic ever runs. force_n_configs=True does
-        NOT guarantee n_configs results."""
+        max and every bin edge collapses to that value; the clip keeps
+        all of them in the last bin (index n_bins - 1) instead of an
+        out-of-range one, so they're all selected -- this used to return
+        [] unconditionally (see class docstring)."""
         configs = _make_force_atoms([1.0, 1.0, 1.0, 1.0, 1.0])
-        selector = UniformForceSelector(
-            n_configs=5, n_bins=5, force_n_configs=True
-        )
-        assert selector.select(configs) == []
+        selector = UniformForceSelector(n_configs=5, n_bins=5)
+        result = selector.select(configs)
+        assert len(result) == 5
 
-    def test_force_n_configs_false_returns_fewer_than_requested(self):
-        magnitudes = [1.0, 1.01, 1.02, 1.03, 1.04]
+    def test_force_n_configs_false_stops_at_the_bin_cap(self):
+        """5 configs at 0.0 (one bin, cap 2) + 1 at 9.0 (the max, its own
+        bin): bins alone provide 2 + 1 = 3, short of the 4 requested, even
+        though the pool has 6 configs to draw from. Without
+        force_n_configs the selector stops there."""
+        magnitudes = [0.0, 0.0, 0.0, 0.0, 0.0, 9.0]
         configs = _make_force_atoms(magnitudes)
         selector = UniformForceSelector(
-            n_configs=10, n_bins=5, force_n_configs=False
+            n_configs=4, n_bins=5, force_n_configs=False
         )
         result = selector.select(configs)
-        assert len(result) == 4  # < 10; no top-up requested
+        assert len(result) == 3
 
-    def test_force_n_configs_true_raises_valueerror_when_topping_up(self):
-        """BUG: the force_n_configs top-up path has the same
-        np.random.choice(<list of Atoms>, ...) issue as the main
-        per-bin pass (see test_oversubscribed_bin_raises_valueerror) --
-        it fires unconditionally whenever there are any leftover configs
-        to top up with, so force_n_configs=True crashes here instead of
-        recovering the digitize-dropped max config."""
-        magnitudes = [1.0, 1.01, 1.02, 1.03, 1.04]
+    def test_force_n_configs_true_tops_up_past_the_bin_cap(self):
+        """Same pool as above, but force_n_configs=True pulls the
+        remaining slot from whatever the bin pass left out (one of the
+        four 0.0-magnitude configs it didn't already pick), reaching the
+        full n_configs=4."""
+        magnitudes = [0.0, 0.0, 0.0, 0.0, 0.0, 9.0]
         configs = _make_force_atoms(magnitudes)
         selector = UniformForceSelector(
-            n_configs=10, n_bins=5, force_n_configs=True
+            n_configs=4, n_bins=5, force_n_configs=True
         )
-        with pytest.raises(ValueError, match="1-dimensional"):
-            selector.select(configs)
+        result = selector.select(configs)
+        assert len(result) == 4
 
     def test_empty_input(self):
         selector = UniformForceSelector(n_configs=5)
         assert selector.select([]) == []
 
     def test_grouped_input_flattens(self):
-        """Grouped input is flattened before binning (kept at one config
-        per bin to stay clear of the oversubscription crash)."""
+        """Grouped input is flattened before binning."""
         flat = _make_force_atoms([0.0, 3.0, 6.0])  # 6.0 is the pool max
         grouped = [flat[:2], flat[2:]]
         selector = UniformForceSelector(n_configs=3, n_bins=3)
         result = selector.select(grouped)
-        assert len(result) == 2
+        assert len(result) == 3
 
 
 # ---------------------------------------------------------------------------
