@@ -503,3 +503,52 @@ class AseSinglepointInput(ScriptInput):
 
         if root is not None:
             _require_path(root, self.DATABASE, "DATABASE")
+
+
+@dataclass
+class SelectConfigsInput(ScriptInput):
+    """Input configuration for selection/select_configs.py script.
+
+    Attributes:
+        selector_type: Name of the ``ConfigSelector`` subclass to instantiate
+            (e.g. "QUESTSSelector"), looked up in
+            ``remote_handler.workflows.selectors``.
+        selector_kwargs: Keyword arguments forwarded to the selector's
+            constructor (must be JSON-plain values).
+        input_files: Filenames (relative to the calc dir) of the candidate
+            pool extxyz files to select from.
+        output_filename: Name of the extxyz file to write the selection to.
+        reference_files: Optional filenames of reference extxyz files
+            (e.g. accumulated labelled data) used by novelty-based selectors.
+
+    Example:
+        >>> config = SelectConfigsInput.from_file(Path("input_select.json"))
+        >>> config.validate()
+    """
+
+    selector_type: str
+    selector_kwargs: dict[str, Any]
+    input_files: list[str]
+    output_filename: str = "selected.extxyz"
+    reference_files: Optional[list[str]] = None
+
+    def validate(self, root: Optional[Path] = None) -> None:
+        """Validate configuration parameters.
+
+        Raises:
+            ScriptInputError: If any parameter is invalid
+        """
+        if not self.selector_type:
+            raise ScriptInputError("selector_type cannot be empty")
+
+        if not isinstance(self.selector_kwargs, dict):
+            raise ScriptInputError("selector_kwargs must be a dictionary")
+
+        if not self.input_files:
+            raise ScriptInputError("input_files cannot be empty")
+
+        if root is not None:
+            for f in self.input_files:
+                _require_path(root, f, "input file")
+            for f in self.reference_files or []:
+                _require_path(root, f, "reference file")

@@ -12,11 +12,14 @@ _HAS_QUESTS = importlib.util.find_spec("quests") is not None
 
 from remote_handler.workflows.selectors import (
     ConfigSelector,
+    ForceFilterSelector,
     LastFrameSelector,
     PipelineSelector,
     QUESTSSelector,
+    RandomSelector,
     StrideSelector,
     UncertaintySelector,
+    UniformForceSelector,
     UniformSelector,
 )
 
@@ -177,6 +180,46 @@ class TestUniformSelectorDeprecation:
         with pytest.warns(DeprecationWarning):
             sel = UniformSelector(n_configs=3)
         assert isinstance(sel, StrideSelector)
+
+
+# ---------------------------------------------------------------------------
+# RandomSelector
+# ---------------------------------------------------------------------------
+class TestRandomSelector:
+    def test_selects_correct_count(self):
+        configs = _make_config_pool(20)
+        selector = RandomSelector(n_configs=5)
+        result = selector.select(configs)
+        assert len(result) == 5
+
+    def test_no_duplicates(self):
+        configs = _make_config_pool(20)
+        selector = RandomSelector(n_configs=10)
+        result = selector.select(configs)
+        indices = [at.info["index"] for at in result]
+        assert len(set(indices)) == len(indices)
+
+    def test_grouped_input_flattens(self):
+        grouped = _make_grouped_configs([5, 5])  # 10 total
+        selector = RandomSelector(n_configs=4)
+        result = selector.select(grouped)
+        assert len(result) == 4
+        assert {at.info["index"] for at in result} <= set(range(10))
+
+    def test_empty_input(self):
+        selector = RandomSelector(n_configs=5)
+        assert selector.select([]) == []
+
+    def test_n_configs_larger_than_pool_raises(self):
+        """Unlike StrideSelector/UncertaintySelector, RandomSelector does
+        not clamp n_configs to the pool size: np.random.choice(...,
+        replace=False) raises when asked for more samples than the pool
+        has. Documents current behaviour -- callers must ensure
+        n_configs <= pool size themselves."""
+        configs = _make_config_pool(3)
+        selector = RandomSelector(n_configs=10)
+        with pytest.raises(ValueError):
+            selector.select(configs)
 
 
 # ---------------------------------------------------------------------------
@@ -422,6 +465,184 @@ class TestUncertaintySelectorThreshold:
         result = selector.select(configs)
         for at in result:
             assert "uncertainty_score" in at.info
+
+
+def _make_force_atoms(magnitudes):
+    """Create one Atoms per magnitude, with a uniform per-atom force of
+    that magnitude (along x). Positions vary slightly per config so
+    distinct configs never compare structurally equal under ASE's
+    ``Atoms.__eq__`` (relevant for ``UniformForceSelector``'s ``in``
+    check when topping up with ``force_n_configs``).
+    """
+    configs = []
+    for i, mag in enumerate(magnitudes):
+        atoms = Atoms(
+            "H4",
+            positions=[
+                [0, 0, 0],
+                [1, 0, 0],
+                [0, 1, 0],
+                [0, 0, 1 + 0.001 * i],
+            ],
+        )
+        atoms.cell = [5, 5, 5]
+        atoms.pbc = True
+        atoms.arrays["forces"] = np.tile([mag, 0.0, 0.0], (len(atoms), 1))
+        atoms.info["index"] = i
+        configs.append(atoms)
+    return configs
+
+
+# ---------------------------------------------------------------------------
+# ForceFilterSelector
+# ---------------------------------------------------------------------------
+class TestForceFilterSelector:
+    def test_filters_above_threshold(self):
+        configs = _make_force_atoms([0.5, 1.5, 2.5, 0.9, 3.0])
+        selector = ForceFilterSelector(force_threshold=1.0)
+        result = selector.select(configs)
+        assert {at.info["index"] for at in result} == {0, 3}
+
+    def test_all_below_threshold_keeps_all(self):
+        configs = _make_force_atoms([0.1, 0.2, 0.3])
+        selector = ForceFilterSelector(force_threshold=10.0)
+        result = selector.select(configs)
+        assert len(result) == 3
+
+    def test_all_above_threshold_returns_empty(self):
+        configs = _make_force_atoms([5.0, 6.0])
+        selector = ForceFilterSelector(force_threshold=1.0)
+        assert selector.select(configs) == []
+
+    def test_boundary_is_inclusive(self):
+        """max_force == threshold is kept (<=, not <)."""
+        configs = _make_force_atoms([1.0])
+        selector = ForceFilterSelector(force_threshold=1.0)
+        result = selector.select(configs)
+        assert len(result) == 1
+
+    def test_empty_input(self):
+        selector = ForceFilterSelector(force_threshold=1.0)
+        assert selector.select([]) == []
+
+    def test_grouped_input_flattens(self):
+        flat = _make_force_atoms([0.5, 5.0, 0.3, 5.0])
+        grouped = [flat[:2], flat[2:]]
+        selector = ForceFilterSelector(force_threshold=1.0)
+        result = selector.select(grouped)
+        assert {at.info["index"] for at in result} == {0, 2}
+
+
+# ---------------------------------------------------------------------------
+# UniformForceSelector
+#
+# Two fixed bugs worth keeping in mind when reading these tests:
+#   * Per-bin (and force_n_configs top-up) subsampling used to call
+#     np.random.choice directly on a list of Atoms objects instead of on
+#     their indices; since Atoms is itself sized/iterable, numpy's array
+#     construction failed with "a must be 1-dimensional" for any pool
+#     large enough to need real subsampling. Fixed by sampling indices and
+#     mapping back to Atoms afterwards.
+#   * np.digitize (right=False, the default) places a value exactly equal
+#     to the top bin edge one index past the last valid bin, so the
+#     config(s) with the pool's maximum force magnitude used to be
+#     silently dropped. Fixed by clipping the digitized indices into
+#     [0, n_bins - 1] -- the max now lands in the last bin like it should.
+# ---------------------------------------------------------------------------
+class TestUniformForceSelector:
+    def test_selects_up_to_n_configs_across_bins(self):
+        """20 configs spread over [0, 9.99) into 5 bins (4-5 per bin,
+        including the max at the top edge). configs_per_bin = 10 // 5 = 2,
+        so exactly 10 are selected (which bin members get picked is
+        random when a bin exceeds its cap, but the total count isn't)."""
+        magnitudes = list(np.linspace(0, 9.99, 20))
+        selector = UniformForceSelector(n_configs=10, n_bins=5)
+        for _ in range(5):  # re-run to also guard against flaky sampling
+            result = selector.select(_make_force_atoms(magnitudes))
+            assert len(result) == 10
+
+    def test_max_value_lands_in_the_last_bin(self):
+        """The config whose force equals the pool maximum is included,
+        via the last bin -- not dropped. One config per bin (no
+        oversubscription), so every one of the 5 is kept."""
+        magnitudes = [0.0, 2.5, 5.0, 7.5, 10.0]  # 10.0 is the pool max
+        configs = _make_force_atoms(magnitudes)
+        selector = UniformForceSelector(n_configs=5, n_bins=5)
+        result = selector.select(configs)
+        selected_indices = {at.info["index"] for at in result}
+        assert len(result) == 5
+        assert selected_indices == {0, 1, 2, 3, 4}
+
+    def test_empty_bins_excluded_from_configs_per_bin(self):
+        """Two clusters of 3 with a gap: 3 of the 5 bins are empty and
+        don't count towards the configs_per_bin division (denominator
+        shrinks from n_bins=5 to the 2 non-empty bins) -> 4 // 2 = 2 per
+        bin, capped from 3 each -> 4 selected total, deterministically,
+        even though which 2-of-3 per cluster is random."""
+        magnitudes = [0.0, 0.1, 0.2, 9.0, 9.1, 9.2]
+        selector = UniformForceSelector(n_configs=4, n_bins=5)
+        for _ in range(5):
+            result = selector.select(_make_force_atoms(magnitudes))
+            assert len(result) == 4
+
+    def test_configs_per_bin_zero_returns_empty(self):
+        """n_configs smaller than the number of non-empty bins rounds
+        configs_per_bin down to 0 -> returns [], even though the bins
+        themselves are not actually empty (the log message says
+        otherwise)."""
+        magnitudes = list(np.linspace(0, 9.0, 10))
+        configs = _make_force_atoms(magnitudes)
+        selector = UniformForceSelector(n_configs=2, n_bins=5)
+        assert selector.select(configs) == []
+
+    def test_uniform_magnitudes_all_land_in_the_last_bin(self):
+        """When every candidate has the exact same average force, min ==
+        max and every bin edge collapses to that value; the clip keeps
+        all of them in the last bin (index n_bins - 1) instead of an
+        out-of-range one, so they're all selected -- this used to return
+        [] unconditionally (see class docstring)."""
+        configs = _make_force_atoms([1.0, 1.0, 1.0, 1.0, 1.0])
+        selector = UniformForceSelector(n_configs=5, n_bins=5)
+        result = selector.select(configs)
+        assert len(result) == 5
+
+    def test_force_n_configs_false_stops_at_the_bin_cap(self):
+        """5 configs at 0.0 (one bin, cap 2) + 1 at 9.0 (the max, its own
+        bin): bins alone provide 2 + 1 = 3, short of the 4 requested, even
+        though the pool has 6 configs to draw from. Without
+        force_n_configs the selector stops there."""
+        magnitudes = [0.0, 0.0, 0.0, 0.0, 0.0, 9.0]
+        configs = _make_force_atoms(magnitudes)
+        selector = UniformForceSelector(
+            n_configs=4, n_bins=5, force_n_configs=False
+        )
+        result = selector.select(configs)
+        assert len(result) == 3
+
+    def test_force_n_configs_true_tops_up_past_the_bin_cap(self):
+        """Same pool as above, but force_n_configs=True pulls the
+        remaining slot from whatever the bin pass left out (one of the
+        four 0.0-magnitude configs it didn't already pick), reaching the
+        full n_configs=4."""
+        magnitudes = [0.0, 0.0, 0.0, 0.0, 0.0, 9.0]
+        configs = _make_force_atoms(magnitudes)
+        selector = UniformForceSelector(
+            n_configs=4, n_bins=5, force_n_configs=True
+        )
+        result = selector.select(configs)
+        assert len(result) == 4
+
+    def test_empty_input(self):
+        selector = UniformForceSelector(n_configs=5)
+        assert selector.select([]) == []
+
+    def test_grouped_input_flattens(self):
+        """Grouped input is flattened before binning."""
+        flat = _make_force_atoms([0.0, 3.0, 6.0])  # 6.0 is the pool max
+        grouped = [flat[:2], flat[2:]]
+        selector = UniformForceSelector(n_configs=3, n_bins=3)
+        result = selector.select(grouped)
+        assert len(result) == 3
 
 
 # ---------------------------------------------------------------------------

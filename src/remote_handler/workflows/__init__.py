@@ -25,6 +25,7 @@ from remote_handler.workflows.evaluators import (
 )
 from remote_handler.workflows.staged_active_learning import (
     InputSource,
+    RemoteSelector,
     SelectorActor,
     Stage,
     StagedActiveLearningHandler,
@@ -48,4 +49,5 @@ __all__ = [
     "InputSource",
     "Selector",
     "SelectorActor",
+    "RemoteSelector",
 ]

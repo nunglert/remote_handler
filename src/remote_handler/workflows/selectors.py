@@ -335,6 +335,139 @@ class UncertaintySelector(ConfigSelector):
         )
         return selected
 
+class ForceFilterSelector(ConfigSelector):
+    """Select configurations based on force magnitude threshold.
+
+    Filters out configurations where the maximum atomic force exceeds
+    a specified threshold. Useful for removing high-energy or unstable
+    structures from the candidate pool.
+
+    Args:
+        force_threshold: Maximum allowed force magnitude (in eV/Å).
+    """
+
+    def __init__(self, force_threshold: float):
+        self.force_threshold = force_threshold
+
+    def select(
+        self, configs: Configs, reference: list[Atoms] | None = None
+    ) -> list[Atoms]:
+        flat = _flatten(configs)
+        n_total = len(flat)
+        if n_total == 0:
+            logger.warning("ForceFilterSelector: received empty config list")
+            return []
+
+        selected = []
+        for at in flat:
+            max_force = np.max(np.linalg.norm(at.arrays["forces"], axis=-1))
+            if max_force <= self.force_threshold:
+                selected.append(at)
+
+        logger.info(
+            f"ForceFilterSelector: selected {len(selected)} from "
+            f"{n_total} configs (force threshold: {self.force_threshold:.4f} eV/Å)"
+        )
+        return selected
+    
+class UniformForceSelector(ConfigSelector):
+    """Select configurations uniformly across force magnitude bins.
+
+    Divides the range of average force magnitudes into bins and selects an equal number
+    of configurations from each bin. This ensures a diverse representation of
+    configurations across different force regimes.
+
+    Args:
+        n_configs: Total number of configurations to select.
+        n_bins: Number of bins to divide the force magnitude range into.
+    """
+
+    def __init__(self, n_configs: int, n_bins: int = 10, force_n_configs: bool = False):
+        self.n_configs = n_configs
+        self.n_bins = n_bins
+        self.force_n_configs = force_n_configs
+
+    def select(
+        self, configs: Configs, reference: list[Atoms] | None = None
+    ) -> list[Atoms]:
+        flat = _flatten(configs)
+        n_total = len(flat)
+        if n_total == 0:
+            logger.warning("UniformForceSelector: received empty config list")
+            return []
+
+        # Compute average force magnitudes for each configuration
+        avg_forces = np.array([
+            np.mean(np.linalg.norm(at.arrays["forces"], axis=-1)) for at in flat
+        ])
+
+        # Create bins and assign configurations to bins. np.digitize puts a
+        # value exactly at the top bin edge one index past the last valid
+        # bin, so clamp it back in -- otherwise the config(s) with the
+        # pool's maximum force magnitude would be silently dropped from
+        # every bin instead of landing in the last one.
+        bins = np.linspace(avg_forces.min(), avg_forces.max(), self.n_bins + 1)
+        bin_indices = np.digitize(avg_forces, bins) - 1  # Bin indices start from 0
+        bin_indices = np.clip(bin_indices, 0, self.n_bins - 1)
+
+        n_empty_bins = np.sum([np.sum(bin_indices == i) == 0 for i in range(self.n_bins)])
+        selected_indices: list[int] = []
+        configs_per_bin = self.n_configs // (self.n_bins - n_empty_bins) if self.n_bins - n_empty_bins > 0 else 0
+
+        if configs_per_bin == 0:
+            logger.warning(
+                "UniformForceSelector: All bins are empty"
+            )
+            return []
+
+        for bin_idx in range(self.n_bins):
+            bin_member_indices = [
+                i for i in range(n_total) if bin_indices[i] == bin_idx
+            ]
+
+            if not bin_member_indices:
+                continue  # Skip empty bins
+
+            if len(bin_member_indices) > configs_per_bin:
+                # Randomly sample from the bin if there are more configs than
+                # needed. Sampled by index -- np.random.choice needs a
+                # 1-D array of scalars, not a list of Atoms objects.
+                chosen = np.random.choice(
+                    bin_member_indices, configs_per_bin, replace=False
+                )
+                selected_indices.extend(int(i) for i in chosen)
+            else:
+                selected_indices.extend(bin_member_indices)
+
+        if len(selected_indices) < self.n_configs and not self.force_n_configs:
+            logger.warning(
+                f"UniformForceSelector: Only {len(selected_indices)} configurations selected, "
+                f"less than requested {self.n_configs} due to almost empty bins."
+                f"set force_n_configs=True to force selection of n_configs."
+            )
+        elif len(selected_indices) < self.n_configs and self.force_n_configs:
+            # If force_n_configs is True, fill the remaining slots with random selections
+            remaining = self.n_configs - len(selected_indices)
+            already_selected = set(selected_indices)
+            remaining_indices = [
+                i for i in range(n_total) if i not in already_selected
+            ]
+            if remaining_indices:
+                chosen = np.random.choice(
+                    remaining_indices,
+                    min(remaining, len(remaining_indices)),
+                    replace=False,
+                )
+                selected_indices.extend(int(i) for i in chosen)
+            logger.info(
+                f"UniformForceSelector: randomly selected {min(remaining, len(remaining_indices))} additional configurations to meet n_configs."
+            )
+
+        selected = [flat[i] for i in selected_indices]
+        logger.info(
+            f"UniformForceSelector: Selected {len(selected)} configurations from {self.n_bins} bins."
+        )
+        return selected
 
 class QUESTSSelector(ConfigSelector):
     """Select configurations using QUESTS information entropy.
@@ -587,5 +720,9 @@ class PipelineSelector(ConfigSelector):
             # per-member set_reference plumbing.
             result = selector.select(result, reference=reference)
             if not result:
+                logger.warning(
+                    f"PipelineSelector: selector {selector.__class__.__name__} "
+                    f"returned empty selection; stopping pipeline"
+                )
                 break
         return result

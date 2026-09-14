@@ -63,13 +63,21 @@ from typing import Optional
 import ase.io
 from ase import Atoms
 
+from remote_handler.core.cluster_handler import ClusterConfig
+from remote_handler.core.file_handler import FileSystemHandlerBase
+from remote_handler.core.tasks import SingleScriptTask
 from remote_handler.exceptions import WorkflowError
+import remote_handler.workflows.selectors as selectors_mod
 from remote_handler.workflows.active_learning_base import Schedule, Selector
 from remote_handler.workflows.selectors import ConfigSelector
 
 logger = logging.getLogger(__name__)
 
 PROGRESS_FILENAME = "AL_progress.json"
+
+# Remote payloads shipped with the package live in ``scripts/`` next to this
+# module's package root (mirrors ``samplers.py``'s ``_SCRIPTS_DIR``).
+_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 
 # Output getter names understood by the handler, in priority order. This
 # lets the existing Sampler/GroundTruthEvaluator/ModelTrainer actors be
@@ -191,6 +199,156 @@ class SelectorActor(Selector):
     def get_selected_configs(self) -> Path:
         if self._output is None:
             raise WorkflowError("SelectorActor has not produced output yet.")
+        return self._output
+
+
+class RemoteSelector(Selector):
+    """Run a `ConfigSelector` strategy as a single remote SLURM job.
+
+    Peer to `SelectorActor`, which runs the same `ConfigSelector.select()`
+    call in-process on whatever host drives the loop. Use `RemoteSelector`
+    instead when selection is heavy enough (or needs a package only
+    available in a cluster env) to warrant its own job -- it ships the
+    candidate pool (+ optional reference) and the selector's parameters to
+    `cluster_config`, runs `scripts/selection/select_configs.py` there via a
+    `SingleScriptTask`, and collects the written extxyz back. Mirrors the
+    pattern used by `samplers.CMAESSampler` for a one-shot remote job.
+
+    Args:
+        selector_type: Name of a `ConfigSelector` subclass in
+            `remote_handler.workflows.selectors` (e.g. "QUESTSSelector").
+        selector_kwargs: Keyword arguments forwarded to the selector's
+            constructor (must be JSON-plain values).
+        cluster_config: Cluster to submit the selection job to.
+        remote_fs: Filesystem handler used to ship files to/from that
+            cluster (a `LocalFileSystem` when the driving process already
+            runs on the cluster's login node, as with `VASPEvaluator`).
+        output_filename: Name of the extxyz file the remote script writes.
+        remote_savepath: Remote scratch root for the job (defaults to the
+            executor's own default when None).
+        loop_time: Seconds between job-completion polls.
+        stub: When True, run the selector in-process instead of submitting
+            a job (for dry-running the loop's wiring without a cluster).
+        jobname: SLURM job name.
+    """
+
+    def __init__(
+        self,
+        selector_type: str,
+        selector_kwargs: dict,
+        cluster_config: ClusterConfig,
+        remote_fs: FileSystemHandlerBase,
+        output_filename: str = "selected.extxyz",
+        remote_savepath: Optional[os.PathLike] = None,
+        loop_time: float = 30.0,
+        stub: bool = False,
+        jobname: str = "select_configs",
+    ):
+        self.selector_type = selector_type
+        self.selector_kwargs = selector_kwargs
+        self.cluster_config = cluster_config
+        self.remote_fs = remote_fs
+        self.output_filename = output_filename
+        self.remote_savepath = remote_savepath
+        self.loop_time = loop_time
+        self.stub = stub
+        self.jobname = jobname
+        self._output: Optional[Path] = None
+
+    def update(
+        self,
+        calcdir: Path,
+        actor_input: Path | list[Path],
+        reference: Optional[list[Path]] = None,
+        **kwargs,
+    ) -> None:
+        paths = (
+            [actor_input]
+            if isinstance(actor_input, (str, Path))
+            else list(actor_input)
+        )
+        self.select_dir = Path(calcdir) / "selector"
+        self.results_dir = self.select_dir / "results"
+        os.makedirs(self.select_dir, exist_ok=True)
+
+        if self.stub:
+            selector_cls = getattr(selectors_mod, self.selector_type)
+            selector = selector_cls(**{**self.selector_kwargs, **kwargs})
+            grouped: list[list[Atoms]] = []
+            for p in paths:
+                frames = ase.io.read(p, index=":")
+                grouped.append(
+                    [frames] if isinstance(frames, Atoms) else frames
+                )
+            ref_atoms = None
+            if reference:
+                ref_atoms = []
+                for p in reference:
+                    frames = ase.io.read(p, index=":")
+                    ref_atoms.extend(
+                        [frames] if isinstance(frames, Atoms) else frames
+                    )
+                ref_atoms = ref_atoms or None
+            selected = selector.select(grouped, reference=ref_atoms)
+            os.makedirs(self.results_dir, exist_ok=True)
+            self._output = self.results_dir / self.output_filename
+            ase.io.write(self._output, selected)
+            logger.info(
+                "RemoteSelector (stub): wrote %d selected configs to %s",
+                len(selected),
+                self._output,
+            )
+            return
+
+        script_input = {
+            "selector_type": self.selector_type,
+            "selector_kwargs": {**self.selector_kwargs, **kwargs},
+            "input_files": [Path(p).name for p in paths],
+            "reference_files": (
+                [Path(p).name for p in reference] if reference else None
+            ),
+            "output_filename": self.output_filename,
+        }
+        self.script_input_file = self.select_dir / "input_select.json"
+        with open(self.script_input_file, "w") as f:
+            json.dump(script_input, f, indent=2)
+
+        self.select_task = SingleScriptTask(
+            local_savepath=self.results_dir,
+            input_file=self.script_input_file,
+            cluster_config=self.cluster_config,
+            remote_fs=self.remote_fs,
+            script_file=_SCRIPTS_DIR / "selection" / "select_configs.py",
+            remote_savepath=self.remote_savepath,
+            jobfile_name="run_select_configs.sh",
+            jobname=self.jobname,
+            logfile="select_configs.log",
+            n_processors=1,
+            loop_time=self.loop_time,
+        )
+        self.select_task.allocate_data()
+        for p in paths:
+            self.select_task.copy_file(p)
+        for p in reference or []:
+            self.select_task.copy_file(p)
+
+    def get_selected_configs(self) -> Path:
+        if not self.stub:
+            self.select_task.submit()
+            if not self.select_task.finish_check():
+                raise WorkflowError(
+                    "Remote selection did not finish successfully "
+                    "(no is_finished.info marker). Check the job logs in "
+                    f"{self.select_task.calcdir}."
+                )
+            self.select_task.collect_results()
+            self._output = self.results_dir / self.output_filename
+
+        if self._output is None:
+            raise WorkflowError("RemoteSelector has not produced output yet.")
+        logger.info(
+            "RemoteSelector: selected configs collected to %s", self._output
+        )
         return self._output
 
 

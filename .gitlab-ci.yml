@@ -82,6 +82,13 @@ test:
   coverage: '/^TOTAL.+?(\d+\%)$/'
   artifacts:
     when: always
+    # coverage.xml/report.xml listed under both `paths` (so `needs:
+    # artifacts: true` in the diff-coverage job actually gets the file --
+    # `reports:`-only artifacts aren't reliably fetched that way) and
+    # `reports` (for GitLab's own coverage-visualization/test-summary UI).
+    paths:
+      - coverage.xml
+      - report.xml
     reports:
       junit: report.xml
       coverage_report:
@@ -93,6 +100,40 @@ test:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH'
+
+# Coverage gate on the lines an MR actually touches. The `test` job's overall
+# --cov-fail-under=50 is deliberately low (it has to tolerate large low-level
+# files like remote-side scripts that only run in optional integration tiers)
+# so it doesn't catch a new, untested class landing in an otherwise
+# well-covered file. diff-cover reads the same coverage.xml and reports
+# coverage restricted to the diff against the MR's target branch, so new/
+# changed code is held to a real bar regardless of the rest of the file.
+diff-coverage:
+  stage: test
+  image: python:3.13
+  needs:
+    - job: test
+      artifacts: true
+  before_script:
+    - pip install --upgrade pip
+    - pip install diff-cover
+    # MR pipelines check out the source branch merged into target at HEAD;
+    # the target branch ref itself isn't guaranteed to be present locally
+    # yet, and diff-cover needs it to compute the diff.
+    - git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+  script:
+    - >-
+      diff-cover coverage.xml
+      --compare-branch=origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME
+      --fail-under=90
+      --format html:diff-cover-report.html
+  artifacts:
+    when: always
+    paths:
+      - diff-cover-report.html
+  rules:
+    # Only meaningful with a diff against a target branch.
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
 
 # docs -> GitLab Pages
 pages:
