@@ -1,7 +1,7 @@
 # TODO
 
 ## High Priority
-- [ ] 
+- [ ] Add note to README that installation of pyace need cmake
 
 ## Low Priority
 - [x] Use shipped mace run_train, instead of manually requiring to provide a path to the script

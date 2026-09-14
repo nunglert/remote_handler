@@ -55,6 +55,7 @@ import json
 import logging
 import os
 import shutil
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -661,6 +662,41 @@ class StagedActiveLearningHandler:
 
     # ---- execution --------------------------------------------------------
 
+    @contextmanager
+    def _reattach_if_pending(self, actor, calcdir: Path):
+        """Reattach ``actor`` to an already-submitted job for this stage
+        step, if one exists, instead of letting it resubmit.
+
+        Duck-typed counterpart of ``ActiveLearningHandler``'s helper of the
+        same name -- stage actors here need not subclass the
+        ``Sampler``/``GroundTruthEvaluator``/``ModelTrainer``/``Selector``
+        ABCs at all (see ``resolve_actor_output``'s own duck typing), so
+        ``pending_manifest``/``collect_only`` are looked up with
+        ``getattr`` rather than assumed present. See that helper's
+        docstring for the full rationale.
+        """
+        pending_manifest = getattr(actor, "pending_manifest", None)
+        manifest = pending_manifest(calcdir) if pending_manifest else None
+        reattach = (
+            manifest is not None
+            and manifest.exists()
+            and hasattr(actor, "collect_only")
+        )
+        if reattach:
+            logger.info(
+                "Found a pending manifest for stage %r at %s -- "
+                "reattaching instead of resubmitting.",
+                type(actor).__name__,
+                manifest,
+            )
+            original_collect_only = actor.collect_only
+            actor.collect_only = True
+        try:
+            yield reattach
+        finally:
+            if reattach:
+                actor.collect_only = original_collect_only
+
     def _run_stage(self, iter_idx: int, stage_idx: int) -> None:
         stage = self.stages[stage_idx]
         calcdir = self.calchome / str(iter_idx)
@@ -688,9 +724,9 @@ class StagedActiveLearningHandler:
             )
 
         logger.info("[it %d] running stage '%s' ...", iter_idx, stage.name)
-        stage.actor.update(calcdir, input_arg, **extra, **kwargs)
-
-        outputs = resolve_actor_output(stage.actor)
+        with self._reattach_if_pending(stage.actor, calcdir):
+            stage.actor.update(calcdir, input_arg, **extra, **kwargs)
+            outputs = resolve_actor_output(stage.actor)
         outputs = (
             [outputs] if isinstance(outputs, (str, Path)) else list(outputs)
         )

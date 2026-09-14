@@ -379,3 +379,34 @@ now — handy when the remote env has since drifted and you only want the
 outputs). ``PATH`` may be the manifest file itself or a directory containing
 one; an ambiguous directory (more than one manifest) is an error rather than a
 guess.
+
+Standalone collection in code (workflow-layer tasks)
+-----------------------------------------------------
+
+The ``status``/``collect`` commands above operate on the generic
+:class:`~remote_handler.core.manifest.TaskHandle`: they can wait for and copy
+a job's directory, but they know nothing about a specific task's
+``finish_check()``/``collect_results()`` semantics (e.g.
+:class:`~remote_handler.workflows.dft_runner.SinglePointHandler`'s fractional
+success check, or an array's per-shard sentinel scan).
+
+If your code needs those semantics from a *second* process -- e.g. an
+active-learning driver that submitted a MACE training array and exits, then
+comes back later to collect it -- reconstruct the full task object instead,
+either via the workflow's own ``collect_only=True`` constructor (when one
+exists, e.g. ``SinglePointHandler(..., collect_only=True)``) or, for a bare
+:class:`~remote_handler.core.tasks.ArrayScriptTask` /
+:class:`~remote_handler.core.tasks.SingleScriptTask`, via
+``from_manifest()``:
+
+.. code-block:: python
+
+   task = tasks.ArrayScriptTask.from_manifest("results.manifest.json")
+   if task.finish_check():
+       task.collect_results()
+
+``from_manifest()`` never allocates or submits -- it only rebuilds the object
+against the manifest's resolved ``remote_savepath`` -- so it is safe to call
+any time after the job has been detached, whether or not it has finished yet.
+See :doc:`concepts` for how this fits into the task lifecycle, and
+``docs/source/examples/example_3_standalone.py`` for a full worked example.

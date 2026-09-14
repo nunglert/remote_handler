@@ -88,7 +88,7 @@ def main(run_dir=None, num_iterations=3):
         remote_fs=remote_fs,
         cluster_config=cluster_config,
         num_parallel=3,
-        remote_savepath=scratch / "dft",
+        remote_savepath=scratch / "eval",
         loop_time=0.3,
     )
     trainer = MorseTrainer(remote_fs=remote_fs, cluster_config=cluster_config)

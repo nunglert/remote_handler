@@ -18,10 +18,11 @@ import ase.io
 import numpy as np
 from ase import Atoms
 
+from remote_handler.core.atoms_handler import RemoteAtomsHandler
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import FileSystemHandlerBase
+from remote_handler.core.tasks import DetachableTaskMixin
 from remote_handler.core.utils import grep
-from remote_handler.exceptions import WorkflowError
 
 from .active_learning_base import GroundTruthEvaluator
 
@@ -36,7 +37,7 @@ _SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 _LABELLED_FILENAME = "dft_dft.extxyz"
 
 
-class AseCalculatorEvaluator(GroundTruthEvaluator):
+class AseCalculatorEvaluator(DetachableTaskMixin, GroundTruthEvaluator):
     """Single-point ground-truth evaluation with any ASE calculator.
 
     Calculator-agnostic: it ships ``calc_config`` (the per-job input JSON) and
@@ -61,12 +62,24 @@ class AseCalculatorEvaluator(GroundTruthEvaluator):
         time_limit: SLURM ``--time`` value (e.g. ``"0-02:00:00"``) capping each
             job. ``None`` (default) emits no ``--time``, so the job runs to the
             partition maximum.
+        collect_only: If True, ``update`` reconstructs the array submitted by
+            an earlier, ``collect_only=False`` call (from the manifest
+            written beside ``<calcdir>/dft/results``, via
+            ``RemoteAtomsHandler.from_manifest``) instead of
+            allocating/submitting a new one, and ``get_evaluated_configs``
+            skips the (already-done) submission. ``evaluator_input`` is not
+            read in this mode. Use this to collect a detached evaluation run
+            from a fresh process.
+        reattach_max_wait: Only used when ``collect_only``: how long (in
+            seconds) to wait for the reattached job to finish before giving
+            up. ``None`` (default) waits forever.
     """
 
     # Key into ``ClusterConfig.environment`` for this calculator's cluster
     # setup (modules / paths). Presets override it (e.g. VASP -> "vasp"); the
     # generic base and pure-ASE presets (EMT) inject nothing.
     _environment_key: Optional[str] = None
+    _iteration_subdir = "dft"  # calcdir/dft -- see DetachableTaskMixin
 
     def __init__(
         self,
@@ -82,6 +95,8 @@ class AseCalculatorEvaluator(GroundTruthEvaluator):
         stub: bool = False,
         slurm_header_add: str = "",
         time_limit: Optional[str] = None,
+        collect_only: bool = False,
+        reattach_max_wait: Optional[float] = None,
     ):
         super().__init__()
         self.singlepoint_script = singlepoint_script
@@ -98,50 +113,80 @@ class AseCalculatorEvaluator(GroundTruthEvaluator):
         self.stub = stub
         self.slurm_header_add = slurm_header_add
         self.time_limit = time_limit
+        self.collect_only = collect_only
+        self.reattach_max_wait = reattach_max_wait
         self.handler = None
 
     def update(
-        self, calcdir: Path, evaluator_input: Path | list[Path], **kwargs
+        self,
+        calcdir: Path,
+        evaluator_input: Optional[Path | list[Path]],
+        **kwargs,
     ) -> None:
-        self.dft_dir = Path(calcdir) / "dft"
-        self.results_dir = self.dft_dir / "results"
+        """Prepare the evaluator for a new iteration.
+
+        Args:
+            calcdir: Directory for this AL iteration.
+            evaluator_input: Path(s) to unlabelled configs to evaluate. Not
+                read when ``collect_only`` -- a second process reconstructing
+                an already-submitted array from its manifest needs none of
+                the original input, so ``None`` is expected there.
+            **kwargs: Additional parameters.
+        """
+        self.dft_dir = self.iteration_dir(calcdir)
+        self.results_dir = self.results_dir_for(calcdir)
         os.makedirs(self.dft_dir, exist_ok=True)
 
-        self.traj_files = (
-            [str(evaluator_input)]
-            if isinstance(evaluator_input, Path)
-            else [str(p) for p in evaluator_input]
-        )
+        if not self.collect_only:
+            self.traj_files = (
+                [str(evaluator_input)]
+                if isinstance(evaluator_input, Path)
+                else [str(p) for p in evaluator_input]
+            )
 
         if self.stub:
             # No remote handler is needed; outputs are mocked in get_*.
             self.handler = None
             return
 
-        # Local import keeps the evaluator import light and avoids any cycle.
-        from remote_handler.workflows.dft_runner import SinglePointHandler
+        def _build_handler():
+            # Local import keeps the evaluator import light and avoids any
+            # cycle -- only needed on this, non-collect_only path.
+            from remote_handler.workflows.dft_runner import SinglePointHandler
 
-        self.handler = SinglePointHandler(
-            traj_files=self.traj_files,
-            cluster_config=self.cluster_config,
-            remote_fs=self.remote_fs,
-            savepath=str(self.remote_savepath)
-            if self.remote_savepath
-            else "/tmp",
-            num_parallel=self.num_parallel,
-            python_script_path=self.singlepoint_script,
-            calc_config=self.calc_config,
-            loop_time=self.loop_time,
-            jobname="dft",
-            every=1,
-            local_savepath=self.results_dir,
-            logfile="dft.log",
-            collect_only=False,
-            tag="dft",
-            n_processors=self.n_processors,
-            slurm_header_add=self.slurm_header_add,
-            environment_key=self._environment_key,
-            time_limit=self.time_limit,
+            return SinglePointHandler(
+                traj_files=self.traj_files,
+                cluster_config=self.cluster_config,
+                remote_fs=self.remote_fs,
+                savepath=str(self.remote_savepath)
+                if self.remote_savepath
+                else "/tmp",
+                num_parallel=self.num_parallel,
+                python_script_path=self.singlepoint_script,
+                calc_config=self.calc_config,
+                loop_time=self.loop_time,
+                jobname="dft",
+                every=1,
+                local_savepath=self.results_dir,
+                logfile="dft.log",
+                collect_only=False,
+                tag="dft",
+                n_processors=self.n_processors,
+                slurm_header_add=self.slurm_header_add,
+                environment_key=self._environment_key,
+                time_limit=self.time_limit,
+            )
+
+        # collect_only=True reconstructs via RemoteAtomsHandler.from_manifest
+        # (the base class -- see its docstring for why: it never re-reads/
+        # -shards the original trajectories) rather than SinglePointHandler,
+        # which is exactly why the collect-only path here needs neither
+        # calc_config/python_script_path/environment_key nor the original
+        # evaluator_input. The result still supports finish_check() and the
+        # generic collect_results() -- everything get_evaluated_configs()
+        # below uses.
+        self.handler = self.build_or_resume_task(
+            RemoteAtomsHandler, self.results_dir, _build_handler, tag="dft"
         )
 
     def get_evaluated_configs(self) -> Path:
@@ -151,19 +196,32 @@ class AseCalculatorEvaluator(GroundTruthEvaluator):
             Path to the ``.extxyz`` of evaluated configurations.
 
         Raises:
-            WorkflowError: If fewer than ``required_fraction`` jobs succeed.
+            TaskError: If fewer than ``required_fraction`` jobs succeed (or,
+                when ``collect_only``, if that doesn't happen within
+                ``reattach_max_wait``).
         """
         if self.stub:
             logger.info("Running in stub mode - creating mock outputs")
             all_ats = self._create_stub_outputs(num_configs=5)
         else:
-            self.handler.run()
-            if not self.handler.finish_check(self.required_fraction):
-                raise WorkflowError(
+            # Submit (unless collect_only -- already submitted in another
+            # process), wait, then collect -- rather than the single
+            # handler.run() convenience call, which unconditionally re-runs
+            # allocate_data() and would be wrong for a collect_only handler.
+            self.submit_if_needed(self.handler)
+            self.wait_if_needed(
+                self.handler,
+                finish_check=lambda: self.handler.finish_check(
+                    self.required_fraction
+                ),
+                max_wait=self.reattach_max_wait,
+                error_message=(
                     f"Less than {self.required_fraction * 100}% ran "
-                    "successfully. Something probably went wrong. Otherwise, "
-                    "lower the required_fraction parameter."
-                )
+                    "successfully. Something probably went wrong. "
+                    "Otherwise, lower the required_fraction parameter."
+                ),
+            )
+            self.handler.collect_results()
             all_ats = self._collect_results()
 
         os.makedirs(self.results_dir, exist_ok=True)
@@ -242,6 +300,13 @@ class VASPEvaluator(AseCalculatorEvaluator):
             module load and ``VASP_PP_PATH`` in that cluster JSON entry.
         incar_config_file: Optional path to a YAML file of INCAR tags, used instead of
             (or as a base for) ``incar_kwargs``.
+        collect_only: If True, ``update`` reconstructs the array submitted by
+            an earlier, ``collect_only=False`` call instead of
+            allocating/submitting a new one. See
+            ``AseCalculatorEvaluator``'s docstring.
+        reattach_max_wait: Only used when ``collect_only``: how long (in
+            seconds) to wait for the reattached job to finish before giving
+            up. ``None`` (default) waits forever.
     """
 
     _environment_key = "vasp"
@@ -262,6 +327,8 @@ class VASPEvaluator(AseCalculatorEvaluator):
         slurm_header_add: str = "",
         incar_config_file: Optional[os.PathLike] = None,
         time_limit: Optional[str] = None,
+        collect_only: bool = False,
+        reattach_max_wait: Optional[float] = None,
     ):
         from remote_handler.workflows.dft_runner import resolve_incar_kwargs
 
@@ -288,6 +355,8 @@ class VASPEvaluator(AseCalculatorEvaluator):
             stub=stub,
             slurm_header_add=slurm_header_add,
             time_limit=time_limit,
+            collect_only=collect_only,
+            reattach_max_wait=reattach_max_wait,
         )
 
     @property
@@ -316,6 +385,13 @@ class ORCAEvaluator(AseCalculatorEvaluator):
             precedence over the cluster's ``environment["orca"]`` (and emits a
             DeprecationWarning when both are set). Prefer putting the ORCA
             module load in that cluster JSON entry.
+        collect_only: If True, ``update`` reconstructs the array submitted by
+            an earlier, ``collect_only=False`` call instead of
+            allocating/submitting a new one. See
+            ``AseCalculatorEvaluator``'s docstring.
+        reattach_max_wait: Only used when ``collect_only``: how long (in
+            seconds) to wait for the reattached job to finish before giving
+            up. ``None`` (default) waits forever.
     """
 
     _environment_key = "orca"
@@ -335,6 +411,8 @@ class ORCAEvaluator(AseCalculatorEvaluator):
         stub: bool = False,
         slurm_header_add: str = "",
         time_limit: Optional[str] = None,
+        collect_only: bool = False,
+        reattach_max_wait: Optional[float] = None,
     ):
         if singlepoint_script is None:
             singlepoint_script = str(_SCRIPTS_DIR / "orca_singlepoint.py")
@@ -357,6 +435,8 @@ class ORCAEvaluator(AseCalculatorEvaluator):
             stub=stub,
             slurm_header_add=slurm_header_add,
             time_limit=time_limit,
+            collect_only=collect_only,
+            reattach_max_wait=reattach_max_wait,
         )
 
     @property
@@ -386,6 +466,13 @@ class EMTEvaluator(AseCalculatorEvaluator):
         n_processors: CPU cores per job.
         stub: If True, produce mock outputs without running anything.
         slurm_header_add: Extra SLURM header lines.
+        collect_only: If True, ``update`` reconstructs the array submitted by
+            an earlier, ``collect_only=False`` call instead of
+            allocating/submitting a new one. See
+            ``AseCalculatorEvaluator``'s docstring.
+        reattach_max_wait: Only used when ``collect_only``: how long (in
+            seconds) to wait for the reattached job to finish before giving
+            up. ``None`` (default) waits forever.
     """
 
     def __init__(
@@ -402,6 +489,8 @@ class EMTEvaluator(AseCalculatorEvaluator):
         stub: bool = False,
         slurm_header_add: str = "",
         time_limit: Optional[str] = None,
+        collect_only: bool = False,
+        reattach_max_wait: Optional[float] = None,
     ):
         if singlepoint_script is None:
             singlepoint_script = str(_SCRIPTS_DIR / "ase_singlepoint.py")
@@ -422,4 +511,6 @@ class EMTEvaluator(AseCalculatorEvaluator):
             stub=stub,
             slurm_header_add=slurm_header_add,
             time_limit=time_limit,
+            collect_only=collect_only,
+            reattach_max_wait=reattach_max_wait,
         )

@@ -117,7 +117,28 @@ Workflows
 Active Learning
 ~~~~~~~~~~~~~~~
 
+See :doc:`../active_learning` for the conceptual walkthrough of the actor
+interfaces and the staged handler documented below.
+
 .. automodule:: remote_handler.workflows
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: remote_handler.workflows.active_learning_base
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: remote_handler.workflows.staged_active_learning
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Selectors
+~~~~~~~~~
+
+.. automodule:: remote_handler.workflows.selectors
    :members:
    :undoc-members:
    :show-inheritance:

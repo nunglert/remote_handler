@@ -3,19 +3,17 @@
 Run VASP single-point calculations on a set of structures as a SLURM array job
 on a remote cluster, then collect the labelled configurations.
 
+remote_handler does not ship VASP itself (a licensed, external code) -- it
+must already be installed on the target cluster, and ``vasp_binary``/the
+cluster's ``environment["vasp"]`` entry must point at it.
+
 Included verbatim by ``docs/source/examples.rst`` and signature-checked by
 ``test/test_examples.py``.
 """
 
-from pathlib import Path
-
-import remote_handler
 from remote_handler.core import ClusterConfig
 from remote_handler.core.file_handler import RemoteFileSystem
 from remote_handler.workflows.dft_runner import VASPHandler
-
-# The DFT payload shipped with the package (sent to and run on the remote).
-SCRIPTS = Path(remote_handler.__file__).parent / "scripts"
 
 if __name__ == "__main__":
     config = ClusterConfig.from_name("dirona")
@@ -25,7 +23,6 @@ if __name__ == "__main__":
         traj_files=["selected_structures.extxyz"],
         cluster_config=config,
         remote_fs=remote_fs,
-        python_script_path=str(SCRIPTS / "dft_singlepoint.py"),
         savepath="/scratch/me/vasp",
         num_parallel=10,
         n_processors=16,

@@ -92,6 +92,32 @@ many shards, one per sub-directory). Crucially, a task describes *what* to run
 -- it does **not** know *how* the job is actually launched. That is the
 executor's job.
 
+The lifecycle above assumes one long-lived process drives the whole run. A
+task can equally be **detached and collected later, from a different
+process** -- the same shape, split across a process boundary:
+
+.. mermaid::
+
+   sequenceDiagram
+       participant P1 as process 1
+       participant FS as remote_fs
+       participant P2 as process 2 (later)
+       P1->>FS: allocate_data()
+       P1->>FS: submit(only_start=True)  -- detach()
+       P1-->>P1: write_manifest()  -- task_manifest.json
+       Note over P1,P2: process 1 exits, job keeps running on the target
+       P2->>FS: TaskHandle.from_file(...).wait()
+       P2->>FS: ArrayScriptTask.from_manifest(...)  -- collect_only, no re-allocation
+       P2->>FS: finish_check() / collect_results()
+
+``ArrayScriptTask.from_manifest`` / ``SingleScriptTask.from_manifest``
+reconstruct the *full* task object -- not just an executor handle -- from the
+manifest written by ``detach``/``write_manifest``: same resolved
+``remote_savepath``, cluster config, and (for arrays) ``num_array_tasks``, so
+``finish_check()`` and ``collect_results()`` behave exactly as they would in
+the original process, without ever calling ``allocate_data()`` again. See
+:doc:`cli` for the lower-level ``TaskHandle``/manifest CLI this builds on.
+
 Executors: the pluggable backend seam
 -------------------------------------
 
@@ -122,8 +148,8 @@ completion sentinel -- no scheduler required. Cluster JSONs without an
 The active-learning loop
 ------------------------
 
-The ``workflows`` layer composes tasks into the active-learning cycle. Three
-roles, each an abstract actor, hand artifacts to the next:
+The ``workflows`` layer composes tasks into the active-learning cycle. At its
+core, three roles hand artifacts to the next:
 
 .. mermaid::
 
@@ -132,23 +158,15 @@ roles, each an abstract actor, hand artifacts to the next:
        Eval -->|"labelled configs (DFT)"| Trainer["ModelTrainer"]
        Trainer -->|"retrained MLFF model"| Sampler
 
-- :class:`~remote_handler.workflows.active_learning_base.Sampler` proposes new
-  candidate configurations.
-- :class:`~remote_handler.workflows.active_learning_base.GroundTruthEvaluator`
-  labels them with ground truth (DFT via VASP/ORCA).
-- :class:`~remote_handler.workflows.active_learning_base.ModelTrainer` retrains
-  the force field on the accumulated data; the new model feeds the next
-  sampler.
-
-Each actor can run on a *different* machine, and each typically does its work by
-constructing and running a ``RemoteTask``. The loop itself is driven by
-:class:`~remote_handler.workflows.active_learning_base.ActiveLearningHandler`,
-which owns the **bookkeeping**: it writes a ``calchome/`` tree (one numbered
-directory per iteration) and an ``AL_progress.json`` cache recording every
-output path. That cache is what makes the loop **resumable** -- a crashed
-run picks up at the actor it left off, rather than recomputing. A
-:class:`~remote_handler.workflows.active_learning_base.Schedule` can vary each
-actor's behaviour from one iteration to the next.
+Each actor can run on a *different* machine, and each typically does its work
+by constructing and running a ``RemoteTask``. In practice the loop usually
+grows a fourth role -- a ``Selector`` that filters a sampler's candidates
+before they are sent for (expensive) ground-truth labelling -- and the
+pipeline is driven by the flexible, stage-based
+:class:`~remote_handler.workflows.staged_active_learning.StagedActiveLearningHandler`,
+which owns the bookkeeping (a resumable ``AL_progress.json`` cache) generically
+over any list of stages. See :doc:`active_learning` for the full picture,
+including the actor interfaces and how stages compose.
 
 Configuration
 -------------
@@ -220,6 +238,7 @@ Where to go next
 ----------------
 
 - :doc:`installation` -- install the host driver and the right extras.
+- :doc:`active_learning` -- the actor interfaces and the staged AL loop.
 - :doc:`cli` -- configure clusters and diagnose your setup.
 - :doc:`quickstart` -- a first end-to-end run.
 - :doc:`api/index` -- the concrete classes behind every concept above.

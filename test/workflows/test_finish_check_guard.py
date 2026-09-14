@@ -1,8 +1,9 @@
-"""Actors raise WorkflowError when their job leaves no is_finished marker.
+"""Actors raise TaskError when their job leaves no is_finished marker.
 
-Each sampler/trainer calls the task's ``finish_check`` between ``submit`` and
+Each sampler/trainer calls the task's ``finish_check`` (via
+``DetachableTaskMixin.wait_if_needed``) between ``submit`` and
 ``collect_results``; a False result (no ``is_finished.info`` written by the
-payload) must abort with a ``WorkflowError`` rather than silently collecting
+payload) must abort with a ``TaskError`` rather than silently collecting
 partial/empty output. The task is mocked so no real cluster is needed.
 """
 
@@ -13,7 +14,7 @@ import pytest
 
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import LocalFileSystem
-from remote_handler.exceptions import WorkflowError
+from remote_handler.exceptions import TaskError
 from remote_handler.workflows.trainers import (
     MaceFinetuningTrainer,
     MaceModelTrainer,
@@ -49,7 +50,7 @@ def test_mace_trainer_raises_on_unfinished(tmp_path):
     )
     t.results_dir = tmp_path
     t.training_task = _failed_task()
-    with pytest.raises(WorkflowError, match="did not finish"):
+    with pytest.raises(TaskError, match="did not finish"):
         t.get_trained_model()
     t.training_task.collect_results.assert_not_called()
 
@@ -65,7 +66,7 @@ def test_mace_finetuning_raises_on_unfinished(tmp_path):
     )
     t.results_dir = tmp_path
     t.training_task = _failed_task()
-    with pytest.raises(WorkflowError, match="did not finish"):
+    with pytest.raises(TaskError, match="did not finish"):
         t.get_trained_model()
     t.training_task.collect_results.assert_not_called()
 
@@ -81,7 +82,7 @@ def test_finish_check_runs_before_collect(tmp_path):
     )
     t.results_dir = tmp_path
     t.training_task = _failed_task()
-    with pytest.raises(WorkflowError):
+    with pytest.raises(TaskError):
         t.get_trained_model()
     # submit happened, finish_check happened, collect did NOT.
     t.training_task.submit.assert_called_once()

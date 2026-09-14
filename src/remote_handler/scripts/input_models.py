@@ -281,6 +281,110 @@ class MaceFinetuningInput(ScriptInput):
 
 
 @dataclass
+class AceTrainingInput(ScriptInput):
+    """Input configuration for ace_training.py script.
+
+    Attributes:
+        database_files: List of paths to database files (will be combined if multiple)
+        train_runner: Path to the pacemaker executable on the remote machine
+        config_file: Path to user's YAML config with fitting hyperparameters
+            (``potential``/``fit``/``backend`` sections -- no ``data``/``seed``
+            needed, those are injected by the driver)
+        model_name: Name tag for the trained model
+        seed: Random seed for database splitting and training
+        validation_fraction: Fraction of data pacemaker splits off as its own
+            internal test set (``data.test_size``; default: 0.1)
+
+    Example:
+        >>> config = AceTrainingInput.from_file(Path("input_train.json"))
+        >>> config.validate()
+    """
+
+    _path_fields: ClassVar[tuple[str, ...]] = ("train_runner", "config_file")
+
+    database_files: list[str]
+    train_runner: Path
+    config_file: Path
+    model_name: str
+    seed: int
+    validation_fraction: float = 0.1
+
+    def validate(self, root: Optional[Path] = None) -> None:
+        """Validate configuration parameters.
+
+        Raises:
+            ScriptInputError: If any parameter is invalid
+        """
+        if not self.database_files:
+            raise ScriptInputError("database_files cannot be empty")
+
+        if not (0 < self.validation_fraction < 1):
+            raise ScriptInputError(
+                f"validation_fraction must be between 0 and 1, got {self.validation_fraction}"
+            )
+
+        if not self.model_name:
+            raise ScriptInputError("model_name cannot be empty")
+
+        if root is not None:
+            for f in self.database_files:
+                _require_path(root, f, "database file")
+            _require_path(root, self.config_file, "config_file")
+
+
+@dataclass
+class GraceTrainingInput(ScriptInput):
+    """Input configuration for grace_training.py script.
+
+    Attributes:
+        database_files: List of paths to database files (will be combined if multiple)
+        train_runner: Path to the gracemaker executable on the remote machine
+        config_file: Path to user's YAML config with fitting hyperparameters
+            (``cutoff``/``potential``/``fit`` sections -- no ``data``/``seed``
+            needed, those are injected by the driver)
+        model_name: Name tag for the trained model
+        seed: Random seed for database splitting and training
+        validation_fraction: Fraction of data gracemaker splits off as its
+            own internal test set (``data.test_size``; default: 0.1)
+
+    Example:
+        >>> config = GraceTrainingInput.from_file(Path("input_train.json"))
+        >>> config.validate()
+    """
+
+    _path_fields: ClassVar[tuple[str, ...]] = ("train_runner", "config_file")
+
+    database_files: list[str]
+    train_runner: Path
+    config_file: Path
+    model_name: str
+    seed: int
+    validation_fraction: float = 0.1
+
+    def validate(self, root: Optional[Path] = None) -> None:
+        """Validate configuration parameters.
+
+        Raises:
+            ScriptInputError: If any parameter is invalid
+        """
+        if not self.database_files:
+            raise ScriptInputError("database_files cannot be empty")
+
+        if not (0 < self.validation_fraction < 1):
+            raise ScriptInputError(
+                f"validation_fraction must be between 0 and 1, got {self.validation_fraction}"
+            )
+
+        if not self.model_name:
+            raise ScriptInputError("model_name cannot be empty")
+
+        if root is not None:
+            for f in self.database_files:
+                _require_path(root, f, "database file")
+            _require_path(root, self.config_file, "config_file")
+
+
+@dataclass
 class DftSinglepointInput(ScriptInput):
     """Input configuration for dft_singlepoint.py script.
 
