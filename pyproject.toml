@@ -64,9 +64,14 @@ neuralil = [
 ]
 mace_jax = [
     "mace-jax @ git+https://github.com/nunglert/mace-jax.git@fixes",
+    # jax 0.11.2 (2026-09-17) removed hijax.HiPrimitive, which every
+    # released flax <= 0.12.9 still imports at module load time; pin
+    # below it until a flax release with the compat shim is out.
+    # https://github.com/google/flax/issues (flax main already fixed)
+    "jax<0.11.2",
 ]
 steinhardt = [
-    "jax>=0.9.0",
+    "jax>=0.9.0,<0.11.2",
 ]
 # ACE fitting tool "pacemaker" (repo "python-ace", package name "pyace" --
 # they differ, and pip requires this name to match the git package's own
