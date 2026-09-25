@@ -900,31 +900,61 @@ class NeuralilILTrainer(DetachableTaskMixin, ModelTrainer):
         self.collect_only = collect_only
         self.reattach_max_wait = reattach_max_wait
         self.config_file = config_file
-
-        # Layer the hyperparameters: defaults < config_file (YAML) <
-        # training_kwargs. deepcopy so the class-level defaults are never
-        # mutated (otherwise overrides would leak across instances).
-        merged = deepcopy(self.default_training_kwargs)
-        if config_file is not None:
-            import yaml
-
-            with open(config_file) as f:
-                merged.update(yaml.safe_load(f) or {})
-        if training_kwargs:
-            merged.update(training_kwargs)
-        self.training_kwargs = merged
+        self.stub = stub
+        # The explicit overrides, kept so a scheduled config_file can be
+        # re-layered underneath them (see apply_schedule).
+        self._training_kwargs_overrides = dict(training_kwargs or {})
+        self.training_kwargs = self._merge_training_kwargs()
 
         self.remote_fs = remote_fs
         self.loop_time = loop_time
         self.remote_savepath = (
             Path(remote_savepath) if remote_savepath else None
         )
-        self.stub = stub
-        self.training_kwargs["stub"] = stub
 
         # The local staging input file is written lazily in update(),
         # under this iteration's training directory -- never in the cwd.
         self.input_file = None
+
+    def _merge_training_kwargs(self) -> dict:
+        """Layer the hyperparameters: defaults < config_file (YAML) <
+        explicit training_kwargs. deepcopy so the class-level defaults are
+        never mutated (otherwise overrides would leak across instances)."""
+        merged = deepcopy(self.default_training_kwargs)
+        if self.config_file is not None:
+            with open(self.config_file) as f:
+                merged.update(yaml.safe_load(f) or {})
+        merged.update(self._training_kwargs_overrides)
+        merged["stub"] = self.stub
+        return merged
+
+    def unknown_schedule_keys(self, kwargs: dict) -> list[str]:
+        """Schedule keys may be attributes (``config_file``,
+        ``training_kwargs``, ...) or single hyperparameters (``n_epochs``)."""
+        return [
+            k
+            for k in kwargs
+            if not hasattr(self, k) and k not in self.training_kwargs
+        ]
+
+    def apply_schedule(self, kwargs: dict) -> None:
+        """Apply scheduled attributes and hyperparameters.
+
+        ``config_file``, ``training_kwargs`` and ``stub`` re-layer the merged
+        hyperparameters (a scheduled ``training_kwargs`` replaces the
+        explicit overrides); single hyperparameter keys then go on top.
+        """
+        relayer = {"config_file", "training_kwargs", "stub"}
+        for key, value in kwargs.items():
+            if key == "training_kwargs":
+                self._training_kwargs_overrides = dict(value or {})
+            elif hasattr(self, key):
+                setattr(self, key, value)
+        if relayer & set(kwargs):
+            self.training_kwargs = self._merge_training_kwargs()
+        for key, value in kwargs.items():
+            if not hasattr(self, key) and key in self.training_kwargs:
+                self.training_kwargs[key] = value
 
     def update(
         self,

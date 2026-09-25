@@ -14,7 +14,7 @@ import ase.io
 import numpy as np
 from ase import Atoms
 
-from remote_handler.exceptions import WorkflowError
+from remote_handler.exceptions import ScheduleKeyWarning, WorkflowError
 
 logger = logging.getLogger(__name__)
 
@@ -440,6 +440,64 @@ class Schedule(ABC):
         pass
 
 
+def validate_schedule_kwargs(actor: object, kwargs: dict) -> None:
+    """Warn about schedule keys that name nothing ``actor`` can take.
+
+    By default a key is known if it names an existing attribute of
+    ``actor`` -- that is what :func:`apply_schedule_kwargs` sets. An actor
+    whose scheduled values live elsewhere (e.g. in a wrapped strategy
+    object) defines ``unknown_schedule_keys(kwargs) -> list[str]`` instead.
+
+    Unknown keys are not an error: they still reach ``update`` as keyword
+    arguments, which is right for an actor that reads them there. But they
+    are also how a misspelt key shows up, so each triggers a
+    :class:`~remote_handler.exceptions.ScheduleKeyWarning` (make it an error
+    with ``warnings.simplefilter("error", ScheduleKeyWarning)``). The
+    handlers call this once, at construction.
+    """
+    hook = getattr(actor, "unknown_schedule_keys", None)
+    if hook is not None:
+        unknown = sorted(hook(kwargs))
+    else:
+        unknown = sorted(k for k in kwargs if not hasattr(actor, k))
+    if unknown:
+        warnings.warn(
+            f"{type(actor).__name__} has no attribute(s) {unknown}; these "
+            "schedule keys are only passed to update() as keyword "
+            "arguments and are ignored unless update() reads them. Check "
+            "for typos, or define 'unknown_schedule_keys' on the actor to "
+            "declare them.",
+            ScheduleKeyWarning,
+            stacklevel=3,
+        )
+
+
+def set_schedule_attributes(actor: object, kwargs: dict) -> None:
+    """Set each schedule value whose key names an existing attribute of
+    ``actor``; leave the other keys to ``update``'s keyword arguments."""
+    for key, value in kwargs.items():
+        if hasattr(actor, key):
+            setattr(actor, key, value)
+
+
+def apply_schedule_kwargs(actor: object, kwargs: dict) -> None:
+    """Apply one iteration's schedule values to ``actor`` before ``update``.
+
+    Defaults to :func:`set_schedule_attributes`. An actor that derives state
+    from a scheduled parameter once (so a plain ``setattr`` would not reach
+    the job) defines an ``apply_schedule(kwargs)`` method, which is called
+    instead.
+
+    The handlers still forward the same values to ``update`` as keyword
+    arguments, so actors that consume them there keep working.
+    """
+    hook = getattr(actor, "apply_schedule", None)
+    if hook is not None:
+        hook(kwargs)
+    else:
+        set_schedule_attributes(actor, kwargs)
+
+
 class ActiveLearningHandler(ABC):
     """Implementation of the core functionality of an active learning loop
     consisting of three actors: A sampler, a ground truth evaluator and a
@@ -613,6 +671,14 @@ class ActiveLearningHandler(ABC):
         self.sampler_schedule = sampler_schedule
         self.evaluator_schedule = evaluator_schedule
         self.trainer_schedule = trainer_schedule
+        # Flag unknown schedule keys now, before anything is submitted.
+        for actor, schedule in (
+            (sampler, sampler_schedule),
+            (evaluator, evaluator_schedule),
+            (trainer, trainer_schedule),
+        ):
+            if schedule is not None:
+                validate_schedule_kwargs(actor, schedule.get_kwargs(0))
         self.combine_sampler_outputs = combine_sampler_outputs
         self.combine_evaluator_outputs = combine_evaluator_outputs
         self.combine_trainer_outputs = combine_trainer_outputs
@@ -884,6 +950,7 @@ class ActiveLearningHandler(ABC):
             if len(self.sampler_in) == 1
             else [self.calchome / p for p in self.sampler_in]
         )
+        apply_schedule_kwargs(self.sampler, kwargs)
         with self._reattach_if_pending(self.sampler):
             self.sampler.update(self.current_iter_dir, input_arg, **kwargs)
             sampled_configs = self.sampler.get_sampled_configs()
@@ -936,6 +1003,7 @@ class ActiveLearningHandler(ABC):
             else [self.calchome / p for p in self.evaluator_in]
         )
 
+        apply_schedule_kwargs(self.evaluator, kwargs)
         with self._reattach_if_pending(self.evaluator):
             self.evaluator.update(self.current_iter_dir, input_arg, **kwargs)
             evaluated_configs = self.evaluator.get_evaluated_configs()
@@ -987,6 +1055,7 @@ class ActiveLearningHandler(ABC):
             if len(self.trainer_in) == 1
             else [self.calchome / p for p in self.trainer_in]
         )
+        apply_schedule_kwargs(self.trainer, kwargs)
         with self._reattach_if_pending(self.trainer):
             self.trainer.update(
                 self.current_iter_dir,

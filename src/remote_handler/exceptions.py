@@ -93,3 +93,15 @@ class ScriptInputError(RemoteHandlerError):
     """
 
     pass
+
+
+class ScheduleKeyWarning(UserWarning):
+    """A schedule key names nothing the actor can take as an attribute.
+
+    The value is then only passed to the actor's ``update`` as a keyword
+    argument -- correct for an actor that reads it there, silently ignored
+    otherwise (e.g. a misspelt key). Turn it into an error with
+    ``warnings.simplefilter("error", ScheduleKeyWarning)``.
+    """
+
+    pass
