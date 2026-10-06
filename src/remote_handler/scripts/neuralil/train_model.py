@@ -867,7 +867,8 @@ class Training:
         log_cosh_parameter_forces (float, optional): Parameter for log-cosh loss for forces. Defaults to 2.000.
         filepath (os.PathLike, optional): Path to save training outputs. Defaults to ".".
         pickle_file_name (os.PathLike, optional): Filename to save model parameters. Defaults to None.
-        high_energy_penalty (float, optional): Threshold for high energy penalty in loss function. Defaults to None.
+        high_energy_penalty (float, optional): Absolute threshold (eV/atom) above which a configuration's loss is down-weighted. Its meaning depends on the system, POTCARs and functional; prefer ``high_energy_penalty_relative``. Defaults to None.
+        high_energy_penalty_relative (float, optional): Threshold relative to the lowest energy per atom in the training set: configurations more than this many eV/atom above it are down-weighted. Mutually exclusive with ``high_energy_penalty``. Defaults to None.
         save_reduced (int, optional): Number of ensemble members to save in a reduced model. Defaults to None.
         optimizer_type (str, optional): Type of optimizer to use ("VeLO" or "OneCycle"). Defaults to "VeLO".
         learning_rate_kwargs (dict, optional): Learning rate parameters for OneCycle optimizer. Defaults to None.
@@ -888,6 +889,7 @@ class Training:
         filepath: os.PathLike = ".",
         pickle_file_name: Optional[os.PathLike] = None,
         high_energy_penalty: Optional[float] = None,
+        high_energy_penalty_relative: Optional[float] = None,
         save_reduced: Optional[int] = None,
         optimizer_type: str = "VeLO",
         learning_rate_kwargs: Optional[dict] = dict(
@@ -904,10 +906,26 @@ class Training:
         self.n_batch = n_batch
         self.n_eval_batch = n_eval_batch
         self.n_epochs = n_epochs
-        self.high_energy_penalty = high_energy_penalty
 
         self.model_setup = model_setup
         self.data_processor = data_processor
+
+        if high_energy_penalty_relative is not None:
+            if high_energy_penalty is not None:
+                raise ValueError(
+                    "Set high_energy_penalty or high_energy_penalty_relative,"
+                    " not both"
+                )
+            high_energy_penalty = (
+                self.min_training_energy_per_atom()
+                + high_energy_penalty_relative
+            )
+            print(
+                f"- High-energy penalty threshold: {high_energy_penalty:.4f}"
+                f" eV/atom (training minimum +"
+                f" {high_energy_penalty_relative} eV/atom)"
+            )
+        self.high_energy_penalty = high_energy_penalty
 
         self.filepath = Path(filepath)
 
@@ -977,8 +995,9 @@ class Training:
                 + (1.0 - energy_weight) * forces_contribution
             )
             if high_energy_penalty is not None:
+                # Per real atom: pred_forces.shape[0] includes padding.
                 loss *= get_high_energy_weight(
-                    obs_energy / pred_forces.shape[0], high_energy_penalty
+                    obs_energy / (types >= 0).sum(), high_energy_penalty
                 )
 
             return loss
@@ -1062,6 +1081,12 @@ class Training:
             self.n_eval_batch,
             self.data_processor.max_neighbors,
         )
+
+    def min_training_energy_per_atom(self) -> float:
+        """Lowest energy per (real, unpadded) atom in the training split."""
+        train = self.data_processor.train
+        n_atoms = (train.types >= 0).sum(axis=1)
+        return float(jnp.min(train.energies / n_atoms))
 
     def debug_nans(self):
         gradient_evaluator = jax.jit(

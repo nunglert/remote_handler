@@ -854,7 +854,12 @@ class NeuralilILTrainer(DetachableTaskMixin, ModelTrainer):
         "r_cut": 4.0,
         "training_fraction": 0.75,
         "supercell_diag": [3, 3, 3],
-        "high_energy_penalty": -5.0,
+        # Absolute eV/atom threshold -- system/POTCAR/functional dependent.
+        # Setting high_energy_penalty_relative (eV/atom above the training
+        # set's minimum) instead drops this default (see
+        # _merge_training_kwargs).
+        "high_energy_penalty": None,
+        "high_energy_penalty_relative": 5.0,
         "n_ensemble": 30,
         "save_reduced": 5,
         "n_batch": 32,
@@ -921,10 +926,19 @@ class NeuralilILTrainer(DetachableTaskMixin, ModelTrainer):
         explicit training_kwargs. deepcopy so the class-level defaults are
         never mutated (otherwise overrides would leak across instances)."""
         merged = deepcopy(self.default_training_kwargs)
+        explicit = {}
         if self.config_file is not None:
             with open(self.config_file) as f:
-                merged.update(yaml.safe_load(f) or {})
-        merged.update(self._training_kwargs_overrides)
+                explicit.update(yaml.safe_load(f) or {})
+        explicit.update(self._training_kwargs_overrides)
+        # A relative high-energy penalty replaces the absolute default; both
+        # set explicitly is rejected by the training script.
+        if (
+            explicit.get("high_energy_penalty_relative") is not None
+            and "high_energy_penalty" not in explicit
+        ):
+            merged["high_energy_penalty"] = None
+        merged.update(explicit)
         merged["stub"] = self.stub
         return merged
 
@@ -955,6 +969,11 @@ class NeuralilILTrainer(DetachableTaskMixin, ModelTrainer):
         for key, value in kwargs.items():
             if not hasattr(self, key) and key in self.training_kwargs:
                 self.training_kwargs[key] = value
+        if (
+            kwargs.get("high_energy_penalty_relative") is not None
+            and "high_energy_penalty" not in kwargs
+        ):
+            self.training_kwargs["high_energy_penalty"] = None
 
     def update(
         self,

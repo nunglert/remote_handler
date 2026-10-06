@@ -69,3 +69,43 @@ def test_no_cross_instance_pollution(tmp_path):
     second = _trainer(tmp_path)
     assert second.training_kwargs["n_epochs"] == 100
     assert NeuralilILTrainer.default_training_kwargs["n_epochs"] == 100
+
+
+def test_absolute_high_energy_penalty_is_default(tmp_path):
+    t = _trainer(tmp_path)
+    assert t.training_kwargs["high_energy_penalty"] == -5.0
+    assert t.training_kwargs["high_energy_penalty_relative"] is None
+
+
+def test_relative_penalty_drops_absolute_default(tmp_path):
+    t = _trainer(
+        tmp_path, training_kwargs={"high_energy_penalty_relative": 3.5}
+    )
+    assert t.training_kwargs["high_energy_penalty_relative"] == 3.5
+    assert t.training_kwargs["high_energy_penalty"] is None
+
+
+def test_relative_penalty_from_config_file(tmp_path):
+    cfg = tmp_path / "nnff.yaml"
+    cfg.write_text(yaml.safe_dump({"high_energy_penalty_relative": 3.0}))
+    t = _trainer(tmp_path, config_file=cfg)
+    assert t.training_kwargs["high_energy_penalty"] is None
+
+
+def test_explicit_absolute_penalty_kept_alongside_relative(tmp_path):
+    # Both explicit: passed through, and the training script rejects it.
+    t = _trainer(
+        tmp_path,
+        training_kwargs={
+            "high_energy_penalty": -4.0,
+            "high_energy_penalty_relative": 3.0,
+        },
+    )
+    assert t.training_kwargs["high_energy_penalty"] == -4.0
+
+
+def test_scheduled_relative_penalty_drops_absolute(tmp_path):
+    t = _trainer(tmp_path)
+    t.apply_schedule({"high_energy_penalty_relative": 2.5})
+    assert t.training_kwargs["high_energy_penalty_relative"] == 2.5
+    assert t.training_kwargs["high_energy_penalty"] is None
