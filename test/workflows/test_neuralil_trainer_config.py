@@ -71,10 +71,10 @@ def test_no_cross_instance_pollution(tmp_path):
     assert NeuralilILTrainer.default_training_kwargs["n_epochs"] == 100
 
 
-def test_absolute_high_energy_penalty_is_default(tmp_path):
+def test_relative_high_energy_penalty_is_default(tmp_path):
     t = _trainer(tmp_path)
-    assert t.training_kwargs["high_energy_penalty"] == -5.0
-    assert t.training_kwargs["high_energy_penalty_relative"] is None
+    assert t.training_kwargs["high_energy_penalty_relative"] == 5.0
+    assert t.training_kwargs["high_energy_penalty"] is None
 
 
 def test_relative_penalty_drops_absolute_default(tmp_path):
