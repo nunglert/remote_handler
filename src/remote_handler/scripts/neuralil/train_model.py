@@ -57,6 +57,7 @@ from neuralil.training import (
     create_log_cosh,
     create_one_cycle_minimizer,
     create_velo_minimizer,
+    reset_one_cycle_minimizer,
 )
 from neuralil.utilities import create_array_shuffler, draw_urandom_int32
 
@@ -1009,6 +1010,9 @@ class Training:
         # Number of training samples
         n_train = self.data_processor.train.positions.shape[0]
 
+        # The one-cycle schedule spans a single epoch (as in NeuralIL's own
+        # examples) and must be reset before each one; VeLO spans the run.
+        self.reset_schedule_each_epoch = optimizer_type.lower() == "onecycle"
         if optimizer_type.lower() == "velo":
             optimizer = create_velo_minimizer(
                 n_train // self.n_batch, self.n_epochs
@@ -1120,6 +1124,10 @@ class Training:
         error_io = open(self.filepath / f"error_{self.instance_code}.txt", "w")
 
         for i_epoch in range(self.n_epochs):
+            if self.reset_schedule_each_epoch:
+                self.optimizer_state = reset_one_cycle_minimizer(
+                    self.optimizer_state
+                )
             # Run a full epoch.
             (self.optimizer_state, model_params) = self.training_epoch(
                 self.optimizer_state, model_params
