@@ -260,3 +260,22 @@ def test_task_does_not_downgrade_enabled_policy(kind, tmp_path):
     _make_task(kind, tmp_path, cfg, fs)
 
     assert fs.connection_policy is explicit
+
+
+def test_constructor_unknown_alias_without_ssh_config_parser():
+    """A provider with no SSH config to consult knows no aliases at all."""
+    import socket
+
+    class _NoConfigProvider(FlakyProvider):
+        def __init__(self, errors):
+            super().__init__(errors)
+            del self.config_parser
+
+    provider = _NoConfigProvider([socket.gaierror("no such host")])
+
+    with pytest.raises(ConfigurationError, match=r"\(none found\)"):
+        file_handler.RemoteFileSystem(
+            "musica",
+            ssh_client_provider=provider,
+            connection_policy=_policy(FakeClock()),
+        )

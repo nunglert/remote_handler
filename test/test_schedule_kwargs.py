@@ -16,6 +16,7 @@ from ase import Atoms
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import LocalFileSystem
 from remote_handler.exceptions import ScheduleKeyWarning, WorkflowError
+from remote_handler.workflows import selectors as selectors_mod
 from remote_handler.workflows import trainers as trainers_mod
 from remote_handler.workflows.active_learning_base import (
     ActiveLearningHandler,
@@ -24,6 +25,7 @@ from remote_handler.workflows.active_learning_base import (
     validate_schedule_kwargs,
 )
 from remote_handler.workflows.evaluators import (
+    AseCalculatorEvaluator,
     EMTEvaluator,
     ORCAEvaluator,
     VASPEvaluator,
@@ -340,6 +342,31 @@ def test_selector_actor_forwards_to_wrapped_selector(tmp_path):
         validate_schedule_kwargs(actor, {"n_confgs": 3})
 
 
+def test_selector_actor_schedule_falls_back_to_actor_attribute():
+    actor = SelectorActor(StrideSelector(n_configs=5))
+    apply_schedule_kwargs(actor, {"output_filename": "picked.extxyz"})
+    assert actor.output_filename == "picked.extxyz"
+    assert not hasattr(actor.selector, "output_filename")
+
+
+def test_remote_selector_accepts_any_key_for_kwargs_selector(monkeypatch):
+    class _KwargsSelector:
+        def __init__(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(
+        selectors_mod, "_KwargsSelector", _KwargsSelector, raising=False
+    )
+    selector = RemoteSelector(
+        selector_type="_KwargsSelector",
+        selector_kwargs={},
+        cluster_config=None,
+        remote_fs=None,
+        stub=True,
+    )
+    assert selector.unknown_schedule_keys({"anything": 1}) == []
+
+
 class _RecordingArrayTask:
     """Stands in for ArrayScriptTask; records what the trainer built."""
 
@@ -508,6 +535,18 @@ def test_evaluator_calc_config_untouched_by_unrelated_key(tmp_path):
     assert ev.calc_config == custom
     apply_schedule_kwargs(ev, {"required_fraction": 0.9})
     assert ev.calc_config == custom
+
+
+def test_base_evaluator_has_no_calc_config_builder(tmp_path):
+    """Only presets declaring ``_calc_config_keys`` implement the builder."""
+    ev = VASPEvaluator(
+        remote_fs=LocalFileSystem(),
+        cluster_config=_cfg(tmp_path),
+        num_parallel=1,
+        stub=True,
+    )
+    with pytest.raises(NotImplementedError):
+        AseCalculatorEvaluator._build_calc_config(ev)
 
 
 def _neuralil(tmp_path, **kw):

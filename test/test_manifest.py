@@ -99,6 +99,22 @@ def test_build_fs_local():
     assert isinstance(m.build_fs(), file_handler.LocalFileSystem)
 
 
+def test_build_fs_remote_carries_cluster_policy(monkeypatch):
+    built = {}
+
+    def _fake_remote_fs(remote_alias, **kwargs):
+        built.update(remote_alias=remote_alias, **kwargs)
+        return "fs"
+
+    monkeypatch.setattr(file_handler, "RemoteFileSystem", _fake_remote_fs)
+    cfg = dict(_direct_config("/x").to_dict(), resilient_connection=True)
+    m = _sample_manifest(cluster_config=cfg)
+
+    assert m.build_fs() == "fs"
+    assert built["remote_alias"] == cfg["remote_machine"]
+    assert built["connection_policy"].enabled
+
+
 class _FakeExecutor:
     def __init__(self):
         self.pid = None
