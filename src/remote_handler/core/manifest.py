@@ -135,11 +135,7 @@ class TaskManifest:
         """Rebuild the filesystem handler this task ran against."""
         if self.fs_type == "local":
             return LocalFileSystem()
-        cfg = self.build_cluster_config()
-        return RemoteFileSystem(
-            remote_alias=cfg.remote_machine,
-            connection_policy=cfg.connection_policy,
-        )
+        return self.build_cluster_config().remote_fs()
 
 
 class TaskHandle:

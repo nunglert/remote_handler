@@ -56,6 +56,23 @@ def finalize_manifest_kwargs(
     return {key: value for key, value in merged.items() if key in sig_params}
 
 
+def _adopt_connection_policy(
+    remote_fs: file_handler.FileSystemHandlerBase,
+    cluster_config: ClusterConfig,
+) -> None:
+    """Give ``remote_fs`` the cluster's connection policy, upgrade-only.
+
+    Lets a filesystem built without a policy still pause-and-retry on auth
+    loss once a resilient cluster's task uses it. Never replaces a policy
+    that is already enabled: a caller's explicit choice wins, and a
+    filesystem shared between tasks isn't flipped back and forth.
+    """
+    current = getattr(remote_fs, "connection_policy", None)
+    if current is None or current.enabled:
+        return
+    remote_fs.connection_policy = cluster_config.connection_policy
+
+
 class RemoteTask(ABC):
     """This serves as an interface for tasks that should be performed on a
     remote machine. Tasks are always meant to be executed via `subprocess`.
@@ -402,6 +419,10 @@ class SingleScriptTask(RemoteTask):
         if remote_savepath is None:
             remote_savepath = cluster_config.savepath
 
+        # Before super().__init__(): its exists()/makedirs() are this task's
+        # first SFTP calls and must already be resilient.
+        _adopt_connection_policy(remote_fs, cluster_config)
+
         # Use the base class to handle savepath creation and logging
         super().__init__(
             logfile=logfile,
@@ -413,11 +434,6 @@ class SingleScriptTask(RemoteTask):
 
         # The directory where the computation will be performed
         self.calcdir = Path(self.savepath)
-
-        # Propagate this cluster's opt-in connection policy to the SFTP layer
-        # so file transfers pause-and-retry on auth loss too (no-op if off).
-        if hasattr(remote_fs, "connection_policy"):
-            remote_fs.connection_policy = cluster_config.connection_policy
 
         self.script_file = script_file
         self.input_file = input_file
@@ -1007,6 +1023,10 @@ class ArrayScriptTask(RemoteTask):
             logger.info("Falling back to savepath from cluster_config")
             remote_savepath = cluster_config.savepath
 
+        # Before super().__init__(): its exists()/makedirs() are this task's
+        # first SFTP calls and must already be resilient.
+        _adopt_connection_policy(remote_fs, cluster_config)
+
         # Need to init base class first, since it handles savepath
         super().__init__(
             logfile=logfile,
@@ -1018,11 +1038,6 @@ class ArrayScriptTask(RemoteTask):
 
         # The directory where the computation will be performed
         self.rootpath = Path(self.savepath)
-
-        # Propagate this cluster's opt-in connection policy to the SFTP layer
-        # so file transfers pause-and-retry on auth loss too (no-op if off).
-        if hasattr(remote_fs, "connection_policy"):
-            remote_fs.connection_policy = cluster_config.connection_policy
 
         # Store the provided arguments
         self.python_script_file = python_script_file

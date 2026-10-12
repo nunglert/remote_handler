@@ -646,6 +646,250 @@ class TestUniformForceSelector:
 
 
 # ---------------------------------------------------------------------------
+# ForceFilterSelector / UniformForceSelector
+# ---------------------------------------------------------------------------
+def _make_atoms_with_forces(forces, index=None, position_offset=0.0):
+    """Create an Atoms object carrying a real per-atom ``forces`` array.
+
+    ``forces`` is ``list[list[float]]``, one ``[fx, fy, fz]`` per atom (atom
+    count is inferred from its length). ``position_offset`` nudges each
+    config's positions apart so configs with different ``index`` aren't
+    value-equal under ASE's ``Atoms.__eq__`` (which compares positions/
+    numbers/cell/pbc, not ``arrays["forces"]`` or ``info``) -- relevant for
+    ``UniformForceSelector``'s ``at not in selected`` membership check.
+    """
+    n_atoms = len(forces)
+    positions = [[i + position_offset, 0, 0] for i in range(n_atoms)]
+    atoms = Atoms("H" * n_atoms, positions=positions)
+    atoms.cell = [20, 20, 20]
+    atoms.pbc = True
+    atoms.arrays["forces"] = np.array(forces, dtype=float)
+    if index is not None:
+        atoms.info["index"] = index
+    return atoms
+
+
+class TestForceFilterSelector:
+    def test_keeps_configs_at_or_below_threshold(self):
+        configs = [
+            _make_atoms_with_forces([[0.5, 0, 0]], index=0, position_offset=0),
+            _make_atoms_with_forces([[2.0, 0, 0]], index=1, position_offset=1),
+            _make_atoms_with_forces([[1.0, 0, 0]], index=2, position_offset=2),
+        ]
+        selector = ForceFilterSelector(force_threshold=1.0)
+        result = selector.select(configs)
+        indices = sorted(at.info["index"] for at in result)
+        assert indices == [0, 2]  # 0.5 and 1.0 pass; 2.0 doesn't
+
+    def test_threshold_is_inclusive(self):
+        configs = [_make_atoms_with_forces([[1.0, 0, 0]], index=0)]
+        selector = ForceFilterSelector(force_threshold=1.0)
+        result = selector.select(configs)
+        assert len(result) == 1
+
+    def test_uses_max_atom_force_not_mean(self):
+        # Per-atom magnitudes [3.0, 0.0, 0.0]: mean is 1.0 (<= threshold),
+        # max is 3.0 (> threshold). A config should be excluded whenever any
+        # single atom's force exceeds the threshold, not just on average.
+        configs = [
+            _make_atoms_with_forces(
+                [[3.0, 0, 0], [0, 0, 0], [0, 0, 0]], index=0
+            )
+        ]
+        selector = ForceFilterSelector(force_threshold=2.0)
+        result = selector.select(configs)
+        assert result == []
+
+    def test_empty_input_returns_empty_list(self):
+        selector = ForceFilterSelector(force_threshold=1.0)
+        assert selector.select([]) == []
+
+    def test_grouped_input_flattens_before_filtering(self):
+        grouped = [
+            [
+                _make_atoms_with_forces(
+                    [[0.5, 0, 0]], index=0, position_offset=0
+                )
+            ],
+            [
+                _make_atoms_with_forces(
+                    [[2.0, 0, 0]], index=1, position_offset=1
+                ),
+                _make_atoms_with_forces(
+                    [[0.2, 0, 0]], index=2, position_offset=2
+                ),
+            ],
+        ]
+        selector = ForceFilterSelector(force_threshold=1.0)
+        result = selector.select(grouped)
+        indices = sorted(at.info["index"] for at in result)
+        assert indices == [0, 2]
+
+    def test_reference_argument_is_ignored(self):
+        configs = [_make_atoms_with_forces([[0.5, 0, 0]], index=0)]
+        ref = [
+            _make_atoms_with_forces([[9.0, 0, 0]], index=99, position_offset=5)
+        ]
+        selector = ForceFilterSelector(force_threshold=1.0)
+        result = selector.select(configs, reference=ref)
+        assert len(result) == 1
+
+
+class TestUniformForceSelector:
+    """Regression note: ``UniformForceSelector`` bins configs by average
+    force using ``bins = np.linspace(avg.min(), avg.max(), n_bins + 1)`` and
+    ``np.digitize(avg, bins) - 1``. Because ``np.digitize`` (default
+    ``right=False``) treats a value equal to the *last* bin edge as falling
+    past it, the single config with the largest average force always maps
+    to bin index ``n_bins`` -- one past the ``range(n_bins)`` the selection
+    loop actually iterates -- so it is silently dropped from every call with
+    at least two distinct force magnitudes. Separately, whenever a bin holds
+    more configs than its quota, ``np.random.choice(bin_configs, ...)`` is
+    called directly on a ``list[Atoms]``; since ``Atoms`` defines
+    ``__len__``/``__getitem__``, NumPy tries to build a 2D array instead of
+    treating the list as 1D objects, and raises
+    ``ValueError: a must be 1-dimensional``. Both are pre-existing bugs in
+    the selector as merged, not something introduced by these tests -- they
+    are captured below as strict xfails (still exercising, and covering,
+    the buggy code paths) rather than silently worked around, so a future
+    fix is picked up automatically (a strict xfail that starts passing
+    fails the suite, flagging the marker for removal).
+    """
+
+    def test_empty_input_returns_empty_list(self):
+        selector = UniformForceSelector(n_configs=5)
+        assert selector.select([]) == []
+
+    def test_zero_n_configs_returns_empty_list(self):
+        configs = [
+            _make_atoms_with_forces(
+                [[float(i), 0, 0]], index=i, position_offset=i
+            )
+            for i in range(5)
+        ]
+        selector = UniformForceSelector(n_configs=0, n_bins=5)
+        assert selector.select(configs) == []
+
+    def test_all_equal_forces_returns_empty_list(self):
+        # Degenerate case: avg.min() == avg.max() collapses every bin edge
+        # to the same value, so np.digitize pushes every config past
+        # range(n_bins) (the same boundary behavior described above) and
+        # none are ever assigned to a bin -- documenting current behavior
+        # for this edge case, not asserting it's the ideal outcome.
+        configs = [
+            _make_atoms_with_forces([[2.0, 0, 0]], index=i, position_offset=i)
+            for i in range(3)
+        ]
+        selector = UniformForceSelector(n_configs=3, n_bins=3)
+        assert selector.select(configs) == []
+
+    def test_selects_across_bins_except_max_which_is_dropped(self):
+        """Documents *current* (buggy) behavior: with avg forces 0/1/2 across
+        3 bins, the max (index 2) is dropped per the digitize boundary bug
+        above, leaving only indices 0 and 1."""
+        configs = [
+            _make_atoms_with_forces(
+                [[float(i), 0, 0]], index=i, position_offset=i
+            )
+            for i in range(3)
+        ]
+        selector = UniformForceSelector(n_configs=3, n_bins=3)
+        result = selector.select(configs)
+        indices = sorted(at.info["index"] for at in result)
+        assert indices == [0, 1]
+
+    def test_grouped_input_flattens_before_binning(self):
+        grouped = [
+            [
+                _make_atoms_with_forces(
+                    [[0.0, 0, 0]], index=0, position_offset=0
+                )
+            ],
+            [
+                _make_atoms_with_forces(
+                    [[1.0, 0, 0]], index=1, position_offset=1
+                ),
+                _make_atoms_with_forces(
+                    [[2.0, 0, 0]], index=2, position_offset=2
+                ),
+            ],
+        ]
+        selector = UniformForceSelector(n_configs=3, n_bins=3)
+        result = selector.select(grouped)
+        indices = {at.info["index"] for at in result}
+        # Configs from both groups are pooled together (index 2, the max,
+        # is dropped per the known bug, not a flattening failure).
+        assert indices == {0, 1}
+
+    def test_reference_argument_is_ignored(self):
+        configs = [
+            _make_atoms_with_forces(
+                [[float(i), 0, 0]], index=i, position_offset=i
+            )
+            for i in range(3)
+        ]
+        ref = [
+            _make_atoms_with_forces([[9.0, 0, 0]], index=99, position_offset=9)
+        ]
+        selector = UniformForceSelector(n_configs=3, n_bins=3)
+        result = selector.select(configs, reference=ref)
+        indices = sorted(at.info["index"] for at in result)
+        assert indices == [0, 1]
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "np.random.choice(bin_configs, ...) is called directly on a "
+            "list[Atoms]; NumPy tries to build a 2D array (Atoms defines "
+            "__len__/__getitem__) and raises "
+            "'ValueError: a must be 1-dimensional' -- see class docstring."
+        ),
+    )
+    def test_random_subsample_within_oversized_bin(self):
+        # bin 0 (avg force 0.0) holds 3 configs against a quota of 1 ->
+        # triggers the np.random.choice(bin_configs, ...) call.
+        configs = [
+            _make_atoms_with_forces([[0.0, 0, 0]], index=i, position_offset=i)
+            for i in range(3)
+        ] + [
+            _make_atoms_with_forces([[5.0, 0, 0]], index=3, position_offset=3),
+            _make_atoms_with_forces(
+                [[10.0, 0, 0]], index=4, position_offset=4
+            ),
+        ]
+        selector = UniformForceSelector(n_configs=2, n_bins=2)
+        result = selector.select(configs)
+        assert len(result) == 2
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "force_n_configs=True's fill-in path also calls "
+            "np.random.choice(remaining_configs, ...) directly on a "
+            "list[Atoms], hitting the same NumPy crash as "
+            "test_random_subsample_within_oversized_bin -- see class "
+            "docstring."
+        ),
+    )
+    def test_force_n_configs_fills_remaining_from_pool(self):
+        # avg forces 0/1/2 across 3 bins -> selected = [idx0, idx1] (idx2
+        # dropped per the digitize bug); force_n_configs=True should then
+        # top up to n_configs=3 from the remaining pool (which still
+        # contains idx2).
+        configs = [
+            _make_atoms_with_forces(
+                [[float(i), 0, 0]], index=i, position_offset=i
+            )
+            for i in range(3)
+        ]
+        selector = UniformForceSelector(
+            n_configs=3, n_bins=3, force_n_configs=True
+        )
+        result = selector.select(configs)
+        assert len(result) == 3
+
+
+# ---------------------------------------------------------------------------
 # QUESTSSelector
 # ---------------------------------------------------------------------------
 def _make_varied_configs(n, rng_seed=42):
