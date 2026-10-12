@@ -49,6 +49,15 @@ completed item's outputs in ``AL_progress.json``. Resuming re-runs only
 the plan items not yet recorded. ``entry_stage``/``exit_stage`` are fixed
 at the first run and persisted; ``num_iterations`` may be increased on a
 later run to extend the loop.
+
+Hooks
+-----
+``on_stage_complete`` callables are side channels outside the data flow
+(e.g. submitting a dashboard render): each is called with a
+:class:`StageCompleted` event once a stage's outputs are recorded. They
+produce nothing the loop consumes, are not recorded in the progress file
+(so a resume does not re-fire them for steps already done), and an
+exception in one is logged and swallowed -- a hook never stops the loop.
 """
 
 import inspect
@@ -59,7 +68,7 @@ import shutil
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import ase.io
 from ase import Atoms
@@ -455,6 +464,29 @@ class Stage:
     extra_inputs: dict[str, InputSource] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class StageCompleted:
+    """Event passed to ``on_stage_complete`` hooks.
+
+    Attributes:
+        stage: Name of the stage that just finished.
+        iteration: Its iteration index.
+        calchome: The loop's working directory.
+        outputs: The stage's recorded outputs for this iteration, as
+            absolute paths (the copies under ``<stage>_output/``).
+        is_last: True for the final step of the loop's plan.
+    """
+
+    stage: str
+    iteration: int
+    calchome: Path
+    outputs: tuple[Path, ...]
+    is_last: bool
+
+
+StageHook = Callable[[StageCompleted], None]
+
+
 def _as_path_list(value: Optional[Path | list[Path]]) -> list[Path]:
     if value is None:
         return []
@@ -478,6 +510,9 @@ class StagedActiveLearningHandler:
         exit_stage: Name of the stage where the final iteration stops
             (defaults to the last stage). Stages after it are skipped on
             the last iteration only.
+        on_stage_complete: Optional hooks, each called with a
+            :class:`StageCompleted` after every stage step whose outputs
+            were recorded (see the module docstring's *Hooks*).
 
     Use :meth:`from_actors` for a drop-in mapping of the original
     ``ActiveLearningHandler`` arguments.
@@ -490,6 +525,7 @@ class StagedActiveLearningHandler:
         num_iterations: int = 5,
         entry_stage: Optional[str] = None,
         exit_stage: Optional[str] = None,
+        on_stage_complete: Optional[list[StageHook]] = None,
     ) -> None:
         if not stages:
             raise WorkflowError("StagedActiveLearningHandler needs >=1 stage.")
@@ -498,6 +534,7 @@ class StagedActiveLearningHandler:
             raise WorkflowError(f"Stage names must be unique, got {names}.")
 
         self.stages = stages
+        self.on_stage_complete = list(on_stage_complete or [])
         self.calchome = Path(calchome)
         os.makedirs(self.calchome, exist_ok=True)
         self.progress_file = self.calchome / PROGRESS_FILENAME
@@ -799,6 +836,30 @@ class StagedActiveLearningHandler:
 
         self.outputs.setdefault(stage.name, {})[iter_idx] = new_rel
         self._save_progress()
+        self._fire_hooks(
+            StageCompleted(
+                stage=stage.name,
+                iteration=iter_idx,
+                calchome=self.calchome,
+                outputs=tuple(self.calchome / r for r in new_rel),
+                is_last=(iter_idx, stage_idx) == self.plan[-1],
+            )
+        )
+
+    def _fire_hooks(self, event: StageCompleted) -> None:
+        """Call every hook; a failing hook is logged, never raised."""
+        for hook in self.on_stage_complete:
+            try:
+                hook(event)
+            except Exception:
+                logger.warning(
+                    "[it %d] on_stage_complete hook %r failed after stage "
+                    "'%s'; continuing the loop.",
+                    event.iteration,
+                    hook,
+                    event.stage,
+                    exc_info=True,
+                )
 
     @staticmethod
     def _copy(src: Path, dest: Path) -> None:
@@ -846,6 +907,7 @@ class StagedActiveLearningHandler:
         evaluator_output_extension: str = "extxyz",
         trainer_output_extension: str = "pkl",
         selector_output_extension: str = "extxyz",
+        on_stage_complete: Optional[list[StageHook]] = None,
     ) -> "StagedActiveLearningHandler":
         """Build a handler from the classic three-actor arguments.
 
@@ -864,6 +926,8 @@ class StagedActiveLearningHandler:
         seeds the reference (e.g. the starting training set) so novelty is
         active from the first iteration; otherwise iteration 0 falls back to
         diversity.
+
+        ``on_stage_complete`` is forwarded to the handler unchanged.
         """
         entry_map = {
             "sampler": "sampler",
@@ -942,4 +1006,5 @@ class StagedActiveLearningHandler:
             num_iterations=num_iterations,
             entry_stage=entry_map[cycle_entry_point],
             exit_stage=entry_map[cycle_exit_point],
+            on_stage_complete=on_stage_complete,
         )
