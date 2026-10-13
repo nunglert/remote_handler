@@ -469,6 +469,55 @@ class UniformForceSelector(ConfigSelector):
         )
         return selected
 
+
+def _msc_fast(
+    descriptors: list[np.ndarray],
+    entropies: np.ndarray,
+    size: int,
+    h: float,
+    batch_size: int,
+) -> list[int]:
+    """Drop-in for ``quests.compression.fps.msc`` with identical selections.
+
+    quests' ``msc`` takes each structure's minimum kernel through a Python
+    loop of boolean masks over *all* environments (O(N_struct * N_env) per
+    greedy step) and copies the whole descriptor array every step to drop
+    the pick, which made selecting from ~85k NS dead points take ~12 h.
+    Here per-structure minima come from one ``np.minimum.reduceat`` over
+    contiguous segments, and picked structures are masked out instead of
+    deleted: O(N_env) per step. Kernels of masked structures keep
+    accumulating, but they are never read again, so the greedy choice (and
+    its first-index tie-breaking) is unchanged.
+    """
+    from quests.entropy import kernel_sum
+
+    n = len(descriptors)
+    size = min(size, n)
+    natoms = np.array([len(d) for d in descriptors])
+    starts = np.concatenate([[0], np.cumsum(natoms)[:-1]])
+    all_x = np.concatenate(descriptors)
+    kernels = np.zeros(len(all_x))
+    ent = np.asarray(entropies, dtype=float)
+    alive = np.ones(n, dtype=bool)
+
+    # Seed with the highest-entropy structure, as quests does.
+    next_i = int(ent.argmax())
+    compressed = [next_i]
+    alive[next_i] = False
+    while len(compressed) < size:
+        kernels += kernel_sum(
+            all_x, descriptors[next_i], h=h, batch_size=batch_size
+        )
+        per_struct = np.minimum.reduceat(kernels, starts)
+        with np.errstate(divide="ignore"):
+            score = -np.log(per_struct) + ent
+        score[~alive] = -np.inf
+        next_i = int(score.argmax())
+        alive[next_i] = False
+        compressed.append(next_i)
+    return compressed
+
+
 class QUESTSSelector(ConfigSelector):
     """Select configurations using QUESTS information entropy.
 
@@ -639,7 +688,17 @@ class QUESTSSelector(ConfigSelector):
         from quests.compression import DatasetCompressor
 
         compressor = DatasetCompressor(flat, bandwidth=h, batch_size=20000)
-        indices = compressor.get_indices(method=self.method, size=n_select)
+        if self.method == "msc":
+            # quests' own msc is quadratic in the pool size; see _msc_fast.
+            indices = _msc_fast(
+                compressor.descriptors(),
+                compressor._entropies,
+                n_select,
+                h=h,
+                batch_size=compressor.batch_size,
+            )
+        else:
+            indices = compressor.get_indices(method=self.method, size=n_select)
 
         selected = [flat[i] for i in indices]
         summary = compressor.get_summary(indices)

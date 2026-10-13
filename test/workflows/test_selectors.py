@@ -21,6 +21,7 @@ from remote_handler.workflows.selectors import (
     UncertaintySelector,
     UniformForceSelector,
     UniformSelector,
+    _msc_fast,
 )
 
 
@@ -822,6 +823,29 @@ class TestQUESTSSelector:
         assert len(selected) == 3
         for s in selected:
             assert "novelty_score" in s
+
+    @pytest.mark.parametrize("size", [1, 5, 20, 40])
+    def test_msc_fast_matches_quests_msc(self, size):
+        """_msc_fast picks the same structures, in the same order, as
+        quests' msc -- including with varying atom counts per structure
+        (segment boundaries) and size >= pool size."""
+        from quests.compression import DatasetCompressor
+
+        configs = _make_varied_configs(30)
+        rng = np.random.default_rng(0)
+        for at in configs:
+            del at[rng.choice(len(at), rng.integers(0, 12), replace=False)]
+        compressor = DatasetCompressor(configs, bandwidth=0.015)
+
+        expected = compressor.get_indices(method="msc", size=size)
+        got = _msc_fast(
+            compressor.descriptors(),
+            compressor._entropies,
+            size,
+            h=compressor.bandwidth,
+            batch_size=compressor.batch_size,
+        )
+        assert [int(i) for i in expected] == got
 
     def test_pca_not_written_when_none(self, tmp_path):
         """No JSON file when pca_output is None."""
