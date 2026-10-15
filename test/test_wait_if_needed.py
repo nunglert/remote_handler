@@ -1,9 +1,10 @@
 """Unit tests for ``DetachableTaskMixin.wait_if_needed`` (no real cluster,
 no real sleeping).
 
-Covers the gap described in ``experiments/remote_handler_reattach_wait_task.md``:
-a reattached (``collect_only=True``) task has no scheduler-based wait to
-lean on, so ``wait_if_needed`` must poll ``finish_check()`` itself; a fresh
+A reattached (``collect_only=True``) task must wait for its job to leave
+the queue -- via the executor ``from_manifest`` re-attached -- before its
+``finish_check()`` is applied once; only an unattached task (old manifest,
+no job id) falls back to polling ``finish_check()`` itself. A fresh
 (non-``collect_only``) task already blocked inside ``submit()``, so a single
 check there is correct and must not turn into a poll loop.
 """
@@ -199,3 +200,127 @@ def test_collect_only_logs_on_each_poll(monkeypatch, caplog):
 
     poll_logs = [r for r in caplog.records if "not finished yet" in r.message]
     assert len(poll_logs) == 2
+
+
+# --------------------------------------------------------------------------
+# collect_only with an attached executor: wait on the queue, then check once.
+# Regression for run25/run31: a reattached VASP array (required_fraction
+# 0.5) was collected as soon as half of its is_finished.info markers
+# existed, while the other half was still running.
+# --------------------------------------------------------------------------
+
+
+class _GraduallyFinishingArray:
+    """A reattached array whose tasks finish one per poll.
+
+    ``executor.is_finished()`` (the queue) only reports done once every
+    task has run; each poll lets one more task write its marker.
+    ``finish_check(required_fraction)`` counts markers like
+    ``RemoteAtomsHandler.finish_check``.
+    """
+
+    def __init__(self, n_tasks, n_failed=0, loop_time=5.0):
+        self.n_tasks = n_tasks
+        self.n_failed = n_failed
+        self.n_ran = 0
+        self.loop_time = loop_time
+        self.executor = MagicMock()
+        self.executor.is_submitted = True
+        self.executor.is_finished.side_effect = self._poll_queue
+        self.fractions_seen = []
+
+    def _poll_queue(self):
+        if self.n_ran >= self.n_tasks:
+            return True
+        self.n_ran += 1
+        return False
+
+    def finish_check(self, required_fraction):
+        markers = max(self.n_ran - self.n_failed, 0)
+        fraction = markers / self.n_tasks
+        self.fractions_seen.append(fraction)
+        return fraction >= required_fraction
+
+
+def test_collect_only_attached_waits_for_queue_not_fraction(monkeypatch):
+    clock = FakeClock()
+    _patch_clock(monkeypatch, clock)
+    actor = _Actor(collect_only=True)
+    task = _GraduallyFinishingArray(n_tasks=10)
+
+    actor.wait_if_needed(task, finish_check=lambda: task.finish_check(0.5))
+
+    # Kept waiting well past the 50% mark, until every task had run ...
+    assert task.n_ran == 10
+    assert len(clock.sleeps) == 10
+    # ... and the fraction check ran exactly once, after the job was done.
+    assert task.fractions_seen == [1.0]
+
+
+def test_collect_only_attached_does_not_return_early_on_max_wait(
+    monkeypatch,
+):
+    """Passing the fraction while the job is still queued is not success:
+    hitting max_wait raises rather than collecting a partial job."""
+    _patch_clock(monkeypatch, FakeClock())
+    actor = _Actor(collect_only=True)
+    task = _GraduallyFinishingArray(n_tasks=10, loop_time=10.0)
+
+    with pytest.raises(TaskError, match="still not finished"):
+        actor.wait_if_needed(
+            task,
+            finish_check=lambda: task.finish_check(0.5),
+            max_wait=65.0,
+        )
+
+    assert task.n_ran < 10
+    assert task.fractions_seen == []
+
+
+def test_collect_only_attached_raises_if_fraction_fails_once_done(
+    monkeypatch,
+):
+    _patch_clock(monkeypatch, FakeClock())
+    actor = _Actor(collect_only=True)
+    task = _GraduallyFinishingArray(n_tasks=10, n_failed=6)
+
+    with pytest.raises(TaskError, match="custom failure text"):
+        actor.wait_if_needed(
+            task,
+            finish_check=lambda: task.finish_check(0.5),
+            error_message="custom failure text",
+        )
+
+    assert task.fractions_seen == [0.4]
+
+
+def test_collect_only_attached_finished_job_checks_without_sleeping(
+    monkeypatch,
+):
+    clock = FakeClock()
+    _patch_clock(monkeypatch, clock)
+    actor = _Actor(collect_only=True)
+    task = _GraduallyFinishingArray(n_tasks=3)
+    task.n_ran = 3  # job already left the queue before the restart
+
+    actor.wait_if_needed(task, finish_check=lambda: task.finish_check(0.5))
+
+    assert clock.sleeps == []
+    assert task.fractions_seen == [1.0]
+
+
+def test_collect_only_unattached_warns_and_falls_back(monkeypatch, caplog):
+    import logging
+
+    _patch_clock(monkeypatch, FakeClock())
+    actor = _Actor(collect_only=True)
+    task = _task(loop_time=5.0)
+    task.executor.is_submitted = False  # e.g. old manifest without job_id
+    task.finish_check.side_effect = [False, True]
+
+    with caplog.at_level(logging.WARNING, logger=tasks_module.__name__):
+        actor.wait_if_needed(task)
+
+    assert task.finish_check.call_count == 2
+    task.executor.is_finished.assert_not_called()
+    assert any("no attached job" in r.message for r in caplog.records)

@@ -248,7 +248,11 @@ class RemoteAtomsHandler(tasks.ArrayScriptTask):
             tag=tag,
             num_array_tasks=manifest.num_array_tasks,
         )
-        return cls(**tasks.finalize_manifest_kwargs(cls, base_kwargs, extra))
+        handler = cls(
+            **tasks.finalize_manifest_kwargs(cls, base_kwargs, extra)
+        )
+        tasks.attach_from_manifest(handler, manifest)
+        return handler
 
     def finish_check(self, required_fraction: float = 0.8) -> bool:
         """Check the fraction of jobs that wrote ``is_finished.info``.

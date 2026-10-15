@@ -498,3 +498,104 @@ def test_detach_can_skip_remote_manifest(tmp_path):
     TaskHandle.from_file(manifest_path).wait_and_collect()
     result = json.loads((tmp_path / "results" / "result.json").read_text())
     assert result["sum"] == 9
+
+
+# --------------------------------------------------------------------------
+# from_manifest re-attaches the executor, so a reattached wait can poll the
+# queue (see DetachableTaskMixin.wait_if_needed).
+# --------------------------------------------------------------------------
+
+
+class _FakeTask:
+    def __init__(self):
+        from unittest.mock import MagicMock
+
+        self.executor = MagicMock()
+
+
+def test_attach_from_manifest_attaches_slurm_job_id():
+    task = _FakeTask()
+    tasks.attach_from_manifest(task, _sample_manifest(job_id="4242"))
+    task.executor.attach.assert_called_once_with("4242")
+
+
+def test_attach_from_manifest_attaches_direct_without_job_id():
+    task = _FakeTask()
+    manifest = _sample_manifest(backend="direct", job_id=None)
+    tasks.attach_from_manifest(task, manifest)
+    task.executor.attach.assert_called_once_with(None)
+
+
+def test_attach_from_manifest_skips_slurm_without_job_id():
+    task = _FakeTask()
+    tasks.attach_from_manifest(task, _sample_manifest(job_id=None))
+    task.executor.attach.assert_not_called()
+
+
+def _detached_direct_array(tmp_path):
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    script = tmp_path / "array.py"
+    script.write_text(ARRAY_SCRIPT)
+    fs = file_handler.LocalFileSystem()
+    inputs = [
+        tasks.DictJSON({"A": 10, "B": i}, "input.json", fs) for i in range(2)
+    ]
+    task = tasks.ArrayScriptTask(
+        local_savepath=tmp_path / "results",
+        cluster_config=_direct_config(remote),
+        remote_fs=fs,
+        python_script_file=script,
+        individual_ressources=[inputs],
+        loop_time=0.2,
+        remote_savepath=str(remote),
+    )
+    return task.detach(), fs
+
+
+def test_array_from_manifest_returns_attached_executor(tmp_path):
+    manifest_path, fs = _detached_direct_array(tmp_path)
+    TaskHandle.from_file(manifest_path).wait()
+
+    resumed = tasks.ArrayScriptTask.from_manifest(manifest_path, remote_fs=fs)
+
+    assert resumed.executor.is_submitted is True
+    assert resumed.executor.is_finished()
+
+
+def test_single_from_manifest_returns_attached_executor(tmp_path):
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    script = tmp_path / "single.py"
+    script.write_text(SINGLE_SCRIPT)
+    input_file = tmp_path / "input.json"
+    input_file.write_text(json.dumps({"A": 1, "B": 2}))
+    fs = file_handler.LocalFileSystem()
+    task = tasks.SingleScriptTask(
+        script_file=script,
+        input_file=input_file,
+        local_savepath=tmp_path / "results",
+        cluster_config=_direct_config(remote),
+        remote_fs=fs,
+        loop_time=0.2,
+        remote_savepath=str(remote / "calc"),
+    )
+    manifest_path = task.detach()
+    TaskHandle.from_file(manifest_path).wait()
+
+    resumed = tasks.SingleScriptTask.from_manifest(manifest_path, remote_fs=fs)
+
+    assert resumed.executor.is_submitted is True
+    assert resumed.executor.is_finished()
+
+
+def test_atoms_handler_from_manifest_returns_attached_executor(tmp_path):
+    from remote_handler.core.atoms_handler import RemoteAtomsHandler
+
+    manifest_path, fs = _detached_direct_array(tmp_path)
+    TaskHandle.from_file(manifest_path).wait()
+
+    resumed = RemoteAtomsHandler.from_manifest(manifest_path, remote_fs=fs)
+
+    assert resumed.executor.is_submitted is True
+    assert resumed.executor.is_finished()
