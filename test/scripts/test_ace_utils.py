@@ -160,8 +160,15 @@ def test_tensorpot_gpu_ld_library_path_finds_lib_dirs(tmp_path):
     assert str(nvidia_dir / "cudnn" / "lib") in dirs
 
 
-def _run_ace_training_capturing_env(tmp_path, backend):
+def _run_ace_training_capturing_env(tmp_path, backend, **run_kwargs):
     """Call run_ace_training with subprocess.run mocked; return its env kwarg."""
+    return _run_ace_training_mocked(tmp_path, backend, **run_kwargs).kwargs[
+        "env"
+    ]
+
+
+def _run_ace_training_mocked(tmp_path, backend, **run_kwargs):
+    """Call run_ace_training with subprocess.run mocked; return its call."""
     config = {"potential": {}, "fit": {}}
     if backend is not None:
         config["backend"] = backend
@@ -187,9 +194,10 @@ def _run_ace_training_capturing_env(tmp_path, backend):
             storage_dir=storage_dir,
             output_path=tmp_path / "models" / "test.yaml",
             train_runner="pacemaker",
+            **run_kwargs,
         )
 
-    return mock_run.call_args.kwargs["env"]
+    return mock_run.call_args
 
 
 def test_run_ace_training_injects_ld_library_path_for_tensorpot(tmp_path):
@@ -213,3 +221,21 @@ def test_run_ace_training_leaves_env_alone_for_default_backend(tmp_path):
     env = _run_ace_training_capturing_env(tmp_path, backend=None)
 
     assert env.get("LD_LIBRARY_PATH") == os.environ.get("LD_LIBRARY_PATH")
+
+
+def test_run_ace_training_passes_initial_potential(tmp_path):
+    initial = tmp_path / "previous.yaml"
+    initial.write_text("species: []\n")
+
+    call = _run_ace_training_mocked(
+        tmp_path, backend=None, initial_potential=initial
+    )
+
+    cmd = call.args[0]
+    assert cmd[cmd.index("-ip") + 1] == str(initial.resolve())
+
+
+def test_run_ace_training_without_initial_potential_has_no_ip(tmp_path):
+    call = _run_ace_training_mocked(tmp_path, backend=None)
+
+    assert "-ip" not in call.args[0]

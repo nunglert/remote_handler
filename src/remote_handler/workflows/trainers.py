@@ -174,6 +174,11 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
         """Extra files staged into the shared resource dir (after config)."""
         return []
 
+    def _extra_individual_input(self, member: int) -> dict:
+        """Extra keys merged into ensemble member ``member``'s own input
+        JSON (on top of the shared input and its seed)."""
+        return {}
+
     def _artifact_name(self) -> str:
         """Per-job filename/dirname, under ``models/``, handed to the next
         sampler. Implemented per tool."""
@@ -257,7 +262,8 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
                 [
                     DictJSON(
                         content=script_input_shared
-                        | {"seed": np.random.randint(1e6)},
+                        | {"seed": np.random.randint(1e6)}
+                        | self._extra_individual_input(i),
                         filename="input_train.json",
                         remote_fs=self.remote_fs,
                     )
@@ -655,13 +661,62 @@ class MaceFinetuningTrainer(_MaceArrayTrainer):
 
 
 class _AceArrayTrainer(_EnsembleArrayTrainer):
-    """Ensemble trainer for ACE potentials, fit with ``pacemaker``."""
+    """Ensemble trainer for ACE potentials, fit with ``pacemaker``.
+
+    Warm start: when :meth:`update` receives ``initial_potentials`` (e.g.
+    the previous iteration's committee, wired via a ``Stage``'s
+    ``extra_inputs``), member ``i`` continues from
+    ``initial_potentials[i % len(initial_potentials)]`` (pacemaker's
+    ``--initial-potential``) instead of fitting from scratch. An empty or
+    missing list fits from scratch.
+    """
 
     _script_name = "ace_training.py"
     _script_subdir = "ace"
     _jobname = "ace_train"
     _tool_label = "ACE"
     _participle = "trained"
+
+    def update(
+        self,
+        calcdir: Path,
+        trainer_input: Optional[Path | list[Path]],
+        initial_potentials: Optional[list[Path]] = None,
+        **kwargs,
+    ) -> None:
+        """See :meth:`_EnsembleArrayTrainer.update`.
+
+        Args:
+            initial_potentials: Potentials to warm-start the members from
+                (see the class docstring). Their file names must be
+                distinct -- they share one staging directory.
+        """
+        self.initial_potentials = [Path(p) for p in initial_potentials or []]
+        names = [p.name for p in self.initial_potentials]
+        if len(set(names)) != len(names):
+            raise ConfigurationError(
+                f"initial_potentials need distinct file names, got {names}"
+            )
+        if self.initial_potentials:
+            logger.info(
+                "Warm-starting %d ACE member(s) from %s",
+                self.num_models,
+                names,
+            )
+        super().update(calcdir, trainer_input, **kwargs)
+
+    def _extra_shared_resources(self) -> list:
+        return [
+            *super()._extra_shared_resources(),
+            *getattr(self, "initial_potentials", []),
+        ]
+
+    def _extra_individual_input(self, member: int) -> dict:
+        initial = getattr(self, "initial_potentials", [])
+        if not initial:
+            return {}
+        source = initial[member % len(initial)]
+        return {"initial_potential": f"{SHARED_RESOURCE_PREFIX}/{source.name}"}
 
     def _resolve_train_runner(self) -> str:
         return _resolve_executable_train_runner(

@@ -171,6 +171,31 @@ class TestMaceTrainingInput:
         assert "cannot be empty" in str(exc_info.value)
 
 
+def test_ace_input_checks_initial_potential_exists(tmp_path):
+    (tmp_path / "config.yaml").write_text("potential: {}")
+    (tmp_path / "db.xyz").write_text("")
+    fields = dict(
+        database_files=["db.xyz"],
+        train_runner="runner",
+        config_file="config.yaml",
+        model_name="m",
+        seed=0,
+        initial_potential="previous.yaml",
+    )
+    config = AceTrainingInput.from_dict(fields)
+    with pytest.raises(ScriptInputError, match="initial_potential"):
+        config.validate(tmp_path)
+
+    (tmp_path / "previous.yaml").write_text("species: []")
+    config.validate(tmp_path)
+    assert (
+        AceTrainingInput.from_dict(
+            {k: v for k, v in fields.items() if k != "initial_potential"}
+        ).initial_potential
+        is None
+    )
+
+
 @pytest.mark.parametrize("input_cls", [AceTrainingInput, GraceTrainingInput])
 class TestAceGraceTrainingInput:
     """Tests for AceTrainingInput/GraceTrainingInput (identical shape)."""

@@ -183,6 +183,7 @@ def run_ace_training(
     train_runner: pathlib.Path,
     validation_fraction: Optional[float] = None,
     logger: Optional[logging.Logger] = None,
+    initial_potential: Optional[pathlib.Path] = None,
     **extra_config,
 ) -> None:
     """Write the final pacemaker YAML config and run the fit.
@@ -201,6 +202,8 @@ def run_ace_training(
         train_runner: Path to the ``pacemaker`` executable.
         validation_fraction: See :func:`merge_ace_config_with_paths`.
         logger: Logger used to write additional output to.
+        initial_potential: Potential to continue fitting from (pacemaker's
+            ``-ip``/``--initial-potential``); ``None`` fits from scratch.
         **extra_config: Passed through to
             :func:`merge_ace_config_with_paths`.
 
@@ -239,6 +242,8 @@ def run_ace_training(
         "-o",
         str(output_path.resolve()),
     ]
+    if initial_potential is not None:
+        cmd += ["-ip", str(pathlib.Path(initial_potential).resolve())]
 
     env = os.environ.copy()
     backend_config = final_config.get("backend") or {}
