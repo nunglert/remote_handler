@@ -107,6 +107,12 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
     per-job artifact name and how a stub one is written
     (:meth:`_artifact_name`/:meth:`_serialize_stub_model`).
 
+    ``keep_best``: train ``num_models`` members but hand on only the
+    ``keep_best`` with the lowest final test loss, best first (so a sampler
+    that runs MD with the first model uses the best one). Members without a
+    readable test loss rank last. Needs the tool's
+    :meth:`_member_test_loss` hook; trainers without one reject the option.
+
     ``_MaceArrayTrainer`` layers the optional torch -> mace-jax conversion
     and MACE's module-import train-runner resolution on top; ``_AceArrayTrainer``
     /``_GraceArrayTrainer`` layer their own tool-specific hooks. All three
@@ -138,8 +144,24 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
         n_processors: int = 1,
         collect_only: bool = False,
         reattach_max_wait: Optional[float] = None,
+        keep_best: Optional[int] = None,
+        num_parallel: Optional[int] = None,
     ):
         super().__init__()
+        if keep_best is not None:
+            if not 1 <= keep_best <= num_models:
+                raise ConfigurationError(
+                    f"keep_best must be in 1..num_models ({num_models}), "
+                    f"got {keep_best}"
+                )
+            if (
+                type(self)._member_test_loss
+                is _EnsembleArrayTrainer._member_test_loss
+            ):
+                raise ConfigurationError(
+                    f"{type(self).__name__} cannot rank its members by test "
+                    "loss, so keep_best is not supported"
+                )
         if training_script is None:
             training_script = (
                 _SCRIPTS_DIR / self._script_subdir / self._script_name
@@ -160,6 +182,11 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
         self.model_name = "Model"  # Default model name
         self.collect_only = collect_only
         self.reattach_max_wait = reattach_max_wait
+        self.keep_best = keep_best
+        # Array tasks running at once; default keeps the old cap of 5.
+        self.num_parallel = (
+            num_parallel if num_parallel is not None else min(num_models, 5)
+        )
 
     # Hooks subclasses override --------------------------------------------
     def _resolve_train_runner(self) -> str:
@@ -192,6 +219,12 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
             "training_loss": np.random.uniform(0.01, 0.05),
             "validation_loss": np.random.uniform(0.02, 0.08),
         }
+
+    def _member_test_loss(self, calcpath: Path) -> Optional[float]:
+        """Final test loss of the member trained in ``calcpath`` (lower is
+        better), or ``None`` if unavailable. Used by ``keep_best``; tools
+        that implement it override this."""
+        return None
 
     def _serialize_stub_model(self, model_dict: dict, path: Path) -> None:
         """Write the stub model payload to ``path``. Default: pickle it.
@@ -285,7 +318,7 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
                 logfile="train.log",
                 remote_savepath=self.remote_savepath,
                 collect_only=False,
-                num_parallel=min(self.num_models, 5),
+                num_parallel=self.num_parallel,
                 loop_time=self.loop_time,
                 jobname=self._jobname,
                 n_processors=self.n_processors,
@@ -332,7 +365,7 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
             logger.info(
                 f"Running in stub mode - creating mock {self._tool_label} models"
             )
-            return self._create_stub_outputs()
+            return self._select_best(self._create_stub_outputs())
 
         self.submit_if_needed(self.training_task)
         self.wait_if_needed(
@@ -371,7 +404,37 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
             )
 
         logger.info(f"Collected {len(model_paths)} {self._participle} models")
-        return model_paths
+        return self._select_best(model_paths)
+
+    def _select_best(self, model_paths: list[Path]) -> list[Path]:
+        """Apply ``keep_best`` (see the class docstring) to collected
+        artifacts at ``calcdirs/<member>/models/<artifact>``."""
+        if self.keep_best is None:
+            return model_paths
+        losses = [
+            self._member_test_loss(Path(p).parent.parent) for p in model_paths
+        ]
+        # Stable sort: unranked members (None) go last, in collection order.
+        ranked = sorted(
+            zip(model_paths, losses),
+            key=lambda pl: (pl[1] is None, pl[1] or 0.0),
+        )
+        for rank, (path, loss) in enumerate(ranked):
+            logger.info(
+                "%s member %s: test loss %s (%s)",
+                self._tool_label,
+                Path(path).parent.parent.name,
+                "n/a" if loss is None else f"{loss:.4g}",
+                "kept" if rank < self.keep_best else "dropped",
+            )
+        if len(ranked) < self.keep_best:
+            logger.warning(
+                "Only %d of %d models collected; keep_best=%d keeps all",
+                len(ranked),
+                self.num_models,
+                self.keep_best,
+            )
+        return [path for path, _ in ranked[: self.keep_best]]
 
 
 class _MaceArrayTrainer(_EnsembleArrayTrainer):
@@ -728,6 +791,18 @@ class _AceArrayTrainer(_EnsembleArrayTrainer):
         # pacemaker's B-basis potential -- a single YAML file.
         return f"{self.model_name}.yaml"
 
+    def _member_test_loss(self, calcpath: Path) -> Optional[float]:
+        # pacemaker's test_metrics.txt: a whitespace table, one row per
+        # logged iteration; the last row is the final state (the potential
+        # pacemaker writes out). None for a member without a test split.
+        try:
+            lines = (Path(calcpath) / "test_metrics.txt").read_text()
+            header, *rows = [ln for ln in lines.splitlines() if ln.strip()]
+            loss = float(rows[-1].split()[header.split().index("loss")])
+        except (OSError, ValueError, IndexError):
+            return None
+        return loss if np.isfinite(loss) else None
+
     def _stub_model_dict(self) -> dict:
         return {
             "model_type": "ACE",
@@ -803,6 +878,13 @@ class AceModelTrainer(_AceArrayTrainer):
         num_models: Number of models to train per generation
         validation_fraction: Fraction of data pacemaker splits off as its own
             internal test set
+        keep_best: If given, hand on only this many of the ``num_models``
+            members: those with the lowest final test loss (pacemaker's
+            ``test_metrics.txt``), best first. Each member's test set is
+            its own random split, so the ranking is a coarse outlier
+            filter, not a precise comparison.
+        num_parallel: Array tasks running at once (default:
+            ``min(num_models, 5)``).
         remote_savepath: Path on remote machine for calculation files
         loop_time: Interval (seconds) to poll for job completion
         stub: If True, creates mock model outputs without training
