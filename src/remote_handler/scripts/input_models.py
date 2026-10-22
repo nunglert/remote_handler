@@ -294,6 +294,8 @@ class AceTrainingInput(ScriptInput):
         seed: Random seed for database splitting and training
         validation_fraction: Fraction of data pacemaker splits off as its own
             internal test set (``data.test_size``; default: 0.1)
+        initial_potential: Optional potential YAML to continue fitting from
+            (pacemaker's ``--potential``); ``None`` fits from scratch.
 
     Example:
         >>> config = AceTrainingInput.from_file(Path("input_train.json"))
@@ -308,6 +310,7 @@ class AceTrainingInput(ScriptInput):
     model_name: str
     seed: int
     validation_fraction: float = 0.1
+    initial_potential: Optional[str] = None
 
     def validate(self, root: Optional[Path] = None) -> None:
         """Validate configuration parameters.
@@ -330,6 +333,10 @@ class AceTrainingInput(ScriptInput):
             for f in self.database_files:
                 _require_path(root, f, "database file")
             _require_path(root, self.config_file, "config_file")
+            if self.initial_potential is not None:
+                _require_path(
+                    root, self.initial_potential, "initial_potential"
+                )
 
 
 @dataclass

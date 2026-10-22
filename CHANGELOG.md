@@ -9,6 +9,35 @@ The version is derived from git tags by `setuptools-scm` (tag `v0.2.0` →
 version `0.2.0`). To cut a release: add a dated section below, merge to `main`,
 then `git tag -a vX.Y.Z`.
 
+## [Unreleased]
+
+### Fixed
+- **Schedule values now reach the actors.** The handlers passed
+  `Schedule.get_kwargs()` to `update(**kwargs)`, but most actors never read
+  those kwargs, so a scheduled `config_file`, `incar_kwargs`, `n_configs`,
+  ... was silently ignored and every iteration used the initial value. Both
+  `StagedActiveLearningHandler` and the legacy `ActiveLearningHandler` now
+  apply each iteration's schedule to the actor before `update()` (as
+  attributes, via the new `apply_schedule_kwargs`) and still forward the
+  values as keyword arguments. Actors that bake a parameter in at
+  construction handle it themselves: the VASP/ORCA/EMT evaluators rebuild
+  `calc_config`, `NeuralilILTrainer` re-merges its hyperparameters (and
+  accepts single hyperparameter keys), `SelectorActor` forwards keys to the
+  wrapped selector, and `RemoteSelector` forwards them to the selector
+  constructor as before.
+- **Misspelt schedule keys are flagged at handler construction.** A key that
+  names no attribute of the actor is still only passed to `update()`, as
+  before, so actors that read schedule values from `update(**kwargs)` keep
+  working unchanged. The handler now also emits a `ScheduleKeyWarning` for
+  each such key, once, before anything is submitted. Turn it into an error
+  with `warnings.simplefilter("error", ScheduleKeyWarning)`. An actor can
+  declare the keys its `update()` reads by defining
+  `unknown_schedule_keys(kwargs)`, which silences the warning (see
+  `docs/source/active_learning.rst`).
+  Downstream `Scheduled*` wrapper classes that copy kwargs onto the actor
+  are no longer needed. They still work, since the values are just set
+  twice.
+
 ## [0.7.0] — 2026-09-12
 
 ### Fixed

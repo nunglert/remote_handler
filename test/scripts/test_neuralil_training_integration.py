@@ -291,7 +291,7 @@ class TestNeuralilTrainingScript:
             assert (out_dir / name).exists(), f"missing stub output {name}"
 
     def test_real_training_writes_model(self, tmp_path):
-        """A minimal real training run (1 epoch, 2-model ensemble, onecycle).
+        """A minimal real training run (2 epochs, 2-model ensemble, onecycle).
 
         Uses the local one-cycle optimizer (not VeLO) so there is no network
         download. Asserts the script completes and writes the reduced model
@@ -309,6 +309,8 @@ class TestNeuralilTrainingScript:
         pickle_file = out_dir / "model_0.pkl"
         inp = _base_input(db, out_dir, pickle_file)
         inp["stub"] = False
+        # Two epochs so the per-epoch one-cycle schedule reset is exercised.
+        inp["n_epochs"] = 2
         input_json = tmp_path / "input_nnff.json"
         input_json.write_text(json.dumps(inp))
 

@@ -36,6 +36,11 @@ run_ace_training(
     output_path=model_path,
     train_runner=input_config.train_runner,
     validation_fraction=input_config.validation_fraction,
+    initial_potential=(
+        calcpath / input_config.initial_potential
+        if input_config.initial_potential
+        else None
+    ),
     logger=logging.getLogger(),
 )
 

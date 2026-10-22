@@ -31,6 +31,9 @@ from ase import Atoms
 #: :func:`_tensorpot_gpu_ld_library_path`.
 _TENSORPOT_EVALUATOR = "tensorpot"
 
+#: ``fit`` keys of pacemaker's ladder scheme (see :func:`run_ace_training`).
+_LADDER_KEYS = ("ladder_step", "ladder_type")
+
 
 def build_ace_dataframe(
     database_path: pathlib.Path, out_file: pathlib.Path
@@ -183,6 +186,7 @@ def run_ace_training(
     train_runner: pathlib.Path,
     validation_fraction: Optional[float] = None,
     logger: Optional[logging.Logger] = None,
+    initial_potential: Optional[pathlib.Path] = None,
     **extra_config,
 ) -> None:
     """Write the final pacemaker YAML config and run the fit.
@@ -201,6 +205,16 @@ def run_ace_training(
         train_runner: Path to the ``pacemaker`` executable.
         validation_fraction: See :func:`merge_ace_config_with_paths`.
         logger: Logger used to write additional output to.
+        initial_potential: Potential to continue fitting from; ``None``
+            fits from scratch. Passed as pacemaker's ``-p``/``--potential``
+            (fit this potential's own basis and coefficients), not
+            ``-ip``/``--initial-potential``: the latter is the *start of a
+            ladder* towards the config's ``potential`` shape, so a
+            full-size initial potential adds no functions, skips the fit
+            and crashes afterwards (``bbasisconfig couldn't be None``).
+            The config's ``fit.ladder_step``/``ladder_type`` are dropped
+            for the same reason -- with ``-p``, a ladder would restart
+            from an empty basis instead of the given coefficients.
         **extra_config: Passed through to
             :func:`merge_ace_config_with_paths`.
 
@@ -224,6 +238,19 @@ def run_ace_training(
         validation_fraction=validation_fraction,
         **extra_config,
     )
+    if initial_potential is not None:
+        fit_config = final_config.get("fit") or {}
+        dropped = [
+            key
+            for key in _LADDER_KEYS
+            if fit_config.pop(key, None) is not None
+        ]
+        if dropped and logger is not None:
+            logger.info(
+                "Warm start: dropping %s from the fit config (ladder "
+                "fitting only applies to fits from scratch)",
+                dropped,
+            )
 
     with open(config_file.resolve(), "w") as f:
         yaml.safe_dump(
@@ -239,6 +266,8 @@ def run_ace_training(
         "-o",
         str(output_path.resolve()),
     ]
+    if initial_potential is not None:
+        cmd += ["-p", str(pathlib.Path(initial_potential).resolve())]
 
     env = os.environ.copy()
     backend_config = final_config.get("backend") or {}

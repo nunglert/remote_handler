@@ -12,11 +12,14 @@ import logging
 import os
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from remote_handler.config import get_config
 from remote_handler.core import resilience
 from remote_handler.exceptions import ConfigurationError
+
+if TYPE_CHECKING:
+    from remote_handler.core.file_handler import RemoteFileSystem
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +118,21 @@ class ClusterConfig:
             max_wait=self.connection_max_wait,
             command_timeout=self.connection_command_timeout,
         )
+
+    def remote_fs(self, **kwargs) -> "RemoteFileSystem":
+        """Open a ``RemoteFileSystem`` to this cluster under its policy.
+
+        Prefer this over constructing ``RemoteFileSystem`` by hand: it can't
+        forget ``connection_policy``, so the initial connect and every SFTP
+        op honour ``resilient_connection``. ``kwargs`` are forwarded; an
+        explicit ``connection_policy`` wins.
+        """
+        # Deferred: file_handler pulls in paramiko/ase, which this
+        # backend-agnostic config module shouldn't need at import time.
+        from remote_handler.core.file_handler import RemoteFileSystem
+
+        kwargs.setdefault("connection_policy", self.connection_policy)
+        return RemoteFileSystem(remote_alias=self.remote_machine, **kwargs)
 
     @classmethod
     def from_file(cls, config_file: str) -> "ClusterConfig":

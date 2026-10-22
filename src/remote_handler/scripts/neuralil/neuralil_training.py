@@ -156,7 +156,10 @@ else:
         log_cosh_parameter_forces=input_args["log_cosh_parameter_forces"],
         filepath=filepath,
         pickle_file_name=pickle_file_name,
-        high_energy_penalty=input_args["high_energy_penalty"],
+        high_energy_penalty=input_args.get("high_energy_penalty"),
+        high_energy_penalty_relative=input_args.get(
+            "high_energy_penalty_relative"
+        ),
         save_reduced=input_args["save_reduced"],
         optimizer_type=input_args["optimizer_type"],
         learning_rate_kwargs=input_args["learning_rate_kwargs"],

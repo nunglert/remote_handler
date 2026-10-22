@@ -26,7 +26,11 @@ from remote_handler.core.ssh_connection import (
     ConfigBasedSSHClientProvider,
     SSHClientProvider,
 )
-from remote_handler.exceptions import FileSystemError, RemoteConnectionError
+from remote_handler.exceptions import (
+    ConfigurationError,
+    FileSystemError,
+    RemoteConnectionError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -484,20 +488,24 @@ class RemoteFileSystem(FileSystemHandlerBase):
             # Test injection: use provided mock provider
             self.ssh_client_provider = ssh_client_provider
 
+        # The initial connect goes through the same policy as every later
+        # SFTP op, so e.g. an already-expired cert pauses here until it is
+        # refreshed instead of crashing at startup (no-op when disabled).
         try:
-            self._connect()
+            resilience.run_resilient(
+                self._initial_connect,
+                self.connection_policy,
+                label=f"SSH connect -> {remote_alias}",
+            )
         except socket.gaierror:
-            available = []
-            if hasattr(self.ssh_client_provider, "config_parser"):
-                available = (
-                    self.ssh_client_provider.config_parser.get_available_hosts()
-                )
-            hosts_str = ", ".join(available) if available else "(none found)"
+            hosts_str = ", ".join(self._available_hosts()) or "(none found)"
             raise RemoteConnectionError(
                 f"Could not resolve hostname for alias '{remote_alias}'. "
                 f"The host may be unreachable or misspelled.\n"
                 f"Available SSH hosts: {hosts_str}"
             )
+        except ConfigurationError:
+            raise
         except Exception as e:
             logger.warning(
                 "Failed connecting SSH client. Try providing the key file "
@@ -527,6 +535,35 @@ class RemoteFileSystem(FileSystemHandlerBase):
 
         self.local_tempdir = self.tag_path(Path(local_temp_path) / "ase_temp")
         os.mkdir(self.local_tempdir)
+
+    def _available_hosts(self) -> list[str]:
+        """Host aliases defined in the SSH config (empty if unknown)."""
+        if hasattr(self.ssh_client_provider, "config_parser"):
+            return self.ssh_client_provider.config_parser.get_available_hosts()
+        return []
+
+    def _initial_connect(self) -> None:
+        """One attempt of the constructor's (possibly retried) connect.
+
+        Goes through ``_reconnect`` so each retry first releases whatever a
+        failed attempt left half-open (e.g. a ProxyJump client). An
+        unresolvable alias that is not in the SSH config is a misspelling,
+        not a network blip, so it raises a non-transient
+        ``ConfigurationError`` instead of pausing forever.
+        """
+        try:
+            self._reconnect()
+        except socket.gaierror as exc:
+            available = self._available_hosts()
+            if self.remote_alias in available:
+                raise  # known alias: DNS hiccup, transient
+            hosts_str = ", ".join(available) or "(none found)"
+            raise ConfigurationError(
+                f"Could not resolve hostname for alias "
+                f"'{self.remote_alias}', and it is not defined in the SSH "
+                f"config. Is it misspelled?\n"
+                f"Available SSH hosts: {hosts_str}"
+            ) from exc
 
     def _connect(self) -> None:
         """
