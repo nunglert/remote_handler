@@ -295,7 +295,7 @@ class AceTrainingInput(ScriptInput):
         validation_fraction: Fraction of data pacemaker splits off as its own
             internal test set (``data.test_size``; default: 0.1)
         initial_potential: Optional potential YAML to continue fitting from
-            (pacemaker's ``--initial-potential``); ``None`` fits from scratch.
+            (pacemaker's ``--potential``); ``None`` fits from scratch.
 
     Example:
         >>> config = AceTrainingInput.from_file(Path("input_train.json"))

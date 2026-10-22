@@ -667,8 +667,9 @@ class _AceArrayTrainer(_EnsembleArrayTrainer):
     the previous iteration's committee, wired via a ``Stage``'s
     ``extra_inputs``), member ``i`` continues from
     ``initial_potentials[i % len(initial_potentials)]`` (pacemaker's
-    ``--initial-potential``) instead of fitting from scratch. An empty or
-    missing list fits from scratch.
+    ``--potential``) instead of fitting from scratch; ladder fitting
+    (``fit.ladder_step``) then applies to from-scratch fits only. An empty
+    or missing list fits from scratch.
     """
 
     _script_name = "ace_training.py"
