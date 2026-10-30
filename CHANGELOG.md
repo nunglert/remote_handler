@@ -9,7 +9,46 @@ The version is derived from git tags by `setuptools-scm` (tag `v0.2.0` →
 version `0.2.0`). To cut a release: add a dated section below, merge to `main`,
 then `git tag -a vX.Y.Z`.
 
-## [Unreleased]
+## [0.8.0] — 2026-10-30
+
+### Added
+- **`on_stage_complete` hooks for `StagedActiveLearningHandler`.** Each hook
+  is called with a `StageCompleted` event (stage, iteration, `calchome`,
+  recorded outputs, `is_last`) once a stage's outputs are recorded. Use it
+  for side work such as rendering a dashboard. Hooks are not recorded in the
+  progress file, so a resume doesn't re-run them for finished steps. An
+  exception in a hook is logged and does not stop the loop.
+- **ACE warm start.** `AceModelTrainer.update()` takes `initial_potentials`
+  (e.g. the previous iteration's committee, wired via a `Stage`'s
+  `extra_inputs`). Member `i` continues fitting from
+  `initial_potentials[i % len(...)]` (pacemaker's `-p`) instead of starting
+  from scratch. Ladder fitting (`fit.ladder_step`/`ladder_type`) is
+  supported for fits from scratch; on a warm start those keys are dropped,
+  since a ladder would restart from an empty basis.
+- **`keep_best` for ensemble trainers.** Train `num_models` members but hand
+  only the `keep_best` with the lowest final test loss to the next stage,
+  best first. Implemented for ACE (pacemaker's `test_metrics.txt`); other
+  trainers reject the option. Ensemble trainers also take `num_parallel`
+  (default unchanged: `min(num_models, 5)`).
+- **Relative high-energy penalty for NeuralIL.** `high_energy_penalty_relative`
+  sets the threshold in eV/atom above the training set's lowest energy per
+  atom, so it no longer depends on the system, POTCARs or functional. It
+  cannot be combined with the absolute `high_energy_penalty`.
+- **`ClusterConfig.remote_fs()`** opens a `RemoteFileSystem` to the cluster
+  with its `connection_policy` already applied.
+
+### Changed
+- **NeuralIL's default high-energy penalty is now relative:**
+  `high_energy_penalty_relative = 5.0` replaces the absolute
+  `high_energy_penalty = -5.0`. Setting `high_energy_penalty` explicitly
+  restores the old behaviour.
+- **The VASP single-point payload rejects unconverged SCF runs.** A run whose
+  last electronic loop stopped at NELM without reaching EDIFF still produced
+  energies and forces, which were used as labels. It now writes
+  `scf_unconverged.info`, no labelled output and no success marker, and
+  exits non-zero, so the evaluator's `required_fraction` decides whether the
+  loop continues. Convergence is read from VASP 6's OUTCAR message, falling
+  back to comparing OSZICAR's step count against NELM for VASP 5.
 
 ### Fixed
 - **Schedule values now reach the actors.** The handlers passed
@@ -37,6 +76,48 @@ then `git tag -a vX.Y.Z`.
   Downstream `Scheduled*` wrapper classes that copy kwargs onto the actor
   are no longer needed. They still work, since the values are just set
   twice.
+- **Reattached array tasks are no longer collected while still running.**
+  `from_manifest()` never re-attached the executor to the recorded job, so
+  `wait_if_needed` polled the success markers instead of the queue. With a
+  fraction-based `finish_check` (e.g. `RemoteAtomsHandler`, 80% by default),
+  a reattached array was collected as soon as enough tasks had finished,
+  with the rest still running. Reattached tasks now wait for the job itself
+  to finish, then apply `finish_check` once. Old SLURM manifests without a
+  `job_id` fall back to polling the markers, with a warning.
+- **Connection policy applies from a task's first SFTP call.** Tasks set the
+  cluster's `connection_policy` on the filesystem only after their first
+  `exists()`/`makedirs()`, and unconditionally replaced it, so a filesystem
+  shared between tasks could lose an enabled policy. It is now set before
+  the first call and only ever upgraded, never switched off.
+- **NeuralIL OneCycle schedule is reset every epoch.** It spans one epoch
+  but was never reset, so after the first epoch the learning rate stayed at
+  the schedule's final value.
+- **NeuralIL high-energy penalty used the padded atom count.** The energy
+  was divided by the padded number of atoms, which pulls the energy per atom
+  of structures smaller than the largest in the set towards zero, so they
+  could be down-weighted as high-energy by mistake. It now counts only real
+  atoms.
+- **Remote commands can no longer hang a submit forever.**
+  `RemoteFileSystem.run_command` waited for the remote exit status with no
+  limit, so a command stalled on an overloaded login node (e.g. the
+  `run_train.py` lookup a MACE trainer does when no
+  `remote_mace_train_runner` is given) blocked the submit indefinitely
+  without logging anything. `run_command` on both filesystems now takes a
+  `timeout` (default `COMMAND_TIMEOUT = 120` s) and raises the new
+  `CommandTimeoutError` (a `RemoteConnectionError`), naming the host and the
+  command, once it expires. The env probes used to locate training runners
+  get a longer limit (`remote_env.PROBE_TIMEOUT = 600` s), since importing
+  torch from a shared filesystem can take minutes. The trainers log the
+  lookup before it starts and say how to skip it.
+- **A failed runner lookup is no longer reported as a missing package.**
+  `resolve_remote_module_file` / `resolve_remote_executable` turned every
+  error, including connection failures, into "not found", so the trainer
+  told the user to install mace/pacemaker in the remote env. Timeouts and
+  connection errors now propagate; only a probe that runs and finds nothing
+  returns "not found". `remote_home` also raises on a timeout instead of
+  silently falling back to the local home directory.
+  Behaviour change: every `run_command` call now has a limit by default, so
+  pass `timeout=None` to keep the old unlimited wait.
 
 ## [0.7.0] — 2026-09-12
 
