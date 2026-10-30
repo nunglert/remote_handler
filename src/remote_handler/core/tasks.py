@@ -56,6 +56,40 @@ def finalize_manifest_kwargs(
     return {key: value for key, value in merged.items() if key in sig_params}
 
 
+def attach_from_manifest(task: "RemoteTask", manifest: TaskManifest) -> None:
+    """Re-bind a ``from_manifest``-reconstructed task to its running job.
+
+    Shared by every ``from_manifest()`` (``ArrayScriptTask``/
+    ``SingleScriptTask`` here, ``RemoteAtomsHandler`` in
+    ``atoms_handler.py``): attaches ``task.executor`` to the manifest's job
+    so ``executor.is_finished()`` can tell whether the job is still running
+    -- which ``DetachableTaskMixin.wait_if_needed`` needs to avoid
+    collecting a reattached array before all its tasks are done. SLURM
+    needs the recorded ``job_id``; ``direct`` needs no handle (it polls a
+    sentinel file). A SLURM manifest without a ``job_id`` is left
+    unattached, and ``wait_if_needed`` falls back to polling markers.
+    """
+    if manifest.job_id is not None or manifest.backend == executors.DIRECT:
+        task.executor.attach(manifest.job_id)
+
+
+def _adopt_connection_policy(
+    remote_fs: file_handler.FileSystemHandlerBase,
+    cluster_config: ClusterConfig,
+) -> None:
+    """Give ``remote_fs`` the cluster's connection policy, upgrade-only.
+
+    Lets a filesystem built without a policy still pause-and-retry on auth
+    loss once a resilient cluster's task uses it. Never replaces a policy
+    that is already enabled: a caller's explicit choice wins, and a
+    filesystem shared between tasks isn't flipped back and forth.
+    """
+    current = getattr(remote_fs, "connection_policy", None)
+    if current is None or current.enabled:
+        return
+    remote_fs.connection_policy = cluster_config.connection_policy
+
+
 class RemoteTask(ABC):
     """This serves as an interface for tasks that should be performed on a
     remote machine. Tasks are always meant to be executed via `subprocess`.
@@ -402,6 +436,10 @@ class SingleScriptTask(RemoteTask):
         if remote_savepath is None:
             remote_savepath = cluster_config.savepath
 
+        # Before super().__init__(): its exists()/makedirs() are this task's
+        # first SFTP calls and must already be resilient.
+        _adopt_connection_policy(remote_fs, cluster_config)
+
         # Use the base class to handle savepath creation and logging
         super().__init__(
             logfile=logfile,
@@ -413,11 +451,6 @@ class SingleScriptTask(RemoteTask):
 
         # The directory where the computation will be performed
         self.calcdir = Path(self.savepath)
-
-        # Propagate this cluster's opt-in connection policy to the SFTP layer
-        # so file transfers pause-and-retry on auth loss too (no-op if off).
-        if hasattr(remote_fs, "connection_policy"):
-            remote_fs.connection_policy = cluster_config.connection_policy
 
         self.script_file = script_file
         self.input_file = input_file
@@ -683,7 +716,9 @@ class SingleScriptTask(RemoteTask):
             n_processors=manifest.n_processors,
             loop_time=manifest.loop_time,
         )
-        return cls(**finalize_manifest_kwargs(cls, base_kwargs, extra))
+        task = cls(**finalize_manifest_kwargs(cls, base_kwargs, extra))
+        attach_from_manifest(task, manifest)
+        return task
 
 
 @dataclass
@@ -1007,6 +1042,10 @@ class ArrayScriptTask(RemoteTask):
             logger.info("Falling back to savepath from cluster_config")
             remote_savepath = cluster_config.savepath
 
+        # Before super().__init__(): its exists()/makedirs() are this task's
+        # first SFTP calls and must already be resilient.
+        _adopt_connection_policy(remote_fs, cluster_config)
+
         # Need to init base class first, since it handles savepath
         super().__init__(
             logfile=logfile,
@@ -1018,11 +1057,6 @@ class ArrayScriptTask(RemoteTask):
 
         # The directory where the computation will be performed
         self.rootpath = Path(self.savepath)
-
-        # Propagate this cluster's opt-in connection policy to the SFTP layer
-        # so file transfers pause-and-retry on auth loss too (no-op if off).
-        if hasattr(remote_fs, "connection_policy"):
-            remote_fs.connection_policy = cluster_config.connection_policy
 
         # Store the provided arguments
         self.python_script_file = python_script_file
@@ -1350,7 +1384,9 @@ class ArrayScriptTask(RemoteTask):
             num_parallel=manifest.num_parallel,
             num_array_tasks=manifest.num_array_tasks,
         )
-        return cls(**finalize_manifest_kwargs(cls, base_kwargs, extra))
+        task = cls(**finalize_manifest_kwargs(cls, base_kwargs, extra))
+        attach_from_manifest(task, manifest)
+        return task
 
     def finish_check(self):
         """Check for the presence of the 'is_finished.info' file in each
@@ -1570,25 +1606,33 @@ class DetachableTaskMixin:
         still running, and this raises immediately rather than polling for
         a marker that will never appear.
 
-        ``collect_only`` (reattached): no scheduler job id is ever
-        re-attached (``*.from_manifest`` doesn't call ``executor.attach()``
-        -- reattachment here is purely file-based), so there is no
-        queue-based wait to lean on. This polls ``finish_check()`` every
-        ``poll_interval`` seconds (default: ``task.loop_time`` if present,
-        else 30.0) until it succeeds or ``max_wait`` seconds have elapsed
-        (``None``, the default, means wait forever -- matching
-        ``ConnectionPolicy``'s convention).
+        ``collect_only`` (reattached): ``*.from_manifest`` re-attaches the
+        executor to the recorded job (see :func:`attach_from_manifest`), so
+        this polls ``task.executor.is_finished()`` -- the queue, not the
+        success markers -- every ``poll_interval`` seconds (default:
+        ``task.loop_time`` if present, else 30.0) until the job is done or
+        ``max_wait`` seconds have elapsed (``None``, the default, means
+        wait forever -- matching ``ConnectionPolicy``'s convention). Only
+        then is ``finish_check()`` applied, once, exactly as on the fresh
+        path. Polling ``finish_check()`` directly would be wrong for a
+        fraction-based check: a reattached array would be collected as
+        soon as ``required_fraction`` of its tasks had finished, with the
+        rest still running.
+
+        If the executor could not be attached (an old SLURM manifest with
+        no ``job_id``), there is no way to ask the queue, so this falls
+        back to polling ``finish_check()`` itself and logs a warning.
 
         Args:
-            error_message: Used verbatim as the exception message for the
-                non-``collect_only`` immediate failure; also the prefix of
+            error_message: Used verbatim as the exception message when
+                ``finish_check()`` fails (on either path); also the prefix of
                 the message raised when ``collect_only`` polling exceeds
                 ``max_wait``. Defaults to a generic message naming the task
                 type.
 
         Raises:
-            TaskError: If the job never finishes within ``max_wait``, or
-                immediately in the non-``collect_only`` case.
+            TaskError: If the job never finishes within ``max_wait``, or if
+                ``finish_check()`` fails once the job is done.
         """
         check = finish_check or task.finish_check
         message = error_message or (
@@ -1600,13 +1644,29 @@ class DetachableTaskMixin:
                 raise TaskError(message)
             return
 
+        executor = getattr(task, "executor", None)
+        # ``is True`` rather than truthiness so a mock task's auto-attribute
+        # doesn't count as an attached executor.
+        attached = getattr(executor, "is_submitted", False) is True
+        if attached:
+            job_done = executor.is_finished
+        else:
+            logger.warning(
+                "Reattached %s has no attached job (no job_id in its "
+                "manifest?); falling back to polling its finish check. A "
+                "fraction-based check may collect it before all of its "
+                "tasks have finished.",
+                type(task).__name__,
+            )
+            job_done = check
+
         interval = (
             poll_interval
             if poll_interval is not None
             else getattr(task, "loop_time", 30.0)
         )
         start = time.monotonic()
-        while not check():
+        while not job_done():
             elapsed = time.monotonic() - start
             if max_wait is not None and elapsed >= max_wait:
                 raise TaskError(
@@ -1621,3 +1681,6 @@ class DetachableTaskMixin:
                 interval,
             )
             time.sleep(interval)
+
+        if attached and not check():
+            raise TaskError(message)

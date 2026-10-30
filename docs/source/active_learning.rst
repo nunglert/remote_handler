@@ -42,8 +42,24 @@ path(s) the next actor consumes.
   feeds the next sampler.
 
 A :class:`~remote_handler.workflows.active_learning_base.Schedule` can vary
-any actor's ``**kwargs`` from one iteration to the next (e.g. ramping a
-sampler's temperature or a selector's ``n_configs``), and the optional
+an actor's parameters from one iteration to the next (e.g. ramping a
+sampler's temperature, a selector's ``n_configs`` or a trainer's
+``config_file``). Before each ``update()`` the handler sets the schedule's
+values as attributes of the actor, and it also passes them to ``update()``
+as keyword arguments. A key that names no attribute of the actor is only
+passed to ``update()``, as before. That is right for an actor that reads it
+there, but it is also what a misspelt key looks like. So the handler emits a
+``ScheduleKeyWarning`` for such keys once, when it is built. Make it an
+error with ``warnings.simplefilter("error", ScheduleKeyWarning)``. An actor
+can change the defaults with two optional methods:
+``unknown_schedule_keys(kwargs)`` returns the keys it does not recognise
+(declare the ones ``update()`` reads to silence the warning), and
+``apply_schedule(kwargs)`` replaces the plain ``setattr``. The shipped
+actors use them where a plain ``setattr`` would not reach the job:
+``SelectorActor`` forwards keys to its wrapped selector, ``RemoteSelector``
+accepts the selector's constructor arguments, the VASP/ORCA/EMT evaluators
+rebuild ``calc_config``, and ``NeuralilILTrainer`` also accepts single
+hyperparameters (``n_epochs``, ...). The optional
 ``pending_manifest`` hook is what lets a stage reattach to an
 already-submitted job instead of resubmitting after the driving process dies
 -- see :doc:`concepts` for that detach/reattach lifecycle.

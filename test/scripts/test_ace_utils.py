@@ -160,8 +160,15 @@ def test_tensorpot_gpu_ld_library_path_finds_lib_dirs(tmp_path):
     assert str(nvidia_dir / "cudnn" / "lib") in dirs
 
 
-def _run_ace_training_capturing_env(tmp_path, backend):
+def _run_ace_training_capturing_env(tmp_path, backend, **run_kwargs):
     """Call run_ace_training with subprocess.run mocked; return its env kwarg."""
+    return _run_ace_training_mocked(tmp_path, backend, **run_kwargs).kwargs[
+        "env"
+    ]
+
+
+def _run_ace_training_mocked(tmp_path, backend, **run_kwargs):
+    """Call run_ace_training with subprocess.run mocked; return its call."""
     config = {"potential": {}, "fit": {}}
     if backend is not None:
         config["backend"] = backend
@@ -187,9 +194,10 @@ def _run_ace_training_capturing_env(tmp_path, backend):
             storage_dir=storage_dir,
             output_path=tmp_path / "models" / "test.yaml",
             train_runner="pacemaker",
+            **run_kwargs,
         )
 
-    return mock_run.call_args.kwargs["env"]
+    return mock_run.call_args
 
 
 def test_run_ace_training_injects_ld_library_path_for_tensorpot(tmp_path):
@@ -213,3 +221,75 @@ def test_run_ace_training_leaves_env_alone_for_default_backend(tmp_path):
     env = _run_ace_training_capturing_env(tmp_path, backend=None)
 
     assert env.get("LD_LIBRARY_PATH") == os.environ.get("LD_LIBRARY_PATH")
+
+
+def test_run_ace_training_passes_initial_potential(tmp_path):
+    initial = tmp_path / "previous.yaml"
+    initial.write_text("species: []\n")
+
+    call = _run_ace_training_mocked(
+        tmp_path, backend=None, initial_potential=initial
+    )
+
+    cmd = call.args[0]
+    # -p (fit this potential), not -ip (start of a ladder): a full-size
+    # -ip potential makes pacemaker skip the fit entirely.
+    assert cmd[cmd.index("-p") + 1] == str(initial.resolve())
+    assert "-ip" not in cmd
+
+
+def test_run_ace_training_without_initial_potential_has_no_p(tmp_path):
+    call = _run_ace_training_mocked(tmp_path, backend=None)
+
+    assert "-p" not in call.args[0]
+    assert "-ip" not in call.args[0]
+
+
+def _merged_fit_config(tmp_path, fit, **run_kwargs):
+    """Run run_ace_training (mocked) with ``fit``; return the written fit."""
+    user_config = tmp_path / "config.yaml"
+    user_config.write_text(yaml.safe_dump({"potential": {}, "fit": fit}))
+    data_file = tmp_path / "train.pckl.gzip"
+    data_file.write_bytes(b"")
+    storage_dir = tmp_path / "storage"
+    storage_dir.mkdir()
+    merged = tmp_path / "merged_config.yaml"
+    with patch(
+        "remote_handler.scripts.ace.ace_utils.subprocess.run"
+    ) as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"", stderr=b""
+        )
+        run_ace_training(
+            config_file=merged,
+            user_config_file=user_config,
+            seed=1,
+            data_file=data_file,
+            storage_dir=storage_dir,
+            output_path=tmp_path / "models" / "test.yaml",
+            train_runner="pacemaker",
+            **run_kwargs,
+        )
+    return yaml.safe_load(merged.read_text())["fit"]
+
+
+LADDER_FIT = {
+    "maxiter": 10,
+    "ladder_step": [100, 0.2],
+    "ladder_type": "power_order",
+}
+
+
+def test_warm_start_drops_ladder_keys(tmp_path):
+    initial = tmp_path / "previous.yaml"
+    initial.write_text("species: []\n")
+
+    fit = _merged_fit_config(tmp_path, LADDER_FIT, initial_potential=initial)
+
+    assert fit == {"maxiter": 10}
+
+
+def test_fit_from_scratch_keeps_ladder_keys(tmp_path):
+    fit = _merged_fit_config(tmp_path, LADDER_FIT)
+
+    assert fit == LADDER_FIT

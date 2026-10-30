@@ -13,7 +13,11 @@ import pytest
 
 from remote_handler.core import remote_env
 from remote_handler.core.file_handler import LocalFileSystem
-from remote_handler.exceptions import ConfigurationError, FileSystemError
+from remote_handler.exceptions import (
+    CommandTimeoutError,
+    ConfigurationError,
+    FileSystemError,
+)
 
 
 @pytest.fixture
@@ -182,3 +186,30 @@ def test_no_activation_no_hardening():
     assert "CONDA_PREFIX" not in remote_env.conda_activation_script(
         "/nonsense/format", "env"
     )
+
+
+class _TimingOutFS:
+    """A filesystem whose every command times out."""
+
+    def run_command(self, command, timeout=None):
+        raise CommandTimeoutError(f"timed out: {command}")
+
+
+@pytest.mark.parametrize(
+    "probe",
+    [
+        lambda fs: remote_env.resolve_remote_module_file(
+            fs, "", "", "mace.cli.run_train"
+        ),
+        lambda fs: remote_env.resolve_remote_executable(
+            fs, "", "", "pacemaker"
+        ),
+        remote_env.remote_home,
+    ],
+    ids=["module", "executable", "home"],
+)
+def test_probe_timeout_propagates(probe):
+    # A stalled probe must surface as a timeout, not as "module not found"
+    # (or, for remote_home, a silent fallback to the local home).
+    with pytest.raises(CommandTimeoutError):
+        probe(_TimingOutFS())

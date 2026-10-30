@@ -45,6 +45,11 @@ def _resolve_mace_train_runner(remote_fs, cluster_config):
     path lives on the remote (the host is dependency-light), so it is probed
     there rather than imported locally.
     """
+    logger.info(
+        "Resolving MACE run_train.py in remote env '%s' "
+        "(pass remote_mace_train_runner to skip)...",
+        getattr(cluster_config, "conda_env", "") or "(ambient)",
+    )
     path = remote_env.resolve_remote_module_file(
         remote_fs,
         getattr(cluster_config, "conda_source", ""),
@@ -77,6 +82,12 @@ def _resolve_executable_train_runner(
         extra_name: This package's optional-dependency extra that installs
             it (e.g. ``"ace"``), named in the error message.
     """
+    logger.info(
+        "Resolving '%s' in remote env '%s' "
+        "(pass the runner path explicitly to skip)...",
+        executable,
+        getattr(cluster_config, "conda_env", "") or "(ambient)",
+    )
     path = remote_env.resolve_remote_executable(
         remote_fs,
         getattr(cluster_config, "conda_source", ""),
@@ -106,6 +117,12 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
     (:meth:`_extra_shared_input`/:meth:`_extra_shared_resources`), the
     per-job artifact name and how a stub one is written
     (:meth:`_artifact_name`/:meth:`_serialize_stub_model`).
+
+    ``keep_best``: train ``num_models`` members but hand on only the
+    ``keep_best`` with the lowest final test loss, best first (so a sampler
+    that runs MD with the first model uses the best one). Members without a
+    readable test loss rank last. Needs the tool's
+    :meth:`_member_test_loss` hook; trainers without one reject the option.
 
     ``_MaceArrayTrainer`` layers the optional torch -> mace-jax conversion
     and MACE's module-import train-runner resolution on top; ``_AceArrayTrainer``
@@ -138,8 +155,24 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
         n_processors: int = 1,
         collect_only: bool = False,
         reattach_max_wait: Optional[float] = None,
+        keep_best: Optional[int] = None,
+        num_parallel: Optional[int] = None,
     ):
         super().__init__()
+        if keep_best is not None:
+            if not 1 <= keep_best <= num_models:
+                raise ConfigurationError(
+                    f"keep_best must be in 1..num_models ({num_models}), "
+                    f"got {keep_best}"
+                )
+            if (
+                type(self)._member_test_loss
+                is _EnsembleArrayTrainer._member_test_loss
+            ):
+                raise ConfigurationError(
+                    f"{type(self).__name__} cannot rank its members by test "
+                    "loss, so keep_best is not supported"
+                )
         if training_script is None:
             training_script = (
                 _SCRIPTS_DIR / self._script_subdir / self._script_name
@@ -160,6 +193,11 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
         self.model_name = "Model"  # Default model name
         self.collect_only = collect_only
         self.reattach_max_wait = reattach_max_wait
+        self.keep_best = keep_best
+        # Array tasks running at once; default keeps the old cap of 5.
+        self.num_parallel = (
+            num_parallel if num_parallel is not None else min(num_models, 5)
+        )
 
     # Hooks subclasses override --------------------------------------------
     def _resolve_train_runner(self) -> str:
@@ -174,6 +212,11 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
         """Extra files staged into the shared resource dir (after config)."""
         return []
 
+    def _extra_individual_input(self, member: int) -> dict:
+        """Extra keys merged into ensemble member ``member``'s own input
+        JSON (on top of the shared input and its seed)."""
+        return {}
+
     def _artifact_name(self) -> str:
         """Per-job filename/dirname, under ``models/``, handed to the next
         sampler. Implemented per tool."""
@@ -187,6 +230,12 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
             "training_loss": np.random.uniform(0.01, 0.05),
             "validation_loss": np.random.uniform(0.02, 0.08),
         }
+
+    def _member_test_loss(self, calcpath: Path) -> Optional[float]:
+        """Final test loss of the member trained in ``calcpath`` (lower is
+        better), or ``None`` if unavailable. Used by ``keep_best``; tools
+        that implement it override this."""
+        return None
 
     def _serialize_stub_model(self, model_dict: dict, path: Path) -> None:
         """Write the stub model payload to ``path``. Default: pickle it.
@@ -257,7 +306,8 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
                 [
                     DictJSON(
                         content=script_input_shared
-                        | {"seed": np.random.randint(1e6)},
+                        | {"seed": np.random.randint(1e6)}
+                        | self._extra_individual_input(i),
                         filename="input_train.json",
                         remote_fs=self.remote_fs,
                     )
@@ -279,7 +329,7 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
                 logfile="train.log",
                 remote_savepath=self.remote_savepath,
                 collect_only=False,
-                num_parallel=min(self.num_models, 5),
+                num_parallel=self.num_parallel,
                 loop_time=self.loop_time,
                 jobname=self._jobname,
                 n_processors=self.n_processors,
@@ -326,7 +376,7 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
             logger.info(
                 f"Running in stub mode - creating mock {self._tool_label} models"
             )
-            return self._create_stub_outputs()
+            return self._select_best(self._create_stub_outputs())
 
         self.submit_if_needed(self.training_task)
         self.wait_if_needed(
@@ -365,7 +415,37 @@ class _EnsembleArrayTrainer(DetachableTaskMixin, ModelTrainer):
             )
 
         logger.info(f"Collected {len(model_paths)} {self._participle} models")
-        return model_paths
+        return self._select_best(model_paths)
+
+    def _select_best(self, model_paths: list[Path]) -> list[Path]:
+        """Apply ``keep_best`` (see the class docstring) to collected
+        artifacts at ``calcdirs/<member>/models/<artifact>``."""
+        if self.keep_best is None:
+            return model_paths
+        losses = [
+            self._member_test_loss(Path(p).parent.parent) for p in model_paths
+        ]
+        # Stable sort: unranked members (None) go last, in collection order.
+        ranked = sorted(
+            zip(model_paths, losses),
+            key=lambda pl: (pl[1] is None, pl[1] or 0.0),
+        )
+        for rank, (path, loss) in enumerate(ranked):
+            logger.info(
+                "%s member %s: test loss %s (%s)",
+                self._tool_label,
+                Path(path).parent.parent.name,
+                "n/a" if loss is None else f"{loss:.4g}",
+                "kept" if rank < self.keep_best else "dropped",
+            )
+        if len(ranked) < self.keep_best:
+            logger.warning(
+                "Only %d of %d models collected; keep_best=%d keeps all",
+                len(ranked),
+                self.num_models,
+                self.keep_best,
+            )
+        return [path for path, _ in ranked[: self.keep_best]]
 
 
 class _MaceArrayTrainer(_EnsembleArrayTrainer):
@@ -655,13 +735,63 @@ class MaceFinetuningTrainer(_MaceArrayTrainer):
 
 
 class _AceArrayTrainer(_EnsembleArrayTrainer):
-    """Ensemble trainer for ACE potentials, fit with ``pacemaker``."""
+    """Ensemble trainer for ACE potentials, fit with ``pacemaker``.
+
+    Warm start: when :meth:`update` receives ``initial_potentials`` (e.g.
+    the previous iteration's committee, wired via a ``Stage``'s
+    ``extra_inputs``), member ``i`` continues from
+    ``initial_potentials[i % len(initial_potentials)]`` (pacemaker's
+    ``--potential``) instead of fitting from scratch; ladder fitting
+    (``fit.ladder_step``) then applies to from-scratch fits only. An empty
+    or missing list fits from scratch.
+    """
 
     _script_name = "ace_training.py"
     _script_subdir = "ace"
     _jobname = "ace_train"
     _tool_label = "ACE"
     _participle = "trained"
+
+    def update(
+        self,
+        calcdir: Path,
+        trainer_input: Optional[Path | list[Path]],
+        initial_potentials: Optional[list[Path]] = None,
+        **kwargs,
+    ) -> None:
+        """See :meth:`_EnsembleArrayTrainer.update`.
+
+        Args:
+            initial_potentials: Potentials to warm-start the members from
+                (see the class docstring). Their file names must be
+                distinct -- they share one staging directory.
+        """
+        self.initial_potentials = [Path(p) for p in initial_potentials or []]
+        names = [p.name for p in self.initial_potentials]
+        if len(set(names)) != len(names):
+            raise ConfigurationError(
+                f"initial_potentials need distinct file names, got {names}"
+            )
+        if self.initial_potentials:
+            logger.info(
+                "Warm-starting %d ACE member(s) from %s",
+                self.num_models,
+                names,
+            )
+        super().update(calcdir, trainer_input, **kwargs)
+
+    def _extra_shared_resources(self) -> list:
+        return [
+            *super()._extra_shared_resources(),
+            *getattr(self, "initial_potentials", []),
+        ]
+
+    def _extra_individual_input(self, member: int) -> dict:
+        initial = getattr(self, "initial_potentials", [])
+        if not initial:
+            return {}
+        source = initial[member % len(initial)]
+        return {"initial_potential": f"{SHARED_RESOURCE_PREFIX}/{source.name}"}
 
     def _resolve_train_runner(self) -> str:
         return _resolve_executable_train_runner(
@@ -671,6 +801,18 @@ class _AceArrayTrainer(_EnsembleArrayTrainer):
     def _artifact_name(self) -> str:
         # pacemaker's B-basis potential -- a single YAML file.
         return f"{self.model_name}.yaml"
+
+    def _member_test_loss(self, calcpath: Path) -> Optional[float]:
+        # pacemaker's test_metrics.txt: a whitespace table, one row per
+        # logged iteration; the last row is the final state (the potential
+        # pacemaker writes out). None for a member without a test split.
+        try:
+            lines = (Path(calcpath) / "test_metrics.txt").read_text()
+            header, *rows = [ln for ln in lines.splitlines() if ln.strip()]
+            loss = float(rows[-1].split()[header.split().index("loss")])
+        except (OSError, ValueError, IndexError):
+            return None
+        return loss if np.isfinite(loss) else None
 
     def _stub_model_dict(self) -> dict:
         return {
@@ -747,6 +889,13 @@ class AceModelTrainer(_AceArrayTrainer):
         num_models: Number of models to train per generation
         validation_fraction: Fraction of data pacemaker splits off as its own
             internal test set
+        keep_best: If given, hand on only this many of the ``num_models``
+            members: those with the lowest final test loss (pacemaker's
+            ``test_metrics.txt``), best first. Each member's test set is
+            its own random split, so the ranking is a coarse outlier
+            filter, not a precise comparison.
+        num_parallel: Array tasks running at once (default:
+            ``min(num_models, 5)``).
         remote_savepath: Path on remote machine for calculation files
         loop_time: Interval (seconds) to poll for job completion
         stub: If True, creates mock model outputs without training
@@ -854,7 +1003,12 @@ class NeuralilILTrainer(DetachableTaskMixin, ModelTrainer):
         "r_cut": 4.0,
         "training_fraction": 0.75,
         "supercell_diag": [3, 3, 3],
-        "high_energy_penalty": -5.0,
+        # Absolute eV/atom threshold -- system/POTCAR/functional dependent.
+        # Setting high_energy_penalty_relative (eV/atom above the training
+        # set's minimum) instead drops this default (see
+        # _merge_training_kwargs).
+        "high_energy_penalty": None,
+        "high_energy_penalty_relative": 5.0,
         "n_ensemble": 30,
         "save_reduced": 5,
         "n_batch": 32,
@@ -900,31 +1054,75 @@ class NeuralilILTrainer(DetachableTaskMixin, ModelTrainer):
         self.collect_only = collect_only
         self.reattach_max_wait = reattach_max_wait
         self.config_file = config_file
-
-        # Layer the hyperparameters: defaults < config_file (YAML) <
-        # training_kwargs. deepcopy so the class-level defaults are never
-        # mutated (otherwise overrides would leak across instances).
-        merged = deepcopy(self.default_training_kwargs)
-        if config_file is not None:
-            import yaml
-
-            with open(config_file) as f:
-                merged.update(yaml.safe_load(f) or {})
-        if training_kwargs:
-            merged.update(training_kwargs)
-        self.training_kwargs = merged
+        self.stub = stub
+        # The explicit overrides, kept so a scheduled config_file can be
+        # re-layered underneath them (see apply_schedule).
+        self._training_kwargs_overrides = dict(training_kwargs or {})
+        self.training_kwargs = self._merge_training_kwargs()
 
         self.remote_fs = remote_fs
         self.loop_time = loop_time
         self.remote_savepath = (
             Path(remote_savepath) if remote_savepath else None
         )
-        self.stub = stub
-        self.training_kwargs["stub"] = stub
 
         # The local staging input file is written lazily in update(),
         # under this iteration's training directory -- never in the cwd.
         self.input_file = None
+
+    def _merge_training_kwargs(self) -> dict:
+        """Layer the hyperparameters: defaults < config_file (YAML) <
+        explicit training_kwargs. deepcopy so the class-level defaults are
+        never mutated (otherwise overrides would leak across instances)."""
+        merged = deepcopy(self.default_training_kwargs)
+        explicit = {}
+        if self.config_file is not None:
+            with open(self.config_file) as f:
+                explicit.update(yaml.safe_load(f) or {})
+        explicit.update(self._training_kwargs_overrides)
+        # A relative high-energy penalty replaces the absolute default; both
+        # set explicitly is rejected by the training script.
+        if (
+            explicit.get("high_energy_penalty_relative") is not None
+            and "high_energy_penalty" not in explicit
+        ):
+            merged["high_energy_penalty"] = None
+        merged.update(explicit)
+        merged["stub"] = self.stub
+        return merged
+
+    def unknown_schedule_keys(self, kwargs: dict) -> list[str]:
+        """Schedule keys may be attributes (``config_file``,
+        ``training_kwargs``, ...) or single hyperparameters (``n_epochs``)."""
+        return [
+            k
+            for k in kwargs
+            if not hasattr(self, k) and k not in self.training_kwargs
+        ]
+
+    def apply_schedule(self, kwargs: dict) -> None:
+        """Apply scheduled attributes and hyperparameters.
+
+        ``config_file``, ``training_kwargs`` and ``stub`` re-layer the merged
+        hyperparameters (a scheduled ``training_kwargs`` replaces the
+        explicit overrides); single hyperparameter keys then go on top.
+        """
+        relayer = {"config_file", "training_kwargs", "stub"}
+        for key, value in kwargs.items():
+            if key == "training_kwargs":
+                self._training_kwargs_overrides = dict(value or {})
+            elif hasattr(self, key):
+                setattr(self, key, value)
+        if relayer & set(kwargs):
+            self.training_kwargs = self._merge_training_kwargs()
+        for key, value in kwargs.items():
+            if not hasattr(self, key) and key in self.training_kwargs:
+                self.training_kwargs[key] = value
+        if (
+            kwargs.get("high_energy_penalty_relative") is not None
+            and "high_energy_penalty" not in kwargs
+        ):
+            self.training_kwargs["high_energy_penalty"] = None
 
     def update(
         self,

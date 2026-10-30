@@ -50,8 +50,10 @@ test:
     # ace (pacemaker) builds C++ extensions via CMake -- not part of the base
     # image, unlike the compilers used for the other extras' source builds.
     - apt-get update && apt-get install -y --no-install-recommends cmake
+    # CPU-only torch first: CI has no GPU
+    - pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
     # Non-editable install -> exercises the real build + packaging pipeline.
-    - pip install ".[all]"
+    - pip install --no-cache-dir ".[all]"
     - python -c "import remote_handler; print('install OK:', remote_handler.__file__)"
     # Best-effort: stand up a localhost sshd so the `sshlive` tier does a real
     # SSH/SFTP round-trip in CI. This needs in-container root (the Docker

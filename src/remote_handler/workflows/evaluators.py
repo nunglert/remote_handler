@@ -24,7 +24,7 @@ from remote_handler.core.file_handler import FileSystemHandlerBase
 from remote_handler.core.tasks import DetachableTaskMixin
 from remote_handler.core.utils import grep
 
-from .active_learning_base import GroundTruthEvaluator
+from .active_learning_base import GroundTruthEvaluator, set_schedule_attributes
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,9 @@ class AseCalculatorEvaluator(DetachableTaskMixin, GroundTruthEvaluator):
     # generic base and pure-ASE presets (EMT) inject nothing.
     _environment_key: Optional[str] = None
     _iteration_subdir = "dft"  # calcdir/dft -- see DetachableTaskMixin
+    # Attributes a preset folds into ``calc_config`` (see
+    # ``_build_calc_config``); scheduling one rebuilds ``calc_config``.
+    _calc_config_keys: tuple[str, ...] = ()
 
     def __init__(
         self,
@@ -116,6 +119,21 @@ class AseCalculatorEvaluator(DetachableTaskMixin, GroundTruthEvaluator):
         self.collect_only = collect_only
         self.reattach_max_wait = reattach_max_wait
         self.handler = None
+
+    def _build_calc_config(self) -> dict:
+        """Assemble ``calc_config`` from the preset's attributes.
+
+        Only presets that declare ``_calc_config_keys`` implement it.
+        """
+        raise NotImplementedError
+
+    def apply_schedule(self, kwargs: dict) -> None:
+        """Set scheduled values as attributes; rebuild ``calc_config`` when
+        one of them is baked into it (e.g. VASP's ``incar_kwargs``), so the
+        new value reaches the job."""
+        set_schedule_attributes(self, kwargs)
+        if any(key in self._calc_config_keys for key in kwargs):
+            self.calc_config = self._build_calc_config()
 
     def update(
         self,
@@ -310,6 +328,7 @@ class VASPEvaluator(AseCalculatorEvaluator):
     """
 
     _environment_key = "vasp"
+    _calc_config_keys = ("incar_kwargs", "launcher", "n_processors")
 
     def __init__(
         self,
@@ -338,16 +357,13 @@ class VASPEvaluator(AseCalculatorEvaluator):
             incar_kwargs, incar_config_file
         )
         self.launcher = launcher
-        calc_config = {
-            "INCAR_kwargs": self.incar_kwargs,
-            "launch_command": f"{launcher} {n_processors} vasp_std",
-        }
+        self.n_processors = n_processors
         super().__init__(
             singlepoint_script=singlepoint_script,
             remote_fs=remote_fs,
             cluster_config=cluster_config,
             num_parallel=num_parallel,
-            calc_config=calc_config,
+            calc_config=self._build_calc_config(),
             remote_savepath=remote_savepath,
             loop_time=loop_time,
             required_fraction=required_fraction,
@@ -358,6 +374,14 @@ class VASPEvaluator(AseCalculatorEvaluator):
             collect_only=collect_only,
             reattach_max_wait=reattach_max_wait,
         )
+
+    def _build_calc_config(self) -> dict:
+        return {
+            "INCAR_kwargs": self.incar_kwargs,
+            "launch_command": (
+                f"{self.launcher} {self.n_processors} vasp_std"
+            ),
+        }
 
     @property
     def vasp_handler(self):
@@ -395,6 +419,7 @@ class ORCAEvaluator(AseCalculatorEvaluator):
     """
 
     _environment_key = "orca"
+    _calc_config_keys = ("orcasimpleinput", "orca_binary", "n_processors")
 
     def __init__(
         self,
@@ -417,17 +442,14 @@ class ORCAEvaluator(AseCalculatorEvaluator):
         if singlepoint_script is None:
             singlepoint_script = str(_SCRIPTS_DIR / "orca_singlepoint.py")
         self.orcasimpleinput = orcasimpleinput
-        calc_config = {
-            "orcasimpleinput": orcasimpleinput,
-            "orcablocks": f"%pal nprocs {n_processors} end",
-            "orca_binary": orca_binary,
-        }
+        self.orca_binary = orca_binary
+        self.n_processors = n_processors
         super().__init__(
             singlepoint_script=singlepoint_script,
             remote_fs=remote_fs,
             cluster_config=cluster_config,
             num_parallel=num_parallel,
-            calc_config=calc_config,
+            calc_config=self._build_calc_config(),
             remote_savepath=remote_savepath,
             loop_time=loop_time,
             required_fraction=required_fraction,
@@ -438,6 +460,13 @@ class ORCAEvaluator(AseCalculatorEvaluator):
             collect_only=collect_only,
             reattach_max_wait=reattach_max_wait,
         )
+
+    def _build_calc_config(self) -> dict:
+        return {
+            "orcasimpleinput": self.orcasimpleinput,
+            "orcablocks": f"%pal nprocs {self.n_processors} end",
+            "orca_binary": self.orca_binary,
+        }
 
     @property
     def orca_handler(self):
@@ -475,6 +504,8 @@ class EMTEvaluator(AseCalculatorEvaluator):
             up. ``None`` (default) waits forever.
     """
 
+    _calc_config_keys = ("calculator_kwargs",)
+
     def __init__(
         self,
         remote_fs: FileSystemHandlerBase,
@@ -494,16 +525,13 @@ class EMTEvaluator(AseCalculatorEvaluator):
     ):
         if singlepoint_script is None:
             singlepoint_script = str(_SCRIPTS_DIR / "ase_singlepoint.py")
-        calc_config = {
-            "calculator": "emt",
-            "calculator_kwargs": calculator_kwargs or {},
-        }
+        self.calculator_kwargs = calculator_kwargs or {}
         super().__init__(
             singlepoint_script=singlepoint_script,
             remote_fs=remote_fs,
             cluster_config=cluster_config,
             num_parallel=num_parallel,
-            calc_config=calc_config,
+            calc_config=self._build_calc_config(),
             remote_savepath=remote_savepath,
             loop_time=loop_time,
             required_fraction=required_fraction,
@@ -514,3 +542,9 @@ class EMTEvaluator(AseCalculatorEvaluator):
             collect_only=collect_only,
             reattach_max_wait=reattach_max_wait,
         )
+
+    def _build_calc_config(self) -> dict:
+        return {
+            "calculator": "emt",
+            "calculator_kwargs": self.calculator_kwargs,
+        }

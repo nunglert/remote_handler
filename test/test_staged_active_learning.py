@@ -14,6 +14,7 @@ from remote_handler.workflows.staged_active_learning import (
     InputSource,
     SelectorActor,
     Stage,
+    StageCompleted,
     StagedActiveLearningHandler,
     resolve_actor_output,
 )
@@ -713,3 +714,84 @@ def test_resolve_actor_output_missing_getter_raises(tmp_path):
 
     with pytest.raises(WorkflowError, match="get_output"):
         resolve_actor_output(_NoGetter())
+
+
+def test_stage_hooks_fire_after_each_recorded_step(tmp_path):
+    calchome = tmp_path / "calc"
+    stages, _ = _make_stages(tmp_path)
+    events: list[StageCompleted] = []
+
+    StagedActiveLearningHandler(
+        stages,
+        calchome=calchome,
+        num_iterations=2,
+        exit_stage="sampler",
+        on_stage_complete=[events.append],
+    ).run()
+
+    assert [(e.stage, e.iteration) for e in events] == [
+        ("sampler", 0),
+        ("evaluator", 0),
+        ("trainer", 0),
+        ("sampler", 1),
+    ]
+    assert [e.is_last for e in events] == [False, False, False, True]
+    # Outputs are the recorded copies, already on disk when the hook runs.
+    for e in events:
+        assert e.calchome == calchome
+        assert e.outputs and all(p.exists() for p in e.outputs)
+        assert all(p.parent.name == f"{e.stage}_output" for p in e.outputs)
+
+
+def test_failing_hook_does_not_stop_the_loop(tmp_path):
+    calchome = tmp_path / "calc"
+    stages, (sampler, evaluator, trainer) = _make_stages(tmp_path)
+    seen: list[str] = []
+
+    def boom(event):
+        raise RuntimeError("dashboard submit failed")
+
+    StagedActiveLearningHandler(
+        stages,
+        calchome=calchome,
+        num_iterations=2,
+        on_stage_complete=[boom, lambda e: seen.append(e.stage)],
+    ).run()
+
+    # Every step ran, and the hook after the failing one still fired.
+    assert len(trainer.calls) == 2
+    assert len(seen) == 6
+
+
+def test_resume_does_not_refire_hooks_for_done_steps(tmp_path):
+    calchome = tmp_path / "calc"
+    stages, _ = _make_stages(tmp_path)
+    StagedActiveLearningHandler(
+        stages, calchome=calchome, num_iterations=1
+    ).run()
+
+    events: list[StageCompleted] = []
+    stages, _ = _make_stages(tmp_path)
+    StagedActiveLearningHandler(
+        stages,
+        calchome=calchome,
+        num_iterations=2,
+        on_stage_complete=[events.append],
+    ).run()
+
+    assert {e.iteration for e in events} == {1}
+
+
+def test_from_actors_forwards_stage_hooks(tmp_path):
+    events: list[StageCompleted] = []
+    handler = StagedActiveLearningHandler.from_actors(
+        _Actor(tmp_path, "sampler"),
+        _Actor(tmp_path, "evaluator"),
+        _Actor(tmp_path, "trainer", ext="pkl"),
+        calchome=tmp_path / "calc",
+        num_iterations=1,
+        initial_trainer_out=_seed(tmp_path, "model.pkl"),
+        on_stage_complete=[events.append],
+    )
+    handler.run()
+    assert [e.stage for e in events] == ["sampler"]

@@ -35,6 +35,17 @@ class RemoteConnectionError(RemoteHandlerError):
     pass
 
 
+class CommandTimeoutError(RemoteConnectionError):
+    """A shell command run via ``run_command`` did not finish in time.
+
+    Examples:
+        - Remote probe stalled on an overloaded login node
+        - Host became unresponsive mid-command
+    """
+
+    pass
+
+
 class FileSystemError(RemoteHandlerError):
     """File system operation failures (local or remote).
 
@@ -90,6 +101,18 @@ class ScriptInputError(RemoteHandlerError):
         - Invalid input file format
         - Input parameter validation errors
         - Malformed JSON input files
+    """
+
+    pass
+
+
+class ScheduleKeyWarning(UserWarning):
+    """A schedule key names nothing the actor can take as an attribute.
+
+    The value is then only passed to the actor's ``update`` as a keyword
+    argument -- correct for an actor that reads it there, silently ignored
+    otherwise (e.g. a misspelt key). Turn it into an error with
+    ``warnings.simplefilter("error", ScheduleKeyWarning)``.
     """
 
     pass
