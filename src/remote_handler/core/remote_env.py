@@ -11,7 +11,11 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from remote_handler.exceptions import ConfigurationError, FileSystemError
+from remote_handler.exceptions import (
+    CommandTimeoutError,
+    ConfigurationError,
+    FileSystemError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +23,11 @@ logger = logging.getLogger(__name__)
 # array executors (and the task layer that allocates into these dirs) all
 # reference this one name rather than hard-coding the string.
 CALCDIRS_DIRNAME = "calcdirs"
+
+# Limit (seconds) for the module/executable probes. Generous on purpose: they
+# activate the env and may import heavy packages from a shared filesystem,
+# which can take minutes on a loaded login node without being stuck.
+PROBE_TIMEOUT = 600
 
 
 def validate_savepath(savepath, remote_fs, *, remote_machine=None) -> None:
@@ -85,13 +94,16 @@ def remote_home(remote_fs) -> str:
     Used to expand a leading ``~`` for existence checks: the *shell* expands
     ``~`` when it later ``source``s the path, but SFTP existence checks are
     literal, so we resolve it here against the real remote home. Falls back to
-    the local home if the remote cannot be queried.
+    the local home if the remote cannot be queried, but a timeout raises (a
+    wrong home would only resurface as a misleading "not found" later).
     """
     try:
         result = remote_fs.run_command('printf %s "$HOME"')
         home = (result.stdout or "").strip()
         if home:
             return home
+    except CommandTimeoutError:
+        raise
     except Exception:  # noqa: BLE001 - any failure -> local fallback below
         logger.debug("Could not query remote $HOME; using local home.")
     return os.path.expanduser("~")
@@ -115,18 +127,16 @@ def resolve_remote_module_file(remote_fs, conda_source, conda_env, module):
     ``conda_source``/``conda_env`` -- so it returns the path as it exists on
     the remote, not on the (dependency-light) host. Works uniformly for a real
     cluster (SSH) and a local ``direct`` run (subprocess). Returns ``None`` if
-    the module is absent or the probe fails.
+    the module is absent. A transport failure or a probe exceeding
+    :data:`PROBE_TIMEOUT` raises instead, so it is not misreported as a
+    missing module.
     """
     activation = conda_activation_script(conda_source, conda_env)
     cmd = (
         f"{activation}\n"
         f'python -c "import {module} as _m; print(_m.__file__)"'
     )
-    try:
-        result = remote_fs.run_command(cmd)
-    except Exception:  # noqa: BLE001 - any transport failure -> not resolved
-        logger.debug("Remote module probe failed for %s.", module)
-        return None
+    result = remote_fs.run_command(cmd, timeout=PROBE_TIMEOUT)
     if result.returncode == 0:
         path = (result.stdout or "").strip().splitlines()
         if path and path[-1]:
@@ -144,16 +154,12 @@ def resolve_remote_executable(remote_fs, conda_source, conda_env, executable):
     -- pacemaker, gracemaker -- ship as bare console scripts rather than
     importable modules, so their runner must be resolved this way instead.
     Works uniformly for a real cluster (SSH) and a local ``direct`` run
-    (subprocess). Returns ``None`` if the executable is absent or the probe
-    fails.
+    (subprocess). Returns ``None`` if the executable is absent; transport
+    failures and timeouts raise, as for :func:`resolve_remote_module_file`.
     """
     activation = conda_activation_script(conda_source, conda_env)
     cmd = f"{activation}\ncommand -v {executable}"
-    try:
-        result = remote_fs.run_command(cmd)
-    except Exception:  # noqa: BLE001 - any transport failure -> not resolved
-        logger.debug("Remote executable probe failed for %s.", executable)
-        return None
+    result = remote_fs.run_command(cmd, timeout=PROBE_TIMEOUT)
     if result.returncode == 0:
         path = (result.stdout or "").strip().splitlines()
         if path and path[-1]:

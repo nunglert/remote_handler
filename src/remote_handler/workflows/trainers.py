@@ -45,6 +45,11 @@ def _resolve_mace_train_runner(remote_fs, cluster_config):
     path lives on the remote (the host is dependency-light), so it is probed
     there rather than imported locally.
     """
+    logger.info(
+        "Resolving MACE run_train.py in remote env '%s' "
+        "(pass remote_mace_train_runner to skip)...",
+        getattr(cluster_config, "conda_env", "") or "(ambient)",
+    )
     path = remote_env.resolve_remote_module_file(
         remote_fs,
         getattr(cluster_config, "conda_source", ""),
@@ -77,6 +82,12 @@ def _resolve_executable_train_runner(
         extra_name: This package's optional-dependency extra that installs
             it (e.g. ``"ace"``), named in the error message.
     """
+    logger.info(
+        "Resolving '%s' in remote env '%s' "
+        "(pass the runner path explicitly to skip)...",
+        executable,
+        getattr(cluster_config, "conda_env", "") or "(ambient)",
+    )
     path = remote_env.resolve_remote_executable(
         remote_fs,
         getattr(cluster_config, "conda_source", ""),

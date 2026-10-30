@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from remote_handler.core import file_handler
+from remote_handler.exceptions import CommandTimeoutError
 
 
 @pytest.fixture()
@@ -244,3 +245,47 @@ class TestRemoteFileSystemWithMocks:
         # Verify SFTP and SSH clients were closed
         mock_sftp.close.assert_called_once()
         mock_ssh.close.assert_called_once()
+
+    def _fs_with_channel(self, exit_status_ready):
+        """A mocked RemoteFileSystem whose exec channel exits (or not)."""
+        mock_ssh = MagicMock(spec=paramiko.SSHClient)
+        mock_sftp = MagicMock(spec=paramiko.SFTPClient)
+        channel = MagicMock()
+        channel.status_event.wait.return_value = exit_status_ready
+        channel.recv_exit_status.return_value = 0
+        stdout, stderr = MagicMock(), MagicMock()
+        stdout.channel = channel
+        stdout.read.return_value = b"out"
+        stderr.read.return_value = b""
+        mock_ssh.exec_command.return_value = (None, stdout, stderr)
+        fs = file_handler.RemoteFileSystem(
+            remote_alias="test_host",
+            ssh_client_provider=MockSSHClientProvider(mock_ssh, mock_sftp),
+        )
+        return fs, mock_ssh, channel
+
+    def test_run_command_returns_result(self):
+        fs, mock_ssh, channel = self._fs_with_channel(True)
+
+        result = fs.run_command("echo hi", timeout=5)
+
+        assert result == file_handler.CommandResult(0, "out", "")
+        mock_ssh.exec_command.assert_called_once_with("echo hi", timeout=5)
+        channel.status_event.wait.assert_called_once_with(5)
+
+    def test_run_command_timeout_raises_and_closes_channel(self):
+        fs, _, channel = self._fs_with_channel(False)
+
+        with pytest.raises(CommandTimeoutError, match="test_host") as exc:
+            fs.run_command("python -c 'import mace'", timeout=5)
+
+        assert "import mace" in str(exc.value)
+        channel.close.assert_called_once()
+        channel.recv_exit_status.assert_not_called()
+
+
+def test_local_run_command_timeout_raises():
+    fs = file_handler.LocalFileSystem()
+
+    with pytest.raises(CommandTimeoutError, match="sleep 5"):
+        fs.run_command("sleep 5", timeout=0.2)

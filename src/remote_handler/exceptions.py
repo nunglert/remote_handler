@@ -35,6 +35,17 @@ class RemoteConnectionError(RemoteHandlerError):
     pass
 
 
+class CommandTimeoutError(RemoteConnectionError):
+    """A shell command run via ``run_command`` did not finish in time.
+
+    Examples:
+        - Remote probe stalled on an overloaded login node
+        - Host became unresponsive mid-command
+    """
+
+    pass
+
+
 class FileSystemError(RemoteHandlerError):
     """File system operation failures (local or remote).
 

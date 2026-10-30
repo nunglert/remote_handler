@@ -27,6 +27,7 @@ from remote_handler.core.ssh_connection import (
     SSHClientProvider,
 )
 from remote_handler.exceptions import (
+    CommandTimeoutError,
     ConfigurationError,
     FileSystemError,
     RemoteConnectionError,
@@ -37,6 +38,17 @@ logger = logging.getLogger(__name__)
 # Result of ``run_command`` -- a uniform shape across local/remote execution so
 # callers (e.g. the scheduler-free DirectExecutor) don't branch on transport.
 CommandResult = namedtuple("CommandResult", ["returncode", "stdout", "stderr"])
+
+# Default limit (seconds) for ``run_command``. Without one, a command stalled
+# on an overloaded login node blocks the caller forever with no error.
+COMMAND_TIMEOUT = 120
+
+
+def _timeout_message(command: str, timeout: float, where: str) -> str:
+    return (
+        f"Command on {where} did not finish within {timeout:g}s:\n"
+        f"{command.strip()}"
+    )
 
 
 class NumpyEncoder(json.JSONEncoder):
@@ -382,15 +394,28 @@ class LocalFileSystem(FileSystemHandlerBase):
         """
         os.remove(path)
 
-    def run_command(self, command: str) -> CommandResult:
+    def run_command(
+        self, command: str, timeout: Optional[float] = COMMAND_TIMEOUT
+    ) -> CommandResult:
         """Run a shell command on the local machine.
 
         Counterpart to :meth:`RemoteFileSystem.run_command`, so executor code
         can launch work the same way regardless of where the filesystem lives.
+        Raises :class:`CommandTimeoutError` if it runs longer than
+        ``timeout`` seconds (``None`` waits indefinitely).
         """
-        result = subprocess.run(
-            command, shell=True, capture_output=True, text=True
-        )
+        try:
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise CommandTimeoutError(
+                _timeout_message(command, timeout, "localhost")
+            ) from exc
         return CommandResult(result.returncode, result.stdout, result.stderr)
 
 
@@ -833,7 +858,9 @@ class RemoteFileSystem(FileSystemHandlerBase):
             ) from e
 
     @reconnect_on_failure
-    def run_command(self, command: str) -> CommandResult:
+    def run_command(
+        self, command: str, timeout: Optional[float] = COMMAND_TIMEOUT
+    ) -> CommandResult:
         """Run a command on the remote host over the SSH connection.
 
         Uses the same authenticated paramiko client as the SFTP transport, so
@@ -841,9 +868,23 @@ class RemoteFileSystem(FileSystemHandlerBase):
         with (no separate ``ssh`` subprocess, no dependency on the default
         ``~/.ssh/config``). Detached launches (``nohup ... &``) return at once
         because the foreground statement exits immediately.
+
+        Raises :class:`CommandTimeoutError` if the command has not exited
+        within ``timeout`` seconds (``None`` waits indefinitely). The channel
+        is closed then; the remote process may keep running.
         """
-        _, stdout, stderr = self.ssh_client.exec_command(command)
-        returncode = stdout.channel.recv_exit_status()
+        _, stdout, stderr = self.ssh_client.exec_command(
+            command, timeout=timeout
+        )
+        channel = stdout.channel
+        # recv_exit_status() has no timeout of its own; wait on the event it
+        # blocks on instead.
+        if not channel.status_event.wait(timeout):
+            channel.close()
+            raise CommandTimeoutError(
+                _timeout_message(command, timeout, self.remote_alias)
+            )
+        returncode = channel.recv_exit_status()
         out = stdout.read().decode(errors="replace")
         err = stderr.read().decode(errors="replace")
         return CommandResult(returncode, out, err)
