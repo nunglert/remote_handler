@@ -39,17 +39,14 @@ workflow:
 # extras present the quests / torch_sim / mace tests un-skip; tests that need a
 # live cluster (remote), a local sbatch (slurm) or Docker (sshlive) self-skip or
 # stay deselected. `python:3.13` (not -slim) ships git + compilers for the
-# source builds some ML extras need; the `ace` extra additionally needs
-# `cmake` (installed below), since it builds C++ extensions.
+# source builds some ML extras need (the `ace` extra installs a prebuilt
+# wheel, so it needs no cmake).
 test:
   stage: test
   image: python:3.13
   before_script:
     - python -V
     - pip install --upgrade pip
-    # ace (pacemaker) builds C++ extensions via CMake -- not part of the base
-    # image, unlike the compilers used for the other extras' source builds.
-    - apt-get update && apt-get install -y --no-install-recommends cmake
     # CPU-only torch first: CI has no GPU
     - pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
     # Non-editable install -> exercises the real build + packaging pipeline.
