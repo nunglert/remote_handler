@@ -73,15 +73,13 @@ mace_jax = [
 steinhardt = [
     "jax>=0.9.0,<0.11.2",
 ]
-# ACE fitting tool "pacemaker" (repo "python-ace", package name "pyace" --
-# they differ, and pip requires this name to match the git package's own
-# declared name). Ships compiled C++ extensions built via CMake, so
-# installing this extra needs `cmake` and a C++ compiler on the machine
-# running pip (e.g. `apt install cmake build-essential`, or `conda install
-# cmake gxx`); conda-forge's prebuilt package is an alternative that skips
-# the local compile.
+# ACE fitting tool "pacemaker". Distributed on PyPI as "python-ace" since
+# 0.4.0 but still imported as `pyace`. Prebuilt wheels cover Linux x86_64
+# and macOS for CPython 3.9-3.13; elsewhere pip builds the sdist, which
+# needs `cmake` and a C++ compiler (e.g. `apt install cmake
+# build-essential`, or `conda install cmake gxx`).
 ace = [
-    "pyace @ git+https://github.com/ICAMS/python-ace.git",
+    "python-ace>=0.4.0,<0.5",
 ]
 grace = [
     "tensorpotential>=0.6.1",
