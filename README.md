@@ -9,7 +9,7 @@ and job execution (SLURM, or scheduler-free), and orchestrates a
 **Sampler → GroundTruthEvaluator → ModelTrainer** loop in which each actor can
 run on a *different* machine.
 
-📖 **[Full documentation](https://e165-03-1_theoretische_materialchemie.git-pages.tuwien.ac.at/madsen-s-research-group/remote_handler/)** —
+📖 **[Full documentation](https://nunglert.github.io/remote_handler/)** —
 the authoritative reference. This README is just the entry point.
 
 ---
@@ -24,7 +24,7 @@ pip install -e ".[dev,docs]"  # + test suite and docs tooling
 The ML/scientific functionality (MACE, NeuralIL, …) lives behind
 optional extras and is usually installed in the *remote* conda environment, not
 on the host. See the
-[Installation guide](https://e165-03-1_theoretische_materialchemie.git-pages.tuwien.ac.at/madsen-s-research-group/remote_handler/installation.html)
+[Installation guide](https://nunglert.github.io/remote_handler/installation.html)
 for the full list of extras and the host-vs-remote split.
 
 ## Getting started
@@ -40,31 +40,32 @@ remote_handler check                     # validate it (add --connect to probe)
 
 From there, see:
 
-- **[Quickstart](https://e165-03-1_theoretische_materialchemie.git-pages.tuwien.ac.at/madsen-s-research-group/remote_handler/quickstart.html)** — a first end-to-end run.
-- **[Examples](https://e165-03-1_theoretische_materialchemie.git-pages.tuwien.ac.at/madsen-s-research-group/remote_handler/examples.html)** — DFT labelling and MACE training.
-- **[CLI](https://e165-03-1_theoretische_materialchemie.git-pages.tuwien.ac.at/madsen-s-research-group/remote_handler/cli.html)** — configure / check / show.
+- **[Quickstart](https://nunglert.github.io/remote_handler/quickstart.html)** — a first end-to-end run.
+- **[Examples](https://nunglert.github.io/remote_handler/examples.html)** — DFT labelling and MACE training.
+- **[CLI](https://nunglert.github.io/remote_handler/cli.html)** — configure / check / show.
 
 ## How it fits together
 
 Three layers: `core/` (transport + execution primitives), `workflows/` (the
 active-learning actors), and `scripts/` (payloads shipped to and run on the
 cluster). The
-[Core Concepts](https://e165-03-1_theoretische_materialchemie.git-pages.tuwien.ac.at/madsen-s-research-group/remote_handler/concepts.html)
+[Core Concepts](https://nunglert.github.io/remote_handler/concepts.html)
 page explains the boundaries — host vs. remote, the task abstraction, the
 pluggable executor, and the active-learning loop.
 
 ## Example projects using remote_handler
 
-- [Replica-exchange nested sampling](https://gitlab.tuwien.ac.at/e165-03-1_theoretische_materialchemie/madsen-s-research-group/jaxrens_active_learning)
-- [LAMMPS](https://gitlab.tuwien.ac.at/e165-03-1_theoretische_materialchemie/madsen-s-research-group/lammps_active_learning)
-- Clinamen2 — _link TBD_
-- SSPD — _link TBD_
+- JAXRENS (Replica-exchange nested sampling) — _link TBD_
+- LAMMPS (MD + Amorphous Matrix Embedding) — _link TBD_
+- torchsim (Parallel Tempering) — _link TBD_
+- Clinamen2 (Covariance Matrix Adaptation Evolution Strategy) — _link TBD_
+- SSPD (Stochastic Saddle Point Dynamics) — _link TBD_
 
 ## Contributing
 
 Dev setup, test tiers, code style, and the release/versioning workflow are in
 the
-[Contributing guide](https://e165-03-1_theoretische_materialchemie.git-pages.tuwien.ac.at/madsen-s-research-group/remote_handler/contributing.html).
+[Contributing guide](https://nunglert.github.io/remote_handler/contributing.html).
 In short:
 
 ```bash
@@ -78,7 +79,7 @@ See [LICENSE](LICENSE).
 
 ## Citation
 
-If you use this package in your research, please cite:
+If you use this package in your research, please (this will soon be replaced by the preprint) cite:
 
 ```bibtex
 @software{remote_handler,

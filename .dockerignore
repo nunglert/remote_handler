@@ -1,6 +1,5 @@
 # Keep the build context small and deterministic.
 .git/
-.gitlab-ci.yml
 .github/
 Dockerfile
 .dockerignore
@@ -16,7 +15,6 @@ build/
 dist/
 
 # Docs build output + Sphinx autosummary
-public/
 docs/build/
 docs/source/_autosummary/
 
