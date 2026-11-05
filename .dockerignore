@@ -1,6 +1,7 @@
 # Keep the build context small and deterministic.
 .git/
 .gitlab-ci.yml
+.github/
 Dockerfile
 .dockerignore
 .pre-commit-config.yaml

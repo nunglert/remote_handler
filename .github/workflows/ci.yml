@@ -1,0 +1,139 @@
+name: CI
+
+# ---------------------------------------------------------------------------
+# Two jobs: the full test suite, and (on pull requests) a coverage gate on the
+# changed lines. Docs are deployed by docs.yml.
+#
+# The suite runs in a clean official `python:3.13` container and does a
+# from-scratch, NON-editable `pip install` of the package. That install IS the
+# packaging check: it builds and installs the wheel exactly as an end user
+# would, so packaging problems (missing data files, bad metadata, unresolvable
+# deps) fail the run. The suite then runs against the installed package.
+#
+# The container runs as root, so the localhost sshd for the `sshlive` tier can
+# be set up without sudo, and the container's global python (with the package
+# installed) is what the ssh user sees -- the task-execution tests need that.
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Weekly run: re-installs every (git/PyPI) extra and runs the full suite, so
+  # upstream breakage is caught even when nobody commits.
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+# A newer push to the same branch/PR supersedes the running one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: python:3.13
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full clone incl. tags so setuptools-scm derives the real version
+          # (a shallow clone misses tags -> it would use the fallback).
+          fetch-depth: 0
+
+      # The checkout is owned by a different uid than the container's root;
+      # without this, git (and so setuptools-scm) refuses to read it.
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install package with all extras
+        run: |
+          python -V
+          pip install --upgrade pip
+          # CPU-only torch first: CI has no GPU
+          pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+          # Non-editable install -> exercises the real build + packaging.
+          pip install --no-cache-dir ".[all]"
+          python -c "import remote_handler; print('install OK:', remote_handler.__file__)"
+
+      # Best-effort: stand up a localhost sshd so the `sshlive` tier does a
+      # real SSH/SFTP round-trip. If it fails, the sshlive tests simply skip
+      # -- it never fails the run. The log prints RUN vs SKIP.
+      - name: Start localhost sshd for sshlive tests
+        run: |
+          if apt-get update \
+             && apt-get install -y --no-install-recommends openssh-server openssh-client \
+             && useradd -m -s /bin/bash tester \
+             && install -d -m 700 -o tester -g tester /home/tester/.ssh \
+             && ssh-keygen -t ed25519 -N '' -q -f /tmp/sshlive_key \
+             && install -m 600 -o tester -g tester /tmp/sshlive_key.pub /home/tester/.ssh/authorized_keys \
+             && mkdir -p /run/sshd && ssh-keygen -A && /usr/sbin/sshd -p 2222 \
+             && ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                    -i /tmp/sshlive_key -p 2222 tester@127.0.0.1 true; then
+            {
+              echo SSHLIVE_HOST=127.0.0.1
+              echo SSHLIVE_PORT=2222
+              echo SSHLIVE_USER=tester
+              echo SSHLIVE_KEY=/tmp/sshlive_key
+            } >> "$GITHUB_ENV"
+            echo 'sshlive: local sshd ready -> sshlive tests will RUN'
+          else
+            echo 'sshlive: no local sshd -> sshlive tests will SKIP'
+          fi
+
+      - name: Run tests
+        run: >-
+          pytest --junitxml=report.xml -ra
+          --cov=remote_handler --cov-report=term --cov-report=xml:coverage.xml
+          --cov-fail-under=50
+
+      - name: Coverage summary
+        if: always()
+        run: coverage report --format=markdown >> "$GITHUB_STEP_SUMMARY" || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-reports
+          path: |
+            coverage.xml
+            report.xml
+
+  # Coverage gate on the lines a PR actually touches. The `test` job's overall
+  # --cov-fail-under=50 is deliberately low (it has to tolerate large
+  # low-level files like remote-side scripts that only run in optional
+  # integration tiers), so it doesn't catch a new, untested class landing in
+  # an otherwise well-covered file. diff-cover reads the same coverage.xml and
+  # reports coverage restricted to the diff against the PR's base branch.
+  diff-coverage:
+    if: github.event_name == 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # diff-cover needs the base branch history to compute the diff.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@v4
+        with:
+          name: test-reports
+      - run: pip install diff-cover
+      - name: Check coverage of changed lines
+        run: >-
+          diff-cover coverage.xml
+          --compare-branch=origin/${{ github.base_ref }}
+          --fail-under=90
+          --markdown-report diff-cover.md
+          --format html:diff-cover-report.html
+      - name: Diff coverage summary
+        if: always()
+        run: cat diff-cover.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diff-cover-report
+          path: diff-cover-report.html

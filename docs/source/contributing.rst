@@ -3,7 +3,7 @@ Contributing
 
 Thanks for considering a contribution! This page sketches how we expect
 changes to land: how the project is laid out, the conventions we follow, and
-what a reviewable merge request looks like.
+what a reviewable pull request looks like.
 
 Development setup
 -----------------
@@ -13,7 +13,7 @@ pre-commit hooks:
 
 .. code-block:: bash
 
-   git clone git@gitlab.tuwien.ac.at:e165-03-1_theoretische_materialchemie/madsen-s-research-group/remote_handler.git
+   git clone git@github.com:nunglert/remote_handler.git
    cd remote_handler
    pip install -e ".[dev]"      # pytest + pytest-cov + pre-commit
    pre-commit install           # run black/isort/eof checks on every commit
@@ -149,12 +149,13 @@ Submitting changes
 - Make sure ``pre-commit run --all-files`` and ``pytest`` are green locally,
   and that ``cd docs && make html`` is warning-free if you touched docs or
   docstrings.
-- Open a merge request against ``main`` with a short description of *what* and
-  *why*. CI runs the full suite (with every extra installed) on a clean
-  ``python:3.13`` image plus a best-effort ``sshlive`` round-trip; the
-  live-cluster ``remote`` tier self-skips.
-- The ``pages`` job publishes the docs to GitLab Pages from ``main`` only, so
-  doc changes go live once merged.
+- Open a pull request against ``main`` with a short description of *what* and
+  *why*. CI (GitHub Actions) runs the full suite (with every extra installed)
+  in a clean ``python:3.13`` container plus a best-effort ``sshlive``
+  round-trip; the live-cluster ``remote`` tier self-skips. The lines your PR
+  changes must be at least 90% covered (``diff-coverage`` job).
+- The ``Docs`` workflow publishes the docs to GitHub Pages from ``main`` only,
+  so doc changes go live once merged.
 
 Versioning and releases
 -----------------------
