@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -243,6 +244,8 @@ def check_job_status_squeue(
     job_id,
     ssh_command="ssh lugus",
     connection_policy: resilience.ConnectionPolicy = resilience.DISABLED,
+    retries: int = 10,
+    retry_wait: float = 30.0,
 ):
     """
     Tries to retrieve information on the job using the slurm `squeue`
@@ -259,10 +262,18 @@ def check_job_status_squeue(
     as finished rather than crashing the driver. A genuine ssh/connection
     failure still propagates through ``_run_ssh``'s resilience handling.
 
+    Any other non-zero exit is retried: ``squeue`` also fails when the
+    controller is briefly unresponsive (e.g. ``Socket timed out on
+    send/recv operation``), which says nothing about the job. Only after
+    ``retries`` further failures, ``retry_wait`` seconds apart, is the error
+    raised.
+
     Args:
         job_id (str): The job ID to check.
         ssh_command (str, optional): SSH command to be used for remote checking.
             Defaults to "ssh lugus".
+        retries (int): Retries of a failing ``squeue`` before raising.
+        retry_wait (float): Seconds between those retries.
     Returns:
         bool: False if the job is still running, True if it has finished.
     """
@@ -271,16 +282,37 @@ def check_job_status_squeue(
         status_cmd = f"squeue -j {pid_str}"
     else:
         status_cmd = f"{ssh_command} 'squeue -j {pid_str}'"
-    try:
-        result = _run_ssh(status_cmd, connection_policy)
-    except subprocess.CalledProcessError as exc:
-        stderr = exc.stderr or ""
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", "replace")
-        # Job no longer known to the controller -> it has left the queue.
-        if "invalid job id" in stderr.lower():
-            return True
-        raise
+    for attempt in range(retries + 1):
+        try:
+            result = _run_ssh(status_cmd, connection_policy)
+            break
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr or ""
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode("utf-8", "replace")
+            # Job no longer known to the controller -> it has left the queue.
+            if "invalid job id" in stderr.lower():
+                return True
+            if attempt == retries:
+                logger.error(
+                    "squeue -j %s failed %d time(s) (exit %s): %s",
+                    pid_str,
+                    retries + 1,
+                    exc.returncode,
+                    stderr.strip(),
+                )
+                raise
+            logger.warning(
+                "squeue -j %s failed (exit %s): %s -- retrying in %.0fs "
+                "(%d/%d).",
+                pid_str,
+                exc.returncode,
+                stderr.strip(),
+                retry_wait,
+                attempt + 1,
+                retries,
+            )
+            time.sleep(retry_wait)
     res = result.stdout.split("\n")
     if len(res) > 2:
         return False

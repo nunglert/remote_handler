@@ -140,16 +140,51 @@ def test_squeue_treats_purged_job_as_finished(monkeypatch):
 
 
 def test_squeue_reraises_other_errors(monkeypatch):
-    """A non-'invalid job id' failure is a real error and must propagate."""
+    """A non-'invalid job id' failure that persists through every retry is a
+    real error and must propagate."""
+    calls = {"n": 0}
 
     def fake_run(cmd, **kwargs):
+        calls["n"] += 1
         raise subprocess.CalledProcessError(
             returncode=1, cmd=cmd, stderr="squeue: error: some other failure\n"
         )
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     with pytest.raises(subprocess.CalledProcessError):
-        slurm_utils.check_job_status_squeue(42, ssh_command="ssh musica")
+        slurm_utils.check_job_status_squeue(
+            42, ssh_command="ssh musica", retries=3, retry_wait=0
+        )
+    assert calls["n"] == 4
+
+
+def test_squeue_retries_transient_errors(monkeypatch):
+    """An unresponsive controller makes ``squeue`` exit non-zero while the
+    job is still running; a retry that succeeds must report the job's real
+    state instead of crashing."""
+    calls = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise subprocess.CalledProcessError(
+                returncode=1,
+                cmd=cmd,
+                stderr="slurm_load_jobs error: Socket timed out on "
+                "send/recv operation\n",
+            )
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout="JOBID PART NAME\n123 normal job\n\n", stderr=""
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert (
+        slurm_utils.check_job_status_squeue(
+            123, ssh_command="ssh musica", retry_wait=0
+        )
+        is False
+    )
+    assert calls["n"] == 3
 
 
 def test_squeue_running_and_finished_by_empty_output(monkeypatch):
