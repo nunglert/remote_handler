@@ -1,8 +1,7 @@
 # remote_handler
 
-[![pipeline status](https://gitlab.tuwien.ac.at/e165-03-1_theoretische_materialchemie/madsen-s-research-group/remote_handler/badges/main/pipeline.svg)](https://gitlab.tuwien.ac.at/e165-03-1_theoretische_materialchemie/madsen-s-research-group/remote_handler/-/commits/main)
-[![coverage report](https://gitlab.tuwien.ac.at/e165-03-1_theoretische_materialchemie/madsen-s-research-group/remote_handler/badges/main/coverage.svg)](https://gitlab.tuwien.ac.at/e165-03-1_theoretische_materialchemie/madsen-s-research-group/remote_handler/-/commits/main)
-[![Documentation](https://img.shields.io/badge/docs-online-blue.svg)](https://e165-03-1_theoretische_materialchemie.git-pages.tuwien.ac.at/madsen-s-research-group/remote_handler/)
+[![CI](https://github.com/nunglert/remote_handler/actions/workflows/ci.yml/badge.svg)](https://github.com/nunglert/remote_handler/actions/workflows/ci.yml)
+[![Documentation](https://img.shields.io/badge/docs-online-blue.svg)](https://nunglert.github.io/remote_handler/)
 
 A Python package for running **active-learning workflows for machine-learned
 force fields** across remote HPC clusters. It abstracts SSH/SFTP file transfer
@@ -86,6 +85,6 @@ If you use this package in your research, please cite:
   author = {Unglert, Nico},
   title  = {remote_handler: Streamlining Active Learning Workflows},
   year   = {2026},
-  url    = {https://gitlab.tuwien.ac.at/e165-03-1_theoretische_materialchemie/madsen-s-research-group/remote_handler}
+  url    = {https://github.com/nunglert/remote_handler}
 }
 ```
