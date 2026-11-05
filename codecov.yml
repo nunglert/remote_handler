@@ -1,0 +1,15 @@
+# Codecov reports coverage only; it doesn't gate merges. The CI
+# `diff-coverage` job already fails a PR whose changed lines are under 90%
+# covered, so Codecov's own status checks are informational to avoid two
+# gates that can disagree.
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+comment:
+  layout: "condensed_header, diff, files"

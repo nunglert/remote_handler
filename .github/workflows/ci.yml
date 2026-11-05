@@ -87,6 +87,13 @@ jobs:
           pytest --junitxml=report.xml -ra
           --cov=remote_handler --cov-report=term --cov-report=xml:coverage.xml
           --cov-fail-under=50
+          
+      - uses: codecov/codecov-action@v5
+        if: always()
+        with:
+          files: coverage.xml
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
 
       - name: Coverage summary
         if: always()

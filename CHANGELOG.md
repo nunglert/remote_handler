@@ -9,6 +9,16 @@ The version is derived from git tags by `setuptools-scm` (tag `v0.2.0` →
 version `0.2.0`). To cut a release: add a dated section below, merge to `main`,
 then `git tag -a vX.Y.Z`.
 
+## [Unreleased]
+
+### Changed
+- **The repository moved to GitHub:**
+  <https://github.com/nunglert/remote_handler>. Docs are now at
+  <https://nunglert.github.io/remote_handler/> and CI runs on GitHub
+  Actions. The GitLab project is no longer updated. Update clones with
+  `git remote set-url origin git@github.com:nunglert/remote_handler.git` and
+  change any `git+` dependency URLs that point at GitLab.
+
 ## [0.8.0] — 2026-10-30
 
 ### Added
