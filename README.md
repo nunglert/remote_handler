@@ -1,6 +1,7 @@
 # remote_handler
 
 [![CI](https://github.com/nunglert/remote_handler/actions/workflows/ci.yml/badge.svg)](https://github.com/nunglert/remote_handler/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/nunglert/remote_handler/graph/badge.svg)](https://codecov.io/gh/nunglert/remote_handler)
 [![Documentation](https://img.shields.io/badge/docs-online-blue.svg)](https://nunglert.github.io/remote_handler/)
 
 A Python package for running **active-learning workflows for machine-learned
