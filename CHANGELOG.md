@@ -22,8 +22,6 @@ then `git tag -a vX.Y.Z`.
   `collect(resume=True)` and `remote_handler collect --resume` complete an
   existing local results directory instead of moving it aside and starting
   over.
-- `benchmarks/transfer_bench.py`: benchmarks directory downloads under
-  simulated latency against the `sshlive` endpoint.
 - **Documentation for `remote_handler.processing`**: a new *Trajectory
   Processing* page (`docs/source/processing.rst`) covering how the sharded
   pipeline works, the built-in processors and their outputs, running an
