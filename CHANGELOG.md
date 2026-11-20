@@ -12,6 +12,18 @@ then `git tag -a vX.Y.Z`.
 ## [Unreleased]
 
 ### Added
+- **Faster result collection for many small files:** a new per-cluster
+  `"transfer": "tar"` option streams a directory download through one remote
+  `tar` over the existing paramiko connection instead of fetching each file
+  over SFTP (100k × 45 KB files at 20 ms RTT: roughly hours → minutes). It
+  falls back to SFTP when the remote has no `tar`; `remote_handler check
+  --connect` probes for it. The default stays `"sftp"`.
+- **Resumable collect:** `collect_results(resume=True)`, manifest
+  `collect(resume=True)` and `remote_handler collect --resume` complete an
+  existing local results directory instead of moving it aside and starting
+  over.
+- `benchmarks/transfer_bench.py`: benchmarks directory downloads under
+  simulated latency against the `sshlive` endpoint.
 - **Documentation for `remote_handler.processing`**: a new *Trajectory
   Processing* page (`docs/source/processing.rst`) covering how the sharded
   pipeline works, the built-in processors and their outputs, running an
@@ -21,12 +33,25 @@ then `git tag -a vX.Y.Z`.
   processor through the real shard driver (`test/test_processing_docs.py`).
 
 ### Changed
+- **`RemoteFileSystem.get_dir` is incremental and much cheaper per file:** it
+  lists each directory once with `listdir_attr` (no `stat` per file), skips
+  files that already exist locally *with the remote size*, and writes each
+  download via a `.part` file renamed on completion. About 25% faster at
+  realistic latency.
+- `LocalFileSystem.get_dir` now completes an existing target directory
+  instead of failing on it.
 - **The repository moved to GitHub:**
   <https://github.com/nunglert/remote_handler>. Docs are now at
   <https://nunglert.github.io/remote_handler/> and CI runs on GitHub
   Actions. The GitLab project is no longer updated. Update clones with
   `git remote set-url origin git@github.com:nunglert/remote_handler.git` and
   change any `git+` dependency URLs that point at GitLab.
+
+### Fixed
+- `get_dir` kept files truncated by a dropped connection as if complete,
+  since it only checked whether a local file existed.
+- `secure_declare_path(..., move=False)` crashed on directories
+  (`os.remove` on a directory); it now removes them.
 
 ## [0.8.0] — 2026-10-30
 

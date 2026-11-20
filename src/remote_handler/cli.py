@@ -38,6 +38,7 @@ from remote_handler.config import (
     get_persistent_config_file,
     reset_config,
 )
+from remote_handler.core.cluster_config import TRANSFER_TAR
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.ssh_connection import (
     ConfigBasedSSHClientProvider,
@@ -284,7 +285,9 @@ def cmd_configure_test(args: argparse.Namespace) -> int:
 # check
 # --------------------------------------------------------------------------
 def _check_connect(cc: ClusterConfig, name: str, report: Reporter) -> None:
-    """Best-effort live SSH probe (sbatch + conda env). Never raises."""
+    """Best-effort live SSH probe (sbatch, tar if used, conda env).
+
+    Never raises."""
     provider = ConfigBasedSSHClientProvider(cc.remote_machine)
     try:
         ssh, sftp = provider.create_connection()
@@ -312,6 +315,18 @@ def _check_connect(cc: ClusterConfig, name: str, report: Reporter) -> None:
             report("PASS", f"{name}: sbatch at {sbatch}")
         else:
             report("WARN", f"{name}: sbatch not found on remote")
+
+        if cc.transfer == TRANSFER_TAR:
+            _in_t, out_t, _err_t = ssh.exec_command("command -v tar")
+            tar = out_t.read().decode().strip()
+            if tar:
+                report("PASS", f"{name}: tar at {tar} (transfer='tar')")
+            else:
+                report(
+                    "WARN",
+                    f"{name}: transfer='tar' but tar not found on remote; "
+                    "downloads fall back to per-file SFTP",
+                )
 
         src = cc.conda_source.rstrip("/")
         root = (
@@ -939,7 +954,8 @@ def cmd_collect(args: argparse.Namespace) -> int:
     If the job is still running, refuses (exit 2) unless ``--wait`` is given,
     which blocks until it finishes. ``--force`` skips the completion check and
     fetches whatever is there now -- useful when the remote env has drifted and
-    only the files are wanted.
+    only the files are wanted. ``--resume`` completes an existing local results
+    directory instead of moving it aside.
     """
     try:
         _path, handle = _load_handle(args.path)
@@ -970,7 +986,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
             handle.wait()
 
     try:
-        local = handle.collect()
+        local = handle.collect(resume=args.resume)
     except Exception as exc:  # noqa: BLE001 - transfer/connection failure
         print(f"[FAIL] collection failed: {exc}", file=sys.stderr)
         return 1
@@ -1088,6 +1104,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="skip the completion check; fetch whatever files exist now",
+    )
+    p_collect.add_argument(
+        "--resume",
+        action="store_true",
+        help="complete an existing local results dir (e.g. after an "
+        "interrupted collect) instead of moving it aside",
     )
     return parser
 

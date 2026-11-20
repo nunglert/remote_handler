@@ -81,6 +81,8 @@ def secure_declare_path(
     if os.path.exists(filename):
         if move:
             shutil.move(filename, secure_path(filename, is_directory))
+        elif os.path.isdir(filename):
+            shutil.rmtree(filename)
         else:
             os.remove(filename)
     return filename
