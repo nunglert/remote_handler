@@ -253,6 +253,21 @@ def test_write_read_ase(ssh_container_fs):
     )
 
 
+def test_rmtree_removes_nested_dirs(ssh_container_fs, tmp_path):
+    """rmtree deletes a nested remote tree (it used to crash on recursion)."""
+    fs = ssh_container_fs
+    src = tmp_path / "src"
+    (src / "a" / "b").mkdir(parents=True)
+    (src / "top.txt").write_text("x")
+    (src / "a" / "b" / "deep.txt").write_text("y")
+    remote = f"{fs.create_tempdir()}/tree"
+    fs.put_dir(src, remote)
+
+    fs.rmtree(remote)
+
+    assert not fs.exists(remote)
+
+
 @pytest.mark.parametrize("transfer", ["sftp", "tar"])
 def test_get_dir_roundtrip_and_resume(ssh_container_fs, tmp_path, transfer):
     """get_dir over a real sshd, both transfer modes, incl. resume.

@@ -52,6 +52,10 @@ then `git tag -a vX.Y.Z`.
   since it only checked whether a local file existed.
 - `secure_declare_path(..., move=False)` crashed on directories
   (`os.remove` on a directory); it now removes them.
+- `RemoteFileSystem.rmtree` crashed with a `TypeError` on any nested
+  directory (its recursive call passed an extra argument). It now works,
+  logs at debug level instead of printing, and deletes symlinks without
+  following them. The unused `level` parameter is gone.
 
 ## [0.8.0] — 2026-10-30
 

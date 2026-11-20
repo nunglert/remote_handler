@@ -723,23 +723,30 @@ class RemoteFileSystem(FileSystemHandlerBase):
         self.sftp_client.mkdir(path)
 
     @reconnect_on_failure
-    def rmtree(self, remotepath: os.PathLike, level=0) -> None:
+    def rmtree(self, remotepath: os.PathLike) -> None:
         """Recursively delete a directory on the remote system via SFTP.
+
+        Symlinks are removed, never followed, so a link pointing outside
+        ``remotepath`` cannot cause anything there to be deleted. If the
+        connection drops midway, the reconnect retry relists and continues
+        with what is left.
 
         Args:
             remotepath (str): The path of the directory to delete.
-            level (int, optional): The current recursion level (used for
-                indentation in print statements). Defaults to 0.
         """
-        for f in self.sftp_client.listdir_attr(remotepath):
-            rpath = posixpath.join(remotepath, f.filename)
-            if S_ISDIR(f.st_mode):
-                self.rmtree(self.sftp_client, rpath, level=(level + 1))
+        self._rmtree(str(remotepath))
+
+    def _rmtree(self, remotepath: str) -> None:
+        # listdir_attr reports lstat-style attributes: a symlink to a
+        # directory is S_ISLNK, not S_ISDIR, so it is removed as a file.
+        for attr in self.sftp_client.listdir_attr(remotepath):
+            path = posixpath.join(remotepath, attr.filename)
+            if S_ISDIR(attr.st_mode):
+                self._rmtree(path)
             else:
-                rpath = posixpath.join(remotepath, f.filename)
-                print("removing %s%s" % ("    " * level, rpath))
-                self.sftp_client.remove(rpath)
-        print("removing %s%s" % ("    " * level, remotepath))
+                logger.debug("removing %s", path)
+                self.sftp_client.remove(path)
+        logger.debug("removing %s", remotepath)
         self.sftp_client.rmdir(remotepath)
 
     @reconnect_on_failure

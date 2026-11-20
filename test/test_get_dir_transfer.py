@@ -1,4 +1,5 @@
-"""``RemoteFileSystem.get_dir`` (sftp + tar transfer) and resumable collect.
+"""``RemoteFileSystem`` tree operations: ``get_dir`` (sftp + tar transfer),
+``rmtree``, and resumable collect.
 
 No network: a fake SFTP client serves a local directory as "the remote", and
 a fake SSH client runs ``exec_command`` as a local subprocess. So the tar
@@ -75,6 +76,14 @@ class FakeSFTP:
     def open(self, path, mode="r"):
         self.log.append(("open", path))
         return _FakeRemoteFile(path, self.log)
+
+    def remove(self, path):
+        self.log.append(("remove", path))
+        os.remove(path)
+
+    def rmdir(self, path):
+        self.log.append(("rmdir", path))
+        os.rmdir(path)
 
     def opened(self):
         return [p for op, p in self.log if op == "open"]
@@ -392,6 +401,32 @@ def test_tar_falls_back_to_sftp_without_remote_tar(tmp_path, remote_tree):
     assert len(sftp.opened()) == len(files) + 1
     # Probed once, never ran tar.
     assert ssh.commands == ["command -v tar"]
+
+
+# --------------------------------------------------------------------------
+# rmtree
+# --------------------------------------------------------------------------
+def test_rmtree_removes_nested_tree(tmp_path, remote_tree):
+    root, _ = remote_tree
+    fs, _, _ = make_fs(tmp_path)
+
+    fs.rmtree(root)
+
+    assert not root.exists()
+
+
+def test_rmtree_does_not_follow_symlinks(tmp_path, remote_tree):
+    root, _ = remote_tree
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "precious.txt").write_text("keep")
+    os.symlink(outside, root / "link_to_outside")
+    fs, _, _ = make_fs(tmp_path)
+
+    fs.rmtree(str(root))
+
+    assert not root.exists()
+    assert (outside / "precious.txt").read_text() == "keep"
 
 
 # --------------------------------------------------------------------------
