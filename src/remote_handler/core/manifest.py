@@ -212,17 +212,19 @@ class TaskHandle:
         """Block until the resumed job finishes."""
         self.executor.wait_until_finished()
 
-    def collect(self, move: bool = True) -> Path:
+    def collect(self, move: bool = True, resume: bool = False) -> Path:
         """Copy the remote job directory to the manifest's local savepath.
 
         Mirrors ``ResultCollector.collect_directory`` so a resumed handle
-        collects results identically to the original in-process task.
+        collects results identically to the original in-process task;
+        ``move``/``resume`` mean the same as there.
         """
         remote_path = Path(self.manifest.remote_savepath)
         local_path = Path(self.manifest.local_savepath)
-        file_utils.secure_declare_path(
-            local_path, move=move, is_directory=True
-        )
+        if not resume:
+            file_utils.secure_declare_path(
+                local_path, move=move, is_directory=True
+            )
         logger.info(
             "Collecting results from %s to %s", remote_path, local_path
         )
@@ -230,7 +232,9 @@ class TaskHandle:
         logger.info("Results collected successfully")
         return local_path
 
-    def wait_and_collect(self, move: bool = True) -> Path:
+    def wait_and_collect(
+        self, move: bool = True, resume: bool = False
+    ) -> Path:
         """Convenience: block until done, then collect."""
         self.wait()
-        return self.collect(move=move)
+        return self.collect(move=move, resume=resume)

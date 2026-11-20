@@ -4,15 +4,18 @@ import logging
 import os
 import posixpath
 import random
+import shlex
 import shutil
 import socket
 import string
 import subprocess
+import tarfile
 import tempfile
+import threading
 from abc import ABC, abstractmethod
 from collections import namedtuple
 from pathlib import Path
-from stat import S_ISDIR
+from stat import S_ISDIR, S_ISLNK
 from typing import Optional
 
 import ase.io
@@ -21,6 +24,11 @@ import paramiko
 from ase import Atoms
 
 from remote_handler.core import resilience
+from remote_handler.core.cluster_config import (
+    KNOWN_TRANSFERS,
+    TRANSFER_SFTP,
+    TRANSFER_TAR,
+)
 from remote_handler.core.file_utils import tag_path as tag_path_util
 from remote_handler.core.ssh_connection import (
     ConfigBasedSSHClientProvider,
@@ -42,6 +50,44 @@ CommandResult = namedtuple("CommandResult", ["returncode", "stdout", "stderr"])
 # Default limit (seconds) for ``run_command``. Without one, a command stalled
 # on an overloaded login node blocks the caller forever with no error.
 COMMAND_TIMEOUT = 120
+
+# Suffix of a file still being downloaded; renamed away once complete.
+PART_SUFFIX = ".part"
+
+
+def _is_complete(local_path: Path, size: int) -> bool:
+    """True if ``local_path`` is a file of exactly ``size`` bytes."""
+    try:
+        return local_path.is_file() and local_path.stat().st_size == size
+    except OSError:
+        return False
+
+
+def _write_atomically(src, local_path: Path) -> None:
+    """Copy the file object ``src`` to ``local_path`` via a ``.part`` file.
+
+    The final name only ever holds a complete file: a transfer cut short
+    leaves just the ``.part``, which the next attempt overwrites.
+    """
+    part = local_path.with_name(local_path.name + PART_SUFFIX)
+    with open(part, "wb") as fh:
+        shutil.copyfileobj(src, fh, 1 << 20)
+    os.replace(part, local_path)
+
+
+def _fetch_sftp_file(
+    sftp: paramiko.SFTPClient, remote_path: str, local_path: Path, size: int
+) -> None:
+    """Download one file whose size is already known from the listing.
+
+    Unlike ``SFTPClient.get`` this needs no extra ``stat`` round trip, and
+    the read-ahead (``prefetch``) is sized up front.
+    """
+    with sftp.open(remote_path, "rb") as remote_file:
+        # prefetch(0) never marks itself done, so a read would then block.
+        if size > 0:
+            remote_file.prefetch(size)
+        _write_atomically(remote_file, local_path)
 
 
 def _timeout_message(command: str, timeout: float, where: str) -> str:
@@ -325,11 +371,13 @@ class LocalFileSystem(FileSystemHandlerBase):
     def get_dir(self, src_dir: os.PathLike, dst_dir: os.PathLike) -> None:
         """
         Recursively copy local directory to another location on the local filesystem.
+        An existing ``dst_dir`` is completed (files are overwritten), matching
+        the incremental ``RemoteFileSystem.get_dir``.
         Args:
             src_dir (str): Local directory path
             dst_dir (str): Local target path
         """
-        shutil.copytree(src_dir, dst_dir)
+        shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
 
     def write_str_to_file(self, string, filepath: os.PathLike) -> None:
         """
@@ -483,6 +531,11 @@ class RemoteFileSystem(FileSystemHandlerBase):
         ssh_client_provider (SSHClientProvider, optional): Custom provider for
             SSH/SFTP clients. If None, uses ConfigBasedSSHClientProvider. This
             parameter is primarily for testing.
+        connection_policy (ConnectionPolicy, optional): Pause-and-retry
+            behaviour on connection/auth loss. Disabled by default.
+        transfer (str, optional): How :meth:`get_dir` moves files:
+            ``"sftp"`` (default) or ``"tar"``. See
+            :class:`~remote_handler.core.cluster_config.ClusterConfig`.
     """
 
     def __init__(
@@ -493,9 +546,18 @@ class RemoteFileSystem(FileSystemHandlerBase):
         local_temp_path: Optional[str] = None,
         ssh_client_provider: Optional[SSHClientProvider] = None,
         connection_policy: Optional[resilience.ConnectionPolicy] = None,
+        transfer: str = TRANSFER_SFTP,
     ):
         super().__init__()
 
+        if transfer not in KNOWN_TRANSFERS:
+            raise ConfigurationError(
+                f"Unknown transfer mode '{transfer}'. "
+                f"Known modes: {', '.join(KNOWN_TRANSFERS)}."
+            )
+        self.transfer = transfer
+        # Whether the remote has ``tar``; probed once, on first tar transfer.
+        self._remote_has_tar_cache: Optional[bool] = None
         self.remote_alias = remote_alias
         self.identityfile = identityfile
         self.ssh_client = None
@@ -661,23 +723,30 @@ class RemoteFileSystem(FileSystemHandlerBase):
         self.sftp_client.mkdir(path)
 
     @reconnect_on_failure
-    def rmtree(self, remotepath: os.PathLike, level=0) -> None:
+    def rmtree(self, remotepath: os.PathLike) -> None:
         """Recursively delete a directory on the remote system via SFTP.
+
+        Symlinks are removed, never followed, so a link pointing outside
+        ``remotepath`` cannot cause anything there to be deleted. If the
+        connection drops midway, the reconnect retry relists and continues
+        with what is left.
 
         Args:
             remotepath (str): The path of the directory to delete.
-            level (int, optional): The current recursion level (used for
-                indentation in print statements). Defaults to 0.
         """
-        for f in self.sftp_client.listdir_attr(remotepath):
-            rpath = posixpath.join(remotepath, f.filename)
-            if S_ISDIR(f.st_mode):
-                self.rmtree(self.sftp_client, rpath, level=(level + 1))
+        self._rmtree(str(remotepath))
+
+    def _rmtree(self, remotepath: str) -> None:
+        # listdir_attr reports lstat-style attributes: a symlink to a
+        # directory is S_ISLNK, not S_ISDIR, so it is removed as a file.
+        for attr in self.sftp_client.listdir_attr(remotepath):
+            path = posixpath.join(remotepath, attr.filename)
+            if S_ISDIR(attr.st_mode):
+                self._rmtree(path)
             else:
-                rpath = posixpath.join(remotepath, f.filename)
-                print("removing %s%s" % ("    " * level, rpath))
-                self.sftp_client.remove(rpath)
-        print("removing %s%s" % ("    " * level, remotepath))
+                logger.debug("removing %s", path)
+                self.sftp_client.remove(path)
+        logger.debug("removing %s", remotepath)
         self.sftp_client.rmdir(remotepath)
 
     @reconnect_on_failure
@@ -716,33 +785,167 @@ class RemoteFileSystem(FileSystemHandlerBase):
 
     @reconnect_on_failure
     def get_dir(self, remote_dir: os.PathLike, local_dir: os.PathLike) -> None:
-        """
-        Recursively copy remote directory to local host via SFTP.
+        """Recursively copy a remote directory to the local host.
+
+        Incremental: a file that already exists locally with the remote size
+        is skipped, so calling this again after an interruption only fetches
+        what is missing or incomplete. Files are written via a ``.part``
+        sibling and renamed when complete, so a dropped connection never
+        leaves a truncated file under its final name. A missing
+        ``remote_dir`` is a no-op.
+
+        How the files travel depends on :attr:`transfer`. ``"sftp"`` fetches
+        them one after another over SFTP. ``"tar"`` streams them all through
+        a single remote ``tar`` over the same SSH connection; if the remote
+        has no ``tar`` it falls back to the ``"sftp"`` path.
 
         Args:
             remote_dir (str): Remote directory path
             local_dir (str or Path): Local target path
         """
-        # Ensure remote_dir ends with a slash, removing any trailing slashes first if necessary
-        remote_dir = str(remote_dir).rstrip("/") + "/"
+        remote_dir = str(remote_dir).rstrip("/") or "/"
         local_dir = Path(local_dir)
 
         if not self.exists(remote_dir):
             return
 
+        subdirs, files = self._list_remote_tree(remote_dir)
         local_dir.mkdir(parents=True, exist_ok=True)
+        for rel in subdirs:
+            (local_dir / rel).mkdir(parents=True, exist_ok=True)
 
-        for filename in self.sftp_client.listdir(remote_dir):
-            remote_path = remote_dir + filename
-            local_path = local_dir / filename
-            # Check if it's a directory or file
-            if S_ISDIR(self.sftp_client.stat(remote_path).st_mode):
-                # Recursively download directory
-                self.get_dir(remote_path + "/", local_path)
-            else:
-                # If the file doesn't exist locally, download it
-                if not local_path.is_file():
-                    self.sftp_client.get(remote_path, str(local_path))
+        pending = [
+            (rel, size)
+            for rel, size in files
+            if not _is_complete(local_dir / rel, size)
+        ]
+        logger.debug(
+            "get_dir %s: %d of %d files to fetch (transfer=%s)",
+            remote_dir,
+            len(pending),
+            len(files),
+            self.transfer,
+        )
+        if not pending:
+            return
+
+        if self.transfer == TRANSFER_TAR and self._remote_has_tar():
+            self._get_files_tar(remote_dir, local_dir, pending)
+        else:
+            for rel, size in pending:
+                _fetch_sftp_file(
+                    self.sftp_client,
+                    posixpath.join(remote_dir, rel),
+                    local_dir / rel,
+                    size,
+                )
+
+    def _list_remote_tree(
+        self, remote_dir: str
+    ) -> tuple[list[str], list[tuple[str, int]]]:
+        """List a remote tree as (subdirs, [(file, size)]), paths relative.
+
+        One ``listdir_attr`` per directory returns every entry's type and
+        size, so there is no per-file ``stat`` round trip. ``subdirs`` lists
+        parents before their children. Symlinks are followed, as the earlier
+        ``stat``-based walk did.
+        """
+        subdirs: list[str] = []
+        files: list[tuple[str, int]] = []
+        stack = [""]
+        while stack:
+            rel_dir = stack.pop()
+            base = posixpath.join(remote_dir, rel_dir)
+            for attr in self.sftp_client.listdir_attr(base):
+                name = attr.filename
+                # A well-behaved server never sends these; refuse anything
+                # that would place a file outside local_dir.
+                if name in ("", ".", "..") or "/" in name:
+                    logger.warning(
+                        "Skipping suspicious remote entry %r in %s",
+                        name,
+                        base,
+                    )
+                    continue
+                rel = posixpath.join(rel_dir, name) if rel_dir else name
+                if attr.st_mode is not None and S_ISLNK(attr.st_mode):
+                    attr = self.sftp_client.stat(
+                        posixpath.join(remote_dir, rel)
+                    )
+                if attr.st_mode is not None and S_ISDIR(attr.st_mode):
+                    subdirs.append(rel)
+                    stack.append(rel)
+                else:
+                    files.append((rel, attr.st_size))
+        return subdirs, files
+
+    def _remote_has_tar(self) -> bool:
+        """Whether ``tar`` is on the remote ``PATH`` (probed once)."""
+        if self._remote_has_tar_cache is None:
+            result = self.run_command("command -v tar")
+            self._remote_has_tar_cache = result.returncode == 0
+            if not self._remote_has_tar_cache:
+                logger.warning(
+                    "transfer='tar' but %s has no 'tar' on PATH; falling "
+                    "back to per-file SFTP (slower).",
+                    self.remote_alias,
+                )
+        return self._remote_has_tar_cache
+
+    def _get_files_tar(
+        self,
+        remote_dir: str,
+        local_dir: Path,
+        pending: list[tuple[str, int]],
+    ) -> None:
+        """Fetch ``pending`` files in one ``tar`` stream over SSH exec.
+
+        The file list goes to ``tar -T -`` on stdin; the archive comes back
+        on stdout and is unpacked as it arrives (stdlib ``tarfile`` in
+        stream mode), so nothing is buffered whole. Only regular files that
+        were requested are written -- anything else in the stream is
+        ignored -- and each lands via a ``.part`` file.
+        """
+        wanted = {rel for rel, _ in pending}
+        stdin, stdout, stderr = self.ssh_client.exec_command(
+            f"tar -cf - -C {shlex.quote(remote_dir)} -T -"
+        )
+
+        # Feed the list from a thread: tar starts writing before it has read
+        # all names, and blocking on a full stdin window while nobody drains
+        # stdout would deadlock. The './' prefix stops tar from parsing a
+        # name that starts with '-' as an option.
+        feed_errors: list[BaseException] = []
+
+        def feed() -> None:
+            try:
+                stdin.write("".join(f"./{rel}\n" for rel, _ in pending))
+            except BaseException as exc:  # noqa: BLE001 - re-raised below
+                feed_errors.append(exc)
+            finally:
+                stdin.channel.shutdown_write()
+
+        feeder = threading.Thread(target=feed, daemon=True)
+        feeder.start()
+        with tarfile.open(fileobj=stdout, mode="r|") as archive:
+            for member in archive:
+                rel = posixpath.normpath(member.name)
+                if not member.isfile() or rel not in wanted:
+                    continue
+                target = local_dir / rel
+                _write_atomically(archive.extractfile(member), target)
+                os.utime(target, (member.mtime, member.mtime))
+        feeder.join()
+        if feed_errors:
+            raise feed_errors[0]
+
+        status = stdout.channel.recv_exit_status()
+        if status != 0:
+            message = stderr.read().decode(errors="replace").strip()
+            raise FileSystemError(
+                f"Remote tar in {remote_dir} on {self.remote_alias} exited "
+                f"with status {status}: {message}"
+            )
 
     @reconnect_on_failure
     def write_str_to_file(self, string, filepath: os.PathLike) -> None:

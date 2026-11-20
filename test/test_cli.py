@@ -169,12 +169,25 @@ class _FakeStream:
 
 
 class _FakeClient:
-    def __init__(self, sbatch=b"/usr/bin/sbatch\n", env_ok=b"OK\n"):
+    def __init__(
+        self,
+        sbatch=b"/usr/bin/sbatch\n",
+        env_ok=b"OK\n",
+        tar=b"/usr/bin/tar\n",
+    ):
         self._sbatch = sbatch
         self._env_ok = env_ok
+        self._tar = tar
+        self.commands = []
 
     def exec_command(self, cmd):
-        payload = self._sbatch if "sbatch" in cmd else self._env_ok
+        self.commands.append(cmd)
+        if "sbatch" in cmd:
+            payload = self._sbatch
+        elif "tar" in cmd:
+            payload = self._tar
+        else:
+            payload = self._env_ok
         return (None, _FakeStream(payload), _FakeStream(b""))
 
     def close(self):
@@ -197,7 +210,7 @@ def _make_fake_provider(exc=None, client=None):
     return _FakeProvider
 
 
-def _write_lugus(monkeypatch):
+def _write_lugus(monkeypatch, **extra):
     cfg_dir = get_persistent_config_dir()
     cfg_dir.mkdir(parents=True, exist_ok=True)
     (cfg_dir / "lugus.json").write_text(
@@ -209,6 +222,7 @@ def _write_lugus(monkeypatch):
                 "conda_source": "~/miniconda3/bin/activate",
                 "savepath": "/x",
                 "template": "dirona.sh.j2",
+                **extra,
             }
         )
     )
@@ -225,6 +239,36 @@ def test_check_connect_reports_sbatch(monkeypatch, capsys):
     assert rc == 0
     assert "sbatch at /usr/bin/sbatch" in out
     assert "conda env 'jaxnest' present" in out
+
+
+def test_check_connect_skips_tar_probe_by_default(monkeypatch, capsys):
+    _write_lugus(monkeypatch)
+    client = _FakeClient()
+    monkeypatch.setattr(
+        cli, "ConfigBasedSSHClientProvider", _make_fake_provider(client=client)
+    )
+    assert cli.main(["check", "--connect"]) == 0
+    assert not any("tar" in c for c in client.commands)
+
+
+def test_check_connect_probes_tar_when_opted_in(monkeypatch, capsys):
+    _write_lugus(monkeypatch, transfer="tar")
+    monkeypatch.setattr(
+        cli, "ConfigBasedSSHClientProvider", _make_fake_provider()
+    )
+    assert cli.main(["check", "--connect"]) == 0
+    assert "tar at /usr/bin/tar (transfer='tar')" in capsys.readouterr().out
+
+
+def test_check_connect_warns_when_tar_missing(monkeypatch, capsys):
+    _write_lugus(monkeypatch, transfer="tar")
+    monkeypatch.setattr(
+        cli,
+        "ConfigBasedSSHClientProvider",
+        _make_fake_provider(client=_FakeClient(tar=b"")),
+    )
+    assert cli.main(["check", "--connect"]) == 0  # WARN, not FAIL
+    assert "tar not found on remote" in capsys.readouterr().out
 
 
 def test_check_connect_degrades_on_cert_bug(monkeypatch, capsys):
@@ -626,6 +670,22 @@ def test_collect_discovers_manifest_in_directory(tmp_path):
     rc = cli.main(["collect", str(manifest.parent), "--wait"])
     assert rc == 0
     assert (tmp_path / "results" / "result.json").exists()
+
+
+def test_collect_resume_completes_existing_results(tmp_path):
+    manifest = _detached_direct_task(tmp_path)
+    assert cli.main(["collect", str(manifest), "--wait"]) == 0
+    results = tmp_path / "results"
+    (results / "result.json").unlink()  # as if the first collect broke off
+    (results / "keep.txt").write_text("local addition")
+
+    assert cli.main(["collect", str(manifest), "--resume"]) == 0
+
+    assert (results / "result.json").exists()
+    assert (results / "keep.txt").read_text() == "local addition"
+    # Nothing was moved aside.
+    moved = [p.name for p in tmp_path.glob("results*") if p.is_dir()]
+    assert moved == ["results"]
 
 
 def test_status_missing_manifest_errors(tmp_path):

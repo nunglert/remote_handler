@@ -37,7 +37,7 @@ Overview
      - Probe importable extras — locally, or per machine (``local`` / clusters).
    * - ``remote_handler status [PATH]``
      - Report whether a detached task (by its manifest) has finished.
-   * - ``remote_handler collect [PATH] [--wait] [--force]``
+   * - ``remote_handler collect [PATH] [--wait] [--force] [--resume]``
      - Fetch a detached task's results from its manifest.
    * - ``remote_handler --version``
      - Print the package version.
@@ -112,9 +112,15 @@ Re-running against an existing file pre-fills the answers and asks before
 overwriting. Defaults for ``partition``, ``conda_env`` and ``conda_source``
 come from the global configuration.
 
-Two optional fields are not prompted for -- add them to the JSON by hand:
+Three optional fields are not prompted for -- add them to the JSON by hand:
 
 * ``executor`` -- ``"slurm"`` (default) or ``"direct"`` (scheduler-free).
+* ``transfer`` -- how result directories are downloaded. ``"sftp"`` (default)
+  fetches files one by one; ``"tar"`` streams them through a single remote
+  ``tar`` over the same SSH connection, which is far faster for directories
+  with many small files (e.g. 100k files: hours over SFTP, minutes with
+  ``tar``). Needs ``tar`` on the remote -- ``check --connect`` probes for it --
+  and falls back to ``"sftp"`` without it.
 * ``environment`` -- a map of *application* name to the shell lines that set
   that application up **on this cluster** (module loads, ``source`` of an env
   script, ``export`` of paths). This is where cluster- and site-specific DFT
@@ -379,6 +385,13 @@ now — handy when the remote env has since drifted and you only want the
 outputs). ``PATH`` may be the manifest file itself or a directory containing
 one; an ambiguous directory (more than one manifest) is an error rather than a
 guess.
+
+By default an existing local results directory is moved aside (time-tagged)
+and everything is downloaded again. If a collect was interrupted, pass
+``--resume`` instead: the existing directory is kept and only missing or
+incomplete files (by size) are fetched. In code, the same option is
+``collect_results(resume=True)`` on a task, or ``collect(resume=True)`` on a
+manifest handle.
 
 Standalone collection in code (workflow-layer tasks)
 -----------------------------------------------------

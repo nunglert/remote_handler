@@ -253,6 +253,64 @@ def test_write_read_ase(ssh_container_fs):
     )
 
 
+def test_rmtree_removes_nested_dirs(ssh_container_fs, tmp_path):
+    """rmtree deletes a nested remote tree (it used to crash on recursion)."""
+    fs = ssh_container_fs
+    src = tmp_path / "src"
+    (src / "a" / "b").mkdir(parents=True)
+    (src / "top.txt").write_text("x")
+    (src / "a" / "b" / "deep.txt").write_text("y")
+    remote = f"{fs.create_tempdir()}/tree"
+    fs.put_dir(src, remote)
+
+    fs.rmtree(remote)
+
+    assert not fs.exists(remote)
+
+
+@pytest.mark.parametrize("transfer", ["sftp", "tar"])
+def test_get_dir_roundtrip_and_resume(ssh_container_fs, tmp_path, transfer):
+    """get_dir over a real sshd, both transfer modes, incl. resume.
+
+    The ``tar`` mode exercises whatever tar the endpoint ships (BusyBox in
+    the Docker image, GNU in CI); a missing tar would fall back to SFTP.
+    """
+    fs = ssh_container_fs
+    files = {
+        "top.txt": b"top\n",
+        "system_00/frame_000.npz": os.urandom(100_000),
+        "system_00/empty.txt": b"",
+        "system_01/deep/nested.dat": b"nested\n",
+        "-dash.txt": b"dash\n",
+    }
+    src = tmp_path / "src"
+    for rel, data in files.items():
+        (src / rel).parent.mkdir(parents=True, exist_ok=True)
+        (src / rel).write_bytes(data)
+    remote = f"{fs.create_tempdir()}/tree"
+    fs.put_dir(src, remote)
+
+    previous = fs.transfer
+    fs.transfer = transfer
+    try:
+        local = tmp_path / "local"
+        fs.get_dir(remote, local)
+        for rel, data in files.items():
+            assert (local / rel).read_bytes() == data, rel
+
+        # Interrupted-collect state: one file truncated, one missing.
+        big = local / "system_00/frame_000.npz"
+        big.write_bytes(big.read_bytes()[:10])
+        (local / "top.txt").unlink()
+        fs.get_dir(remote, local)
+
+        for rel, data in files.items():
+            assert (local / rel).read_bytes() == data, rel
+        assert not list(local.rglob("*.part"))
+    finally:
+        fs.transfer = previous
+
+
 # --------------------------------------------------------------------------
 # Scheduler-free task execution over a real SSH connection.
 # --------------------------------------------------------------------------

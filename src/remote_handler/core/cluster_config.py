@@ -23,6 +23,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# How ``RemoteFileSystem.get_dir`` moves a directory tree. Both go over the
+# one paramiko connection; ``tar`` streams all files through a single remote
+# ``tar`` process instead of one SFTP round trip series per file.
+TRANSFER_SFTP = "sftp"
+TRANSFER_TAR = "tar"
+KNOWN_TRANSFERS = (TRANSFER_SFTP, TRANSFER_TAR)
+
 
 @dataclass
 class ClusterConfig:
@@ -61,6 +68,12 @@ class ClusterConfig:
         executor: Which execution backend to run jobs through. ``"slurm"``
             (default) submits via sbatch; other backends are selected by the
             executor factory. Unset in a config JSON means ``"slurm"``.
+        transfer: How directory downloads (``get_dir``, i.e. result
+            collection) move files. ``"sftp"`` (default) fetches them one by
+            one over SFTP. ``"tar"`` streams them through one remote ``tar``
+            process over the same SSH connection -- far faster for many small
+            files, at the cost of needing ``tar`` on the remote (it falls back
+            to ``"sftp"`` when ``tar`` is missing).
         slurm_header_add: Cluster-intrinsic SLURM header lines prepended to the
             header of *every* job on this cluster, before any per-call
             ``slurm_header_add`` an actor passes. Use it for setup that is a
@@ -95,6 +108,7 @@ class ClusterConfig:
     connection_max_wait: Optional[float] = None
     connection_command_timeout: Optional[float] = 120.0
     executor: str = "slurm"
+    transfer: str = TRANSFER_SFTP
     slurm_header_add: str = ""
     environment: dict = field(default_factory=dict)
 
@@ -107,6 +121,11 @@ class ClusterConfig:
                 f"savepath '{self.savepath}' uses '~', which is not "
                 "supported: SFTP does not expand '~'. Use an absolute remote "
                 "path (e.g. '/home/<user>/...')."
+            )
+        if self.transfer not in KNOWN_TRANSFERS:
+            raise ConfigurationError(
+                f"Unknown transfer mode '{self.transfer}'. "
+                f"Known modes: {', '.join(KNOWN_TRANSFERS)}."
             )
 
     @property
@@ -123,15 +142,17 @@ class ClusterConfig:
         """Open a ``RemoteFileSystem`` to this cluster under its policy.
 
         Prefer this over constructing ``RemoteFileSystem`` by hand: it can't
-        forget ``connection_policy``, so the initial connect and every SFTP
-        op honour ``resilient_connection``. ``kwargs`` are forwarded; an
-        explicit ``connection_policy`` wins.
+        forget ``connection_policy`` or ``transfer``, so the initial connect
+        and every SFTP op honour ``resilient_connection`` and directory
+        downloads use the configured transfer mode. ``kwargs`` are
+        forwarded; explicit values win.
         """
         # Deferred: file_handler pulls in paramiko/ase, which this
         # backend-agnostic config module shouldn't need at import time.
         from remote_handler.core.file_handler import RemoteFileSystem
 
         kwargs.setdefault("connection_policy", self.connection_policy)
+        kwargs.setdefault("transfer", self.transfer)
         return RemoteFileSystem(remote_alias=self.remote_machine, **kwargs)
 
     @classmethod

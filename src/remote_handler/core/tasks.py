@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from remote_handler.core import executors, file_handler, file_utils, remote_env
+from remote_handler.core.cluster_config import TRANSFER_SFTP
 from remote_handler.core.cluster_handler import ClusterConfig
 from remote_handler.core.file_handler import (
     FileSystemHandlerBase,
@@ -88,6 +89,22 @@ def _adopt_connection_policy(
     if current is None or current.enabled:
         return
     remote_fs.connection_policy = cluster_config.connection_policy
+
+
+def _adopt_transfer(
+    remote_fs: file_handler.FileSystemHandlerBase,
+    cluster_config: ClusterConfig,
+) -> None:
+    """Give ``remote_fs`` the cluster's transfer mode, upgrade-only.
+
+    Like :func:`_adopt_connection_policy`: a filesystem still on the default
+    ``"sftp"`` picks up a cluster's opted-in mode (e.g. ``"tar"``), but an
+    already non-default choice is never overridden.
+    """
+    current = getattr(remote_fs, "transfer", None)
+    if current != TRANSFER_SFTP:
+        return
+    remote_fs.transfer = getattr(cluster_config, "transfer", TRANSFER_SFTP)
 
 
 class RemoteTask(ABC):
@@ -439,6 +456,7 @@ class SingleScriptTask(RemoteTask):
         # Before super().__init__(): its exists()/makedirs() are this task's
         # first SFTP calls and must already be resilient.
         _adopt_connection_policy(remote_fs, cluster_config)
+        _adopt_transfer(remote_fs, cluster_config)
 
         # Use the base class to handle savepath creation and logging
         super().__init__(
@@ -556,11 +574,16 @@ class SingleScriptTask(RemoteTask):
             return
         self.executor.wait_until_finished()
 
-    def collect_results(self):
+    def collect_results(self, resume: bool = False):
         """Copy the entire calculation directory from the remote machine to
-        the local machine using ResultCollector."""
+        the local machine using ResultCollector.
+
+        Args:
+            resume: Complete an existing local results directory (e.g. from
+                an interrupted collect) instead of moving it aside first.
+        """
         self.result_collector.collect_directory(
-            self.calcdir, self.local_savepath, move=True
+            self.calcdir, self.local_savepath, move=True, resume=resume
         )
 
     def finish_check(self):
@@ -906,18 +929,23 @@ class ResultCollector:
         remote_path: os.PathLike,
         local_path: os.PathLike,
         move: bool = True,
+        resume: bool = False,
     ) -> None:
         """Copy an entire directory from remote to local.
 
         Args:
             remote_path: Path to directory on remote machine
             local_path: Path where directory should be copied on local machine
-            move: If True, handle existing local_path by moving it aside
+            move: If True, handle existing local_path by moving it aside;
+                if False, delete it. Ignored when ``resume`` is set.
+            resume: Keep an existing local_path and only fetch what is
+                missing or incomplete (``get_dir`` skips files whose size
+                already matches) -- e.g. to finish an interrupted collect.
         """
-        # Ensure local path exists and handle existing files
-        file_utils.secure_declare_path(
-            local_path, move=move, is_directory=True
-        )
+        if not resume:
+            file_utils.secure_declare_path(
+                local_path, move=move, is_directory=True
+            )
 
         logger.info(f"Collecting results from {remote_path} to {local_path}")
         self.remote_fs.get_dir(remote_path, local_path)
@@ -1045,6 +1073,7 @@ class ArrayScriptTask(RemoteTask):
         # Before super().__init__(): its exists()/makedirs() are this task's
         # first SFTP calls and must already be resilient.
         _adopt_connection_policy(remote_fs, cluster_config)
+        _adopt_transfer(remote_fs, cluster_config)
 
         # Need to init base class first, since it handles savepath
         super().__init__(
@@ -1287,11 +1316,16 @@ class ArrayScriptTask(RemoteTask):
             return
         self.executor.wait_until_finished()
 
-    def collect_results(self):
+    def collect_results(self, resume: bool = False):
         """Copy the entire rootpath directory from the remote machine to
-        the local machine using ResultCollector."""
+        the local machine using ResultCollector.
+
+        Args:
+            resume: Complete an existing local results directory (e.g. from
+                an interrupted collect) instead of moving it aside first.
+        """
         self.result_collector.collect_directory(
-            self.rootpath, self.local_savepath, move=True
+            self.rootpath, self.local_savepath, move=True, resume=resume
         )
 
     def write_manifest(self, local_path=None, write_remote=True) -> Path:
