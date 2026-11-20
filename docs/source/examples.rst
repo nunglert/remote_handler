@@ -146,3 +146,14 @@ potential (``gracemaker``) instead of MACE:
 
 .. literalinclude:: examples/example_7_grace.py
    :language: python
+
+Example 8: Structural analysis of a trajectory
+-----------------------------------------------
+
+Compute the RDF and the Steinhardt order parameters for every frame of two MD
+trajectories as one sharded array job, and read the results back. See
+:doc:`processing` for how the pipeline works and how to add your own
+processors. Like Examples 1--2, this is statically validated only:
+
+.. literalinclude:: examples/example_8_processing.py
+   :language: python

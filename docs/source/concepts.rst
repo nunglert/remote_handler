@@ -168,6 +168,19 @@ which owns the bookkeeping (a resumable ``AL_progress.json`` cache) generically
 over any list of stages. See :doc:`active_learning` for the full picture,
 including the actor interfaces and how stages compose.
 
+Trajectory processing
+---------------------
+
+Besides the loop, the package has a second, independent workflow: running
+per-configuration work (relaxation, structural descriptors such as the RDF or
+Steinhardt order parameters) over large trajectories.
+:class:`~remote_handler.processing.handler.RemoteTrajectoryProcessor` shards
+the trajectories into one array task per shard, a small driver runs an ordered
+list of *processors* on each shard on the cluster, and the annotated
+configurations come back in the layout of the input files. Processors are
+plugins: a downstream package can define and register its own, and the stock
+driver picks it up. See :doc:`processing`.
+
 Configuration
 -------------
 
@@ -239,6 +252,7 @@ Where to go next
 
 - :doc:`installation` -- install the host driver and the right extras.
 - :doc:`active_learning` -- the actor interfaces and the staged AL loop.
+- :doc:`processing` -- sharded trajectory analysis and custom processors.
 - :doc:`cli` -- configure clusters and diagnose your setup.
 - :doc:`quickstart` -- a first end-to-end run.
 - :doc:`api/index` -- the concrete classes behind every concept above.

@@ -71,8 +71,12 @@ Atoms Handler
    :undoc-members:
    :show-inheritance:
 
+.. _api-processing:
+
 Trajectory Processing
 ~~~~~~~~~~~~~~~~~~~~~~~
+
+A guide with examples is in :doc:`../processing`.
 
 ``remote_handler.processing`` is a self-contained plugin framework: a single
 composable core (``RemoteTrajectoryProcessor``) runs an ordered list of

@@ -11,6 +11,15 @@ then `git tag -a vX.Y.Z`.
 
 ## [Unreleased]
 
+### Added
+- **Documentation for `remote_handler.processing`**: a new *Trajectory
+  Processing* page (`docs/source/processing.rst`) covering how the sharded
+  pipeline works, the built-in processors and their outputs, running an
+  analysis, failures and resuming, and writing your own processor. Also adds
+  Example 8 (RDF + Steinhardt over two trajectories), a *Trajectory processing*
+  section in Core Concepts, and a test that runs the documented custom
+  processor through the real shard driver (`test/test_processing_docs.py`).
+
 ### Changed
 - **The repository moved to GitHub:**
   <https://github.com/nunglert/remote_handler>. Docs are now at
